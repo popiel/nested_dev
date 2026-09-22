@@ -8,8 +8,8 @@ Produce a golden QEMU disk (`llm-golden.qcow2`) for Proxmox **vm 101**. The VM
 owns the discrete GPU(s) passed through from the host, exposes CUDA to the
 service layer, and runs the LLM serving stack.
 
-In scope: autoinstall `user-data` (driver + CUDA + serving baseline), data
-volume mount contract, build/cleanup.
+In scope: autoinstall `user-data`, first-boot fetch of driver + CUDA + serving
+baseline from official sources, data volume mount contract, build/cleanup.
 Out of scope: model catalog, rate limiting/open-audit, fleet serving topology
 (host wiring per Spec 01 §5.2).
 
@@ -24,11 +24,13 @@ Out of scope: model catalog, rate limiting/open-audit, fleet serving topology
 | Data volume | separate `scsi1` disk mounted at `/data/models` (created by host provisioner, Spec 01 §5.2) |
 | Identity | no machine-specific data in image |
 
-The image itself does **not** need GPU drivers if you prefer first-boot install;
-we bake them in because the image build VM has a stub GPU only. Baking is
-acceptable because the real PCI devices appear after passthrough and driver
-state is per-boot (kernel module loads against whichever NVIDIA device is
-present). Datacenter vs consumer driver differs only by package chosen.
+The image itself carries **no GPU driver, CUDA toolkit, or Ollama**. Those are
+installed on **first boot** from their **official upstream sources** (Ubuntu
+archive / NVIDIA / ollama.com), not baked into the image and never fetched from
+this repo (see Sourcing policy, Spec 00 §3). The image build machine needs no
+GPU and no CUDA at all, which keeps the golden disk GPU-agnostic across driver
+and toolkit versions. Datacenter vs consumer driver differs only by package
+chosen at first boot (Section 5).
 
 ## 3. Build inputs
 
@@ -58,46 +60,51 @@ autoinstall:
     - pciutils
     - linux-firmware
   late-commands:
-    # Ubuntu-meshed NVIDIA driver for the GPU class baked in build VM:
-    - "curtin in-target --target=/target -- sh -c 'apt-get install -y nvidia-driver-550-server && echo needrestart-suspend | tee /etc/needrestart/conf.d/99-auto.conf'"
-    # NVIDIA CUDA keyring + toolkit (pinned):
-    - "curtin in-target --target=/target -- sh -c 'wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && dpkg -i cuda-keyring_1.1-1_all.deb && apt-get update && apt-get install -y cuda-toolkit-12-8'"
-    # baseline server: ollama
-    - "curtin in-target --target=/target -- sh -c 'curl -fsSL https://ollama.com/install.sh | sh'"
+    # NVIDIA driver, CUDA toolkit, and Ollama are NOT baked here — they are
+    # installed on first boot from their official upstream sources (§5).
     # /data/models mount from scsi1 (filesystem set by host on first attach)
     - "curtin in-target --target=/target -- mkfs.ext4 /dev/vdb"
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /data/models && echo \"/dev/vdb /data/models ext4 defaults,nofail 0 2\" >> /etc/fstab && mount -a'"
 ```
 
 Notes:
-- `nvidia-driver-*-server` package name varies by release; bake whatever
-  `ubuntu-drivers` resolves for the target class and freeze it in
-  `user-data`.
+- No GPU packages in the image: driver + CUDA + Ollama are fetched by
+  `llm-firstboot.service` on first boot (Section 5).
 - CUDA pin: choose the minor matching the driver (Sec 7 checks both).
 - `nofail` in fstab prevents boot failure if the data volume isn't yet attached
   (image built before host attaches `scsi1`).
+- `linux-firmware` ships from the official Ubuntu archive (policy-compliant).
 
 ## 5. Serving baseline (first boot, `llm-firstboot.service`)
 
 Seeded the same mechanism as the desktop guest; starts the server that exposes
 the model on the `vmbr0` interface IP:
 
-1. `nvidia-smi` enumerates N GPUs → writes `/etc/nvidia/...` state JSON for the
+1. Install GPU stack from **official upstream sources only**:
+   - NVIDIA driver: `ubuntu-drivers install` (or pin
+     `nvidia-driver-<latest>-server`) fetched from the official Ubuntu archive;
+   - CUDA: add the NVIDIA repo
+     (`developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/`),
+     install `cuda-keyring` + pinned `cuda-toolkit-<minor>`;
+   - Ollama: `curl -fsSL https://ollama.com/install.sh | sh`.
+   Record resolved versions in `/var/log/llm-firstboot.log`. No component is
+   fetched from this repo.
+2. `nvidia-smi` enumerates N GPUs → writes `/etc/nvidia/...` state JSON for the
    ops layer; asserts GPUs are the passthrough set.
-2. Ollama host parameter to bind on the VM's IP, model store on `/data/models`,
+3. Ollama host parameter to bind on the VM's IP, model store on `/data/models`,
    `OLLAMA_KEEP_ALIVE`, `OLLAMA_NUM_PARALLEL` per policy.
-3. Optional profile `vllm`: `pipx`/venv install of `vllm` + serving entry point
+4. Optional profile `vllm`: `pipx`/venv install of `vllm` + serving entry point
    (`vllm serve meta-llama/... --tensor-parallel-size N`) — documented, not
    default.
-4. Log to `/var/log/llm-firstboot.log`; unit self-disables.
+5. Log to `/var/log/llm-firstboot.log`; unit self-disables.
 
 ## 6. Image build + cleanup
 
 Identical discipline to Spec 02 §6:
 
-- Build inside a throwaway VM (no passthrough needed — CUDA libs install
-  fine without a GPU present; only `nvidia-smi` requires the device, which is
-  why it is a first-boot action, not part of baking).
+- Build inside a throwaway VM with no GPU and no driver/CUDA/Ollama installed —
+  all GPU components are first-boot actions (§5), so the image itself is
+  GPU-agnostic.
 - `virt-sysprep`: SSH host keys, machine-id, logs, history, zero-free.
 - `zerofree` for the overlarge model partition placeholder — shrink image after
   sysprep.
@@ -114,6 +121,6 @@ Identical discipline to Spec 02 §6:
 - `/data/models` mounted from `scsi1`; survives reboot.
 - Golden image: no host keys/machine-id/plaintext secrets (`grep` audit);
   rebuilding reproduces the same result (pin kernel + driver + CUDA minor in
-  `user-data`).
+  `llm-firstboot.sh`).
 - Host side (Spec 01 §8 risk table): consumer GeForce in VM requires
   `qm set 101 --args '-cpu host,kvm=off,hidden=1'`; validated therein.

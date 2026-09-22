@@ -52,58 +52,72 @@ console/management is via SSH, the Proxmox web UI, or the serial console.
 | Desktop RDP server | `gnome-remote-desktop` primary, `xrdp` fallback | grd is native/Wayland/HW-encodable; xrdp covers TM-compat and failures |
 | LLM serving stack | Ollama baseline; vLLM optional profile | Simple default; swap by providing a different `late-commands` payload |
 | Host networking | NIC bridged to `vmbr0`, VMs on `vmbr0` | Simplest; isolate later with VLANs if required |
-| Provisioning model | Answer file fetched at install; post-install `systemd oneshot` provisioner | Keeps ISO generic; allows updating logic without rebuilding media |
+| Provisioning model | Answer files and provisioner scripts fetched from `popiel/nested_dev` GitHub at install/first boot | Keeps ISO generic; updating provisioning never rebuilds media |
 | Guest media build | `autoinstall` (Subiquity) ISO per guest | Canonical, repeatable, captures all config in `user-data` |
+| **Sourcing policy** | GitHub serves **only files authored in this repo** (answer file, provisioner scripts, `user-data`, first-boot scripts, network fragments). Every third-party artifact (PVE/Ubuntu ISOs, Ubuntu archive packages, NVIDIA driver/CUDA, Ollama, iPXE, firmware) is fetched **direct from its official upstream** — never from GitHub, never vendored here | Official binaries stay on official sources; the repo holds only what is specific to this configuration |
 
 ## 4. Artifacts produced
 
 | Artifact | Produced from | Consumed by |
 |---|---|---|
-| `pve_auto.iso` | Official PVE ISO + `answer-host.toml` | Host installer |
-| `provision-host.sh` (+ fragments) | Repo scripts | Host first boot (fetched from docroot) |
+| `pve_auto.iso` | Official PVE ISO + `answer-host.toml` (fetched from GitHub) | Host installer |
+| `provision-host.sh` (+ fragments) | `provision/host/` in GitHub | Host first boot (fetched from GitHub) |
 | `desktop-golden.qcow2` (+ `user-data`) | Ubuntu Desktop autoinstall ISO | VM 100 disk |
 | `llm-golden.qcow2` (+ `user-data`) | Ubuntu Server autoinstall ISO | VM 101 disk |
-| PXE/boot files (`tftp/`, `http/`) | Optional TD variant | Network boot hosts |
+| PXE/boot files | Optional: same answer served over HTTP + iPXE netboot | Network boot hosts |
 
-## 5. Repository layout (proposed)
+## 5. Repository layout (`popiel/nested_dev`, this repo)
+
+This repo is the single source of truth for every provisioning input. Built
+media (ISOs, golden disks) is never versioned here — `build-iso.sh` scripts
+produce it into a gitignored `output/`.
 
 ```
-build/
+provision/
   host/
-    answer-host.toml
-    build-iso.sh
-    iso/                  (downloaded official PVE ISO; output ISO)
-    provision/
-      provision-host.sh
-      frag/10-gpu-passthrough.sh
-      frag/20-create-guests.sh
-  desktop/
-    build-iso.sh
-    user-data/
-      meta-data
-      user-data
-    iso/
-    output/ (golden qcow2)
-  llm/
-    build-iso.sh
-    user-data/
-      meta-data
-      user-data
-    iso/
-    output/ (golden qcow2)
-  docroot/                 (HTTP/PXE docroot merged at deploy time)
-specs/                     (this documentation set)
+    answer-host.toml           # PVE installer answer file
+    provision-host.sh          # first-boot entry point
+    frag/10-gpu-passthrough.sh
+    frag/20-create-guests.sh
+  network/                     # netplan/iptables fragments applied by provisioners
+    vmbr0-*.conf
+desktop/
+  build-iso.sh
+  first-boot.sh                # fetched inside VM 100 on first boot
+  user-data/
+    meta-data                  # empty (NoCloud/autoinstall seed marker)
+    user-data
+llm/
+  build-iso.sh
+  llm-firstboot.sh             # fetched inside VM 101 on first boot
+  user-data/
+    meta-data
+    user-data
+specs/                         # this documentation set
+output/                        # gitignored: ISOs, golden qcow2, MANIFEST
 ```
 
-Each build script must be idempotent and pinned to download hashes (see
-individual specs).
+Repo-authored install- and first-boot-time fetches reference the raw GitHub base
+
+    https://raw.githubusercontent.com/popiel/nested_dev/<REF>/<path>
+
+`<REF>` is a git tag or commit SHA, pinned per release for reproducibility
+(`main` is for development only). **Only files authored in this repo are
+fetched this way.** Everything available from other official sources (Proxmox
+/Ubuntu ISOs, Ubuntu `apt` packages, `linux-firmware`, NVIDIA driver, CUDA
+keyring + toolkit, CUDA samples, Ollama, iPXE binaries) is downloaded direct
+from that official source, never from GitHub. Manifest hashes in
+`output/MANIFEST` record what was verified per REF. Each build script must be
+idempotent and pinned to download hashes (see individual specs).
 
 ## 6. Build order
 
-1. `specs/01` — build and verify the host install media.
-2. `specs/02` — build the desktop guest golden image.
-3. `specs/03` — build the LLM guest golden image.
-4. Provision host, import golden images, start guests, run acceptance tests.
+1. Edit and push provisioning inputs; tag a release (`git tag vX`, push).
+2. `specs/01` — build and verify the host install media against the tagged REF.
+3. `specs/02` — build the desktop guest golden image.
+4. `specs/03` — build the LLM guest golden image.
+5. Provision host, import golden images, start guests, run acceptance tests
+   (all against the same tagged REF).
 
 ## 7. Shared acceptance criteria
 
