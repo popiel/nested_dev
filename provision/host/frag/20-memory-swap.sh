@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# frag/20-memory-swap.sh — ZRAM + swap for 16 GB host profile
+# frag/20-memory-swap.sh — ZRAM + swap for 32 GB host profile
 # Idempotent. REF: host_os_v0.1
 set -euo pipefail
 
@@ -45,6 +45,6 @@ fi
 # --- Memory balloon guidance ---
 # QEMU balloon is enabled per-VM at creation time (frag/30).
 # Host hard-capped at 2 GB via PVE resource limits.
-# On 16 GB hosts: ZRAM handles RAM pressure; balloon gives back to host.
+# On 32 GB hosts: ZRAM handles RAM pressure; balloon gives back to host.
 
 log "=== Memory/swap setup complete ==="

@@ -23,7 +23,7 @@ a retained profile.
 | Decision | Default |
 |---|---|
 | Base OS | Ubuntu Desktop **26.04 LTS** (official `ubuntu-26.04-desktop-amd64.iso`, SHA256 pinned in `build-iso.sh`) |
-| Session (default) | **XFCE + xrdp/Xorg** (16 GB friendly; from mimo) |
+| Session (default) | **XFCE + xrdp/Xorg** (32 GB friendly; from mimo) |
 | Session (optional profile) | GNOME Wayland + `gnome-remote-desktop` primary, xrdp fallback (from ds4; use on 32 GB hosts or where HW-encode wanted) |
 | Account | single `deskuser` (ds4 name wins; mimo `ubuntu` rejected), SSH-key-only, autologin off |
 | Disk | **40 GB** virtio system (compromise: mimo 30 GB too tight for 26.04 + browsers, ds4 60 GB oversized for thin hosts) |

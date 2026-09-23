@@ -73,10 +73,10 @@ console/management is via SSH, Proxmox web UI, or serial console.
 | Guest OS | Ubuntu **26.04 LTS** Desktop (vm 100) / Server (vm 101, 102+) | `specs-mimo` 26.04 wins over `specs-ds4` 24.04 per task instruction; `resolute` archive everywhere |
 | VM IDs | `100=desktop`, `101=llm`, `102+=dev-<project>`, `200–249` reserved | `specs-ds4` convention wins; `specs-mimo` (`100=llm`, `200=desktop`, `9001/9002` templates) is superseded |
 | Host storage | `ext4` root + `local-lvm` thin for guest disks + 4–8 GB swap (file or partition) | `specs-mimo` simplicity wins; ZFS `rpool` allowed as documented variant in Spec 01, not default |
-| Memory model (16 GB host) | Host hard-capped 2 GB; Desktop max 8 GB / 4 cores; LLM max 10 GB / 4–6 cores; each Dev max 4–8 GB / 2–4 cores; QEMU balloon + ZRAM (zstd, 50%) + disk swap overcommit | `specs-mimo` 16 GB reality wins over `specs-ds4` 32 GB LLM; 32 GB host is the recommended upgrade (then LLM 16+ GB, Desktop 8 GB, no swap pressure) |
+| Memory model (32 GB host) | Host hard-capped 2 GB; Desktop 8 GB / 4 cores; LLM 16 GB / 6 cores; each Dev 8 GB / 4 cores; QEMU balloon + ZRAM (zstd, 50%) + 4 GB disk swap; 64 GB+ tier: LLM 24 GB / 8 cores | 32 GB is the baseline; 16 GB was the original small-host profile (retained as scale-down path in scripts) |
 | Guest media build | `autoinstall` (Subiquity) ISO per guest → `virt-sysprep` golden `qcow2` | `specs-ds4` wins; FAI (`fai-server`, `fai-diskimage`, class space on host) rejected — heavier host dependency, baked-in drivers slow rebuilds |
 | GPU driver delivery | Golden images are **GPU-agnostic**; driver + CUDA + serving stack installed on **first boot from official upstreams** | `specs-ds4` wins; `specs-mimo` baked `nvidia-driver-590-server` into FAI image — rejected (ties image to driver/GPU, needs GPU builder) |
-| Desktop session | XFCE + `xrdp` default (lightweight, 16 GB friendly); GNOME + `gnome-remote-desktop` optional profile | `specs-mimo` default wins on simplicity/RAM; `specs-ds4` grd kept as option for Wayland/HW-encode |
+| Desktop session | XFCE + `xrdp` default (lightweight, 32 GB friendly); GNOME + `gnome-remote-desktop` optional profile | `specs-mimo` default wins on simplicity/RAM; `specs-ds4` grd kept as option for Wayland/HW-encode |
 | LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
 | Dev model | Docker engine only, ephemeral containers, bind mounts, egress-deny | From `README.md`; absent in both predecessors; new Spec 04 |
 | Host networking | Routed: `$PHYS_NIC` DHCP from LAN + private `vmbr0` (192.168.100.1/24); dnsmasq on host serves DHCP/DNS to VMs; host NATs VM egress via MASQUERADE; iptables firewall with per-VM egress policy (desktop=unrestricted, LLM=HTTPS-only, dev=denied, host=HTTPS/DNS/NTP-only) | Replaces bridged design; VMs not directly addressable from LAN; dnsmasq gives predictable IPs without depending on external DHCP |
@@ -158,8 +158,9 @@ download hashes (see individual specs).
 * IDs: ds4 (`100/101/200–249`) retained; mimo (`100=llm`, `200=desktop`,
   `9001/9002` templates) rejected. Migration: rename/recreate, no alias.
 * Storage: mimo `local-lvm` default retained; ds4 ZFS kept as Spec 01 variant.
-* Memory: mimo 16 GB balloon/ZRAM/swap profile retained as the small-host
-  default; ds4 32 GB sizing kept as the recommended-upgrade profile.
+* Memory: 32 GB baseline (LLM 16 GB, Desktop 8 GB, Dev 8 GB); 16 GB profile
+  retained as scale-down path; 64 GB+ tier for LLM 24 GB. ZRAM + balloon
+  + 4 GB disk swap overcommit.
 * Installer: mimo's 9.2 `prepare-iso --fetch-from` flow + ds4's
   `late-commands` provisioner drop + systemd oneshot merged into one Spec 01.
 * VFIO: merged — mimo's GRUB + blacklist baseline for the passed-through set

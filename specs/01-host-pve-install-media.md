@@ -17,7 +17,7 @@ backup/DR policies.
 
 Supersedes: `specs-mimo/host-proxmox.md` (9.2, DHCP/ext4/`main`-fetch) and
 `specs-ds4/01-host-pve-install-media.md` (8.x, static/ZFS/REF-pinned). Merged
-below: mimo's 9.2 flow + 16 GB memory profile; ds4's REF-pinning, fragment
+below: mimo's 9.2 flow + 32 GB memory profile; ds4's REF-pinning, fragment
 layout, IOMMU assertions, and guest conventions.
 
 ## 2. Assumptions
@@ -32,8 +32,8 @@ layout, IOMMU assertions, and guest conventions.
 * Install-time HTTP must be reachable for `--fetch-from https://...`. For
   air-gapped sites, embed with `--answer-file` instead (see §6).
 * Target server: x86_64, VT-d/AMD-Vi enabled; iGPU with board outputs; one or
-  more discrete NVIDIA GPUs (e.g. 2× GTX 1080); single NIC minimum; 16 GB RAM
-  minimum (32 GB recommended); SSD/NVMe.
+  more discrete NVIDIA GPUs (e.g. 2× GTX 1080); single NIC minimum; 32 GB RAM
+  minimum; SSD/NVMe.
 * **LAN**: `192.168.14.0/24` (DHCP-provided). Host gets a dynamic address in
   this range via `$PHYS_NIC`. VMs are on a **private subnet**
   `192.168.100.0/24` (dnsmasq on host). VMs are not directly addressable
@@ -141,7 +141,7 @@ logging to `/var/log/pve-firstboot.log`. Unit disables itself on success.
 Verify after reboot: `lspci -nnk` shows `vfio-pci` on passthrough addresses;
 `dmesg | grep -i vfio` clean.
 
-### 5.2 `frag/20-memory-swap.sh` — 16 GB overcommit (small-host default)
+### 5.2 `frag/20-memory-swap.sh` — 32 GB overcommit (baseline profile)
 
 From `specs-mimo` (absent in ds4):
 
@@ -177,9 +177,9 @@ Conventions (ds4 IDs win):
   --hostpci0 <DGPU0>,pcie=1 --hostpci1 <DGPU1>,pcie=1
   --ide0 local-lvm:0,import-from=<llm-golden.qcow2>
   --scsi1 local-lvm:200,size=200G --boot order=scsi0`
-  (size the data volume per host: 200G default on 16 GB hosts, 500G on large
-  hosts; one `hostpci` per dGPU + paired audio function).
-* **vm 102+ dev**: `qm create 10X --name dev-<project> --memory 4096 --cores 4
+  (size the data volume per host: 500G default on 32 GB hosts; 64 GB+ hosts
+   may increase further; one `hostpci` per dGPU + paired audio function).
+* **vm 102+ dev**: `qm create 10X --name dev-<project> --memory 8192 --cores 4
   --net0 virtio,bridge=vmbr0,firewall=1 ... --ide0 ...import-from=<dev-golden.qcow2>`,
   no `hostpci`. Full contract in Spec 04. Reserve 200–249 for future workload
   guests (1 vCPU / 2 GB base, `vmbr0`, `local-lvm`).
@@ -252,7 +252,7 @@ PXE via `extract-dir` + HTTP/iPXE serving the same answer;
 1. Boot ISO; assert **no interactive prompts** until reboot.
 2. SSH in: `/proc/cmdline` has `intel_iommu=on iommu=pt` (or AMD equiv);
    `lspci -nnk` shows `vfio-pci` on passthrough set; R4 group checks passed.
-3. `free -h` / `zramctl` show ZRAM + swap active (16 GB profile).
+3. `free -h` / `zramctl` show ZRAM + swap active (32 GB profile).
 4. `qm list` shows 100/101 (+102 template as applicable); `qm start` succeeds.
 5. **Network**:
    - `ip addr show vmbr0` shows `192.168.100.1/24`.

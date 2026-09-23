@@ -55,20 +55,20 @@ DGPU_IDS=$(detect_gpu_pci "10de")
 log "iGPU passthrough: ${IGPU_IDS:-none}"
 log "dGPU passthrough: ${DGPU_IDS:-none}"
 
-# --- Memory allocation (16 GB profile) ---
+# --- Memory allocation (32 GB profile) ---
 DESKTOP_MEM=8192
 DESKTOP_CORES=4
-LLM_MEM=10240
+LLM_MEM=16384
 LLM_CORES=6
-DEV_MEM=4096
+DEV_MEM=8192
 DEV_CORES=4
 
-# Scale up if >16 GB available
-if [ "$TOTAL_MEM_GB" -ge 32 ]; then
+# Scale up if >32 GB available
+if [ "$TOTAL_MEM_GB" -ge 64 ]; then
     DESKTOP_MEM=8192
-    LLM_MEM=16384
-    LLM_CORES=6
-    log "32 GB+ host detected: LLM gets 16 GB"
+    LLM_MEM=24576
+    LLM_CORES=8
+    log "64 GB+ host detected: LLM gets 24 GB"
 fi
 
 # --- VM 100: Desktop ---
@@ -113,11 +113,8 @@ if ! qm status 101 >/dev/null 2>&1; then
         done
     fi
 
-    # Data volume: 200 GB default, 500 GB if >32 GB host
-    DATA_VOL_SIZE=200
-    if [ "$TOTAL_MEM_GB" -ge 32 ]; then
-        DATA_VOL_SIZE=500
-    fi
+    # Data volume: 500 GB default on 32 GB+ hosts
+    DATA_VOL_SIZE=500
 
     # MAC: 52:54:00:00:01:01 — matches dnsmasq static lease in dnsmasq.conf
     qm create 101 \
