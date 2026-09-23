@@ -174,16 +174,10 @@ log "INPUT rules applied"
 # --- filter table: FORWARD ---
 iptables -F FORWARD
 
-# Desktop (192.168.100.100) can reach anyone on vmbr0
+# Desktop (192.168.100.100) can reach anyone on vmbr0 (SSH, X11 forwarding)
 iptables -A FORWARD -i vmbr0 -o vmbr0 -s 192.168.100.100 -j ACCEPT
 
-# LLM (192.168.100.101) → Desktop: SSH only
-iptables -A FORWARD -i vmbr0 -o vmbr0 -s 192.168.100.101 -d 192.168.100.100 -p tcp --dport 22 -j ACCEPT
-
-# Dev (192.168.100.102+) → Desktop: SSH only
-for dev_ip in 192.168.100.102 192.168.100.103 192.168.100.104 192.168.100.105; do
-    iptables -A FORWARD -i vmbr0 -o vmbr0 -s "$dev_ip" -d 192.168.100.100 -p tcp --dport 22 -j ACCEPT
-done
+# All other inter-VM: DENIED (desktop initiates; dev/LLM cannot reach desktop)
 
 # Return traffic for established connections
 iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT

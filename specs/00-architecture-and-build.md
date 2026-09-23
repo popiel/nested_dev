@@ -43,9 +43,9 @@ Rationale for each resolution is recorded in §7.
 |  RAM: 2 GB reserved for host; rest via balloon + ZRAM + swap          |
 |                                                                       |
 |  vm 100 desktop <-- iGPU (0000:00:02.x, VFIO)   --> hostpci0         |
-|  '-- Ubuntu Desktop 26.04 + XFCE/xrdp (default, :3389)               |
+|  '-- Ubuntu Desktop 26.04 + i3-gaps/dmenu + xrdp (:3389) + lightdm  |
+|      Firefox + Chrome (snap); SSH client; X11 forwarding from dev VMs |
 |      192.168.100.100 (lychee / lychee.wolfskeep.com)                  |
-|      Optional profile: GNOME + gnome-remote-desktop                   |
 |                                                                       |
 |  vm 101 llm      <-- dGPU(s) (VFIO)          --> hostpci0[,1]        |
 |  '-- Ubuntu Server 26.04 + NVIDIA driver + CUDA + Docker             |
@@ -76,7 +76,7 @@ console/management is via SSH, Proxmox web UI, or serial console.
 | Memory model (32 GB host) | Host hard-capped 2 GB; Desktop 8 GB / 4 cores; LLM 16 GB / 6 cores; each Dev 8 GB / 4 cores; QEMU balloon + ZRAM (zstd, 50%) + 4 GB disk swap; 64 GB+ tier: LLM 24 GB / 8 cores | 32 GB is the baseline; 16 GB was the original small-host profile (retained as scale-down path in scripts) |
 | Guest media build | `autoinstall` (Subiquity) ISO per guest → `virt-sysprep` golden `qcow2` | `specs-ds4` wins; FAI (`fai-server`, `fai-diskimage`, class space on host) rejected — heavier host dependency, baked-in drivers slow rebuilds |
 | GPU driver delivery | Golden images are **GPU-agnostic**; driver + CUDA + serving stack installed on **first boot from official upstreams** | `specs-ds4` wins; `specs-mimo` baked `nvidia-driver-590-server` into FAI image — rejected (ties image to driver/GPU, needs GPU builder) |
-| Desktop session | XFCE + `xrdp` default (lightweight, 32 GB friendly); GNOME + `gnome-remote-desktop` optional profile | `specs-mimo` default wins on simplicity/RAM; `specs-ds4` grd kept as option for Wayland/HW-encode |
+| Desktop session | i3-gaps + dmenu + xrdp + lightdm (default, 32 GB friendly); GNOME + `gnome-remote-desktop` optional profile | i3 is lightweight tiling WM; lightdm for local console on passed-through iGPU; GNOME retained for HW-encode use cases |
 | LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
 | Dev model | Docker engine only, ephemeral containers, bind mounts, egress-deny | From `README.md`; absent in both predecessors; new Spec 04 |
 | Host networking | Routed: `$PHYS_NIC` DHCP from LAN + private `vmbr0` (192.168.100.1/24); dnsmasq on host serves DHCP/DNS to VMs; host NATs VM egress via MASQUERADE; iptables firewall with per-VM egress policy (desktop=unrestricted, LLM=HTTPS-only, dev=denied, host=HTTPS/DNS/NTP-only) | Replaces bridged design; VMs not directly addressable from LAN; dnsmasq gives predictable IPs without depending on external DHCP |
@@ -168,7 +168,9 @@ download hashes (see individual specs).
   GeForce `kvm=off,hidden=1` workaround.
 * Image build: ds4 autoinstall + `virt-sysprep` retained; mimo FAI class space
   and `build-images.sh`/`import-images.sh` rejected (do not implement).
-* Desktop: mimo XFCE+xrdp default + ds4 grd/Xorg fallback as profile.
+* Desktop: i3-gaps + dmenu + xrdp + lightdm (default); XFCE+xrdp retained as
+  lightweight alternative; GNOME+grd retained for HW-encode use cases. Chrome
+  via snap on first boot; no dev tools in image.
 * LLM: mimo Docker/Toolkit/container examples + ds4 first-boot-install and
   `/data/models` volume merged; Ubuntu `nvidia-cuda-toolkit` rejected in favor
   of NVIDIA-repo `cuda-toolkit-<minor>` for `ubuntu2604`.

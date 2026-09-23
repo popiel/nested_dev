@@ -167,9 +167,9 @@ Conventions (ds4 IDs win):
   --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
   --hostpci0 0000:00:02.0,pcie=1,x-vga=0
   --ide0 local-lvm:0,import-from=<desktop-golden.qcow2> --boot order=scsi0`
-  plus audio function as `hostpci1` if in its own group. RDP `:3389` is
-  L2-routed on `vmbr0` by default; only where routing is unavailable, apply
-  the `provision/network/` DNAT/firewall fragment.
+  plus audio function as `hostpci1` if in its own group. Runs i3-gaps +
+  xrdp + lightdm; Firefox + Chrome (snap); SSH client for bastion role;
+  X11 forwarding from dev VMs. RDP `:3389` is DNAT'd from LAN via host.
 * **vm 101 llm** (dGPUs):
   `qm create 101 --name llm --memory 10240 --cores 6 --cpu host
   --scsihw virtio-scsi-single --net0 virtio,bridge=vmbr0 --ostype l26

@@ -9,13 +9,17 @@ Produce a golden QEMU disk (`desktop-golden.qcow2`) for Proxmox **vm 100**.
 The VM owns the motherboard iGPU via VFIO, drives local board outputs where
 attached, and serves the desktop over RDP on `:3389`.
 
-In scope: autoinstall `user-data`, ISO customization, first-boot RDP wiring,
-image build/cleanup. Out of scope: host-side VFIO/VM wiring (Spec 01 §5),
-RDP access-control policy.
+The desktop's role is **display server + bastion** to the other guest VMs. It
+runs a minimal window manager (i3-gaps), browsers, and SSH client. It does
+**not** contain development tools — all dev work happens in dev VMs (Spec 04).
+
+In scope: autoinstall `user-data`, ISO customization, first-boot RDP/session
+wiring, i3 config, Chrome install, X11 forwarding setup. Out of scope:
+host-side VFIO/VM wiring (Spec 01 §5), RDP access-control policy.
 
 Supersedes `specs-mimo/vm-desktop.md` (XFCE-only, FAI-baked, user `ubuntu`,
 30 GB) and `specs-ds4/02-guest-desktop-image.md` (GNOME/grd-only, 24.04,
-user `deskuser`, 60 GB). Default below is the lightweight path; the other is
+user `deskuser`, 60 GB). Default below is the i3-gaps path; GNOME/grd is
 a retained profile.
 
 ## 2. Decisions
@@ -23,12 +27,21 @@ a retained profile.
 | Decision | Default |
 |---|---|
 | Base OS | Ubuntu Desktop **26.04 LTS** (official `ubuntu-26.04-desktop-amd64.iso`, SHA256 pinned in `build-iso.sh`) |
-| Session (default) | **XFCE + xrdp/Xorg** (32 GB friendly; from mimo) |
-| Session (optional profile) | GNOME Wayland + `gnome-remote-desktop` primary, xrdp fallback (from ds4; use on 32 GB hosts or where HW-encode wanted) |
+| Window manager | **i3-gaps + dmenu + i3status + i3blocks + picom** (lightweight, tiling, 32 GB friendly) |
+| Display manager | **lightdm** (required for local console on passed-through iGPU) |
+| Session (optional profile) | GNOME Wayland + `gnome-remote-desktop` primary, xrdp fallback (from ds4; use where HW-encode wanted) |
+| RDP server | **xrdp + xorgxrdp** (unchanged from predecessor) |
+| Terminal | **urxvt** (`rxvt-unicode`) |
+| Browsers | **Firefox** (Ubuntu archive) + **Chrome** (snap, installed on first boot) |
+| Audio | **PulseAudio + pavucontrol** |
+| SSH | `openssh-client` (desktop → dev/LLM VMs) + `openssh-server` (LAN → desktop via host DNAT) |
+| X11 forwarding | `xauth` + `sshd_config` `X11Forwarding yes` (desktop hosts X displays for dev VM apps) |
 | Account | single `deskuser` (ds4 name wins; mimo `ubuntu` rejected), SSH-key-only, autologin off |
-| Disk | **40 GB** virtio system (compromise: mimo 30 GB too tight for 26.04 + browsers, ds4 60 GB oversized for thin hosts) |
+| Disk | **40 GB** virtio system |
 | Identity | NO machine-specific data (§6 cleanup) |
+| Hostname | `lychee` (matches dnsmasq static DNS entry) |
 | iGPU driver | **No special driver baked in.** Intel: `mesa`/`intel-media-va-driver` from archive; AMD APU: `xserver-xorg-video-amdgpu` + `mesa`. Installed via `packages:` / first-boot from official archive only |
+| Excluded | `git`, file manager, text editor (vi in base), wallpaper tools — dev tools belong in dev VMs |
 
 ## 3. Build inputs
 
@@ -38,7 +51,7 @@ a retained profile.
 | `desktop/user-data/meta-data` | Empty (NoCloud seed marker) |
 | `desktop/user-data/user-data` | Autoinstall config (§4) |
 | `desktop/build-iso.sh` | Injects `autoinstall` kernel args into ISO grub/isolinux AND/OR provisions HTTP `cidata` seed |
-| `desktop/first-boot.sh` | RDP/session wiring, fetched inside VM 100 on first boot at pinned `<REF>` |
+| `desktop/first-boot.sh` | i3 config, Chrome snap, X11 setup, fetched inside VM 100 on first boot at pinned `<REF>` |
 
 Injection routes (same as ds4, versions bumped):
 
@@ -58,7 +71,7 @@ autoinstall:
   locale: en_US.UTF-8
   keyboard: {layout: "us"}
   identity:
-    hostname: desktop-vm
+    hostname: lychee
     username: deskuser
     password: "CHANGE_ME_HASHED"   # prefer ssh-only
     realname: "Desktop User"
@@ -66,31 +79,54 @@ autoinstall:
     install-server: true
     allow-pw: false
   packages:
-    - xfce4
-    - xfce4-goodies
-    - xfce4-terminal
-    - thunar
-    - mousepad
+    # Window manager
+    - i3
+    - i3status
+    - i3blocks
+    - dmenu
+    - picom
+    - lightdm
+    # Terminal
+    - rxvt-unicode
+    # RDP
     - xrdp
     - xorgxrdp
+    # Browsers
     - firefox
+    # X11 forwarding
+    - xauth
+    # SSH
+    - openssh-client
+    - openssh-server
+    # Audio
+    - pulseaudio
+    - pavucontrol
+    # Display
     - mesa-utils
-    - intel-media-va-driver-non-free   # Intel path; harmless if AMD (or split per profile)
+    - intel-media-va-driver-non-free   # Intel path; harmless if AMD
     - xserver-xorg-video-amdgpu        # AMD path; harmless if Intel
+    # System
     - network-manager
     - qemu-guest-agent
-    - git
     - curl
     - wget
   late-commands:
-    - "curtin in-target --target=/target -- systemctl enable xrdp"
-    - "curtin in-target --target=/target -- sh -c 'echo xfce4-session > /home/deskuser/.xsession && chmod +x /home/deskuser/.xsession && chown deskuser:deskuser /home/deskuser/.xsession'"
+    # Enable lightdm as display manager
+    - "curtin in-target --target=/target -- systemctl enable lightdm"
     - "curtin in-target --target=/target -- systemctl set-default graphical.target"
+    # Configure xrdp to launch i3
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/deskuser/.config && echo \"exec i3\" > /home/deskuser/.xsession && chmod +x /home/deskuser/.xsession && chown deskuser:deskuser /home/deskuser/.xsession'"
+    # Enable xrdp
+    - "curtin in-target --target=/target -- systemctl enable xrdp"
+    # Enable X11 forwarding in sshd
+    - "curtin in-target --target=/target -- sed -i \"s/#X11Forwarding yes/X11Forwarding yes/\" /etc/ssh/sshd_config"
+    # Set DNS to host dnsmasq (private network resolver)
+    - "curtin in-target --target=/target -- sh -c 'echo \"[Network]\nDNS=192.168.100.1\" >> /etc/NetworkManager/conf.d/nested-dev.conf'"
 ```
 
-GNOME/grd profile: replace XFCE pkgs with `gnome gnome-remote-desktop
+GNOME/grd profile: replace i3/gaps pkgs with `gnome gnome-remote-desktop
 pipewire`, keep `xrdp xorgxrdp` as fallback, enable `grd.service` instead.
-Select profile in `build-iso.sh` via `DESKTOP_PROFILE=xfce|xrdp|gnome`.
+Select profile in `build-iso.sh` via `DESKTOP_PROFILE=i3|gnome`.
 
 Notes:
 
@@ -102,6 +138,8 @@ Notes:
 * Guest firewall: allow `22`, `3389/tcp` on `vmbr0` only (`ufw default deny
   incoming`, `allow outgoing`). Egress is unrestricted for the desktop VM;
   host iptables do not restrict desktop outbound.
+* Chrome is **not** in the `packages:` list — installed via snap on first boot
+  (§5) to avoid deb/snap conflicts during autoinstall.
 
 ## 5. First-boot guest turns (`first-boot.sh`, inside VM 100)
 
@@ -109,19 +147,35 @@ Seeded via `late-commands`/`cloud-init`, fetched at `<REF>`:
 
 1. Assert passthrough: `lspci | grep -i vga` shows Intel/AMD iGPU;
    `glxinfo | grep 'OpenGL renderer'` shows the iGPU (not llvmpipe).
-2. Default (XFCE/xrdp): `adduser xrdp ssl-cert`, ensure `.xsession`
-   = `xfce4-session`, `systemctl enable --now xrdp`, disable compositing
-   (`xfconf-query -c xfwm4 -p /general/use_compositing -s false`), low-memory
-   trims (`cups/avahi/bluetooth` disable, `vm.swappiness=10`).
-3. GNOME profile: `grdctl rdp enable` + `set-credentials` from a policy secret
-   source (env/KV, never image), open `3389`; if no Wayland session, fall back
-   to enabling `xrdp`/Xorg GDM. Probe `echo $XDG_SESSION_TYPE`.
-4. Log to `/var/log/desktop-firstboot.log`; unit self-disables.
+2. xrdp + i3: `adduser xrdp ssl-cert`, ensure `.xsession` = `exec i3`,
+   `systemctl enable --now xrdp`.
+3. i3 config: write `~/.config/i3/config` with defaults (Mod4=key,
+   `bindsym $mod+Return exec urxvt`, `bindsym $mod+d exec dmenu_run`,
+   bar with i3status, standard focus/resize/move binds). Write
+   `~/.config/i3status/config` with network/disk/load/battery blocks.
+4. picom: enable as i3 autostart (`exec picom`) for optional compositor.
+5. Chrome: `snap install chromium`; write `~/.config/chromium-flags.conf`
+   with `--disable-gpu` (avoids xrdp GPU conflicts).
+6. PulseAudio: enable user service (`systemctl --user enable pulseaudio`).
+7. SSH: confirm `X11Forwarding yes` in `/etc/ssh/sshd_config`; confirm
+   `xauth` is installed. Desktop can now `ssh -X deskuser@<dev-vm>` to
+   forward X11 apps from dev VMs.
+8. Low-memory trims: disable `cups/avahi/bluetooth`, set `vm.swappiness=10`.
+9. DNS: confirm NetworkManager uses `192.168.100.1` (host dnsmasq) for
+   resolution of VM hostnames (`lychee-dev-*`, `lychee-llm`).
+10. Log to `/var/log/desktop-firstboot.log`; unit self-disables.
 
 Connection: Windows `mstsc <host-LAN-IP>:3389` (DNAT to desktop);
 Linux `xfreerdp /v:<host-LAN-IP> /u:deskuser /dynamic-resolution`;
 macOS via MS RDP client. Alternatively, `ssh -J` through host or direct
 SSH to `host-LAN-IP:22` (DNAT to desktop:22).
+
+SSH from desktop to dev/LLM VMs:
+```bash
+ssh deskuser@lychee-dev-template      # by dnsmasq name
+ssh -X deskuser@lychee-dev-template   # with X11 forwarding
+ssh deskuser@lychee-llm                # LLM VM
+```
 
 ## 6. Image build + cleanup
 
@@ -141,10 +195,16 @@ or `scripts/DESKTOP/*` — superseded.
 
 ## 7. Acceptance
 
-* Unattended ISO boot → login screen, no prompts.
+* Unattended ISO boot → login screen (lightdm), no prompts.
 * `lspci`/`lshw` show the Intel/AMD VGA; board monitors light once `hostpci0`
   attached; `glxinfo` renderer is the iGPU.
-* RDP from LAN reaches the session (XFCE default; Wayland/Xorg per profile).
+* i3 session starts (via lightdm or xrdp); `Mod4+Enter` opens urxvt;
+  `Mod4+d` opens dmenu.
+* RDP from LAN reaches the session; `firefox` and `chromium` (snap) launch.
+* `ssh deskuser@lychee-dev-template` succeeds from desktop.
+* `ssh -X deskuser@lychee-dev-template` forwards X11; `xclock` run on dev
+  VM displays on desktop.
+* `pactl info` shows PulseAudio running.
 * Golden contains no SSH host keys / machine-id / plaintext credential
   (`grep` audit over `/etc/ssh*`, `/var/lib/cloud*`).
 * Rebuild from pinned ISO + `user-data` at same REF reproduces within the
