@@ -5,9 +5,9 @@ autoinstall:
   keyboard: {layout: "us"}
   identity:
     hostname: llm-vm
-    username: llmuser
+    username: __PERSONALIZATION_USERNAME__
     password: "CHANGE_ME_HASHED"
-    realname: "LLM User"
+    realname: "__PERSONALIZATION_FULLNAME__"
   ssh:
     install-server: true
     allow-pw: false
@@ -25,5 +25,5 @@ autoinstall:
     # /data/models mount (filesystem created by host on first attach if blank):
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /data/models /opt/models && (mkfs.ext4 -F /dev/vdb || true) && echo \"/dev/vdb /data/models ext4 defaults,nofail 0 2\" >> /etc/fstab && mount -a || true && ln -sfn /data/models /opt/models'"
     # Enable serial console (access via `qm terminal` from host)
-    - "curtin in-target --target=/target -- sh -c 'mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d && printf \"[Service]\\nExecStart=\\nExecStart=-/sbin/agetty --autologin llmuser -o \"-p -f llmuser\" %%I 115200 linux\\n\" > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf'"
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d && printf \"[Service]\\nExecStart=\\nExecStart=-/sbin/agetty --autologin __PERSONALIZATION_USERNAME__ -o \"-p -f __PERSONALIZATION_USERNAME__\" %%I 115200 linux\\n\" > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf'"
     - "curtin in-target --target=/target -- systemctl enable serial-getty@ttyS0"

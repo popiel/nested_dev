@@ -19,7 +19,7 @@ host-side VFIO/VM wiring (Spec 01 §5), RDP access-control policy.
 
 Supersedes `specs-mimo/vm-desktop.md` (XFCE-only, FAI-baked, user `ubuntu`,
 30 GB) and `specs-ds4/02-guest-desktop-image.md` (GNOME/grd-only, 24.04,
-user `deskuser`, 60 GB). Default below is the i3-gaps path; GNOME/grd is
+user `popiel`, 60 GB). Default below is the i3-gaps path; GNOME/grd is
 a retained profile.
 
 ## 2. Decisions
@@ -36,7 +36,7 @@ a retained profile.
 | Audio | **PulseAudio + pavucontrol** |
 | SSH | `openssh-client` (desktop → dev/LLM VMs) + `openssh-server` (LAN → desktop via host DNAT) |
 | X11 forwarding | `xauth` + `sshd_config` `X11Forwarding yes` (desktop hosts X displays for dev VM apps) |
-| Account | single `deskuser` (ds4 name wins; mimo `ubuntu` rejected), SSH-key-only, autologin off |
+| Account | `popiel` (§05), SSH-key-only, autologin off |
 | Disk | **40 GB** virtio system |
 | Identity | NO machine-specific data (§6 cleanup) |
 | Hostname | `lychee` (matches dnsmasq static DNS entry) |
@@ -64,6 +64,10 @@ Injection routes (same as ds4, versions bumped):
 
 ## 4. `user-data` (representative, 26.04)
 
+User identity values (`username`, `realname`) sourced from §05 via
+`provision/personalization.sh`. The `build-iso.sh` script substitutes them
+into the template at ISO build time.
+
 ```yaml
 #cloud-config
 autoinstall:
@@ -72,9 +76,9 @@ autoinstall:
   keyboard: {layout: "us"}
   identity:
     hostname: lychee
-    username: deskuser
+    username: ${PERSONALIZATION_USERNAME}   # §05 via personalization.sh
     password: "CHANGE_ME_HASHED"   # prefer ssh-only
-    realname: "Desktop User"
+    realname: "${PERSONALIZATION_FULLNAME}"   # §05
   ssh:
     install-server: true
     allow-pw: false
@@ -115,7 +119,7 @@ autoinstall:
     - "curtin in-target --target=/target -- systemctl enable lightdm"
     - "curtin in-target --target=/target -- systemctl set-default graphical.target"
     # Configure xrdp to launch i3
-    - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/deskuser/.config && echo \"exec i3\" > /home/deskuser/.xsession && chmod +x /home/deskuser/.xsession && chown deskuser:deskuser /home/deskuser/.xsession'"
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/${PERSONALIZATION_USERNAME}/.config && echo \"exec i3\" > /home/${PERSONALIZATION_USERNAME}/.xsession && chmod +x /home/${PERSONALIZATION_USERNAME}/.xsession && chown ${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME} /home/${PERSONALIZATION_USERNAME}/.xsession'"
     # Enable xrdp
     - "curtin in-target --target=/target -- systemctl enable xrdp"
     # Enable X11 forwarding in sshd
@@ -158,7 +162,7 @@ Seeded via `late-commands`/`cloud-init`, fetched at `<REF>`:
    with `--disable-gpu` (avoids xrdp GPU conflicts).
 6. PulseAudio: enable user service (`systemctl --user enable pulseaudio`).
 7. SSH: confirm `X11Forwarding yes` in `/etc/ssh/sshd_config`; confirm
-   `xauth` is installed. Desktop can now `ssh -X deskuser@<dev-vm>` to
+   `xauth` is installed. Desktop can now `ssh -X ${PERSONALIZATION_USERNAME}@<dev-vm>` to
    forward X11 apps from dev VMs.
 8. Low-memory trims: disable `cups/avahi/bluetooth`, set `vm.swappiness=10`.
 9. DNS: confirm NetworkManager uses `192.168.100.1` (host dnsmasq) for
@@ -166,15 +170,15 @@ Seeded via `late-commands`/`cloud-init`, fetched at `<REF>`:
 10. Log to `/var/log/desktop-firstboot.log`; unit self-disables.
 
 Connection: Windows `mstsc <host-LAN-IP>:3389` (DNAT to desktop);
-Linux `xfreerdp /v:<host-LAN-IP> /u:deskuser /dynamic-resolution`;
+Linux `xfreerdp /v:<host-LAN-IP> /u:${PERSONALIZATION_USERNAME} /dynamic-resolution`;
 macOS via MS RDP client. Alternatively, `ssh -J` through host or direct
 SSH to `host-LAN-IP:22` (DNAT to desktop:22).
 
 SSH from desktop to dev/LLM VMs:
 ```bash
-ssh deskuser@lychee-dev-template      # by dnsmasq name
-ssh -X deskuser@lychee-dev-template   # with X11 forwarding
-ssh deskuser@lychee-llm                # LLM VM
+ssh ${PERSONALIZATION_USERNAME}@lychee-dev-template      # by dnsmasq name
+ssh -X ${PERSONALIZATION_USERNAME}@lychee-dev-template   # with X11 forwarding
+ssh ${PERSONALIZATION_USERNAME}@lychee-llm                # LLM VM
 ```
 
 ## 6. Image build + cleanup
@@ -201,8 +205,8 @@ or `scripts/DESKTOP/*` — superseded.
 * i3 session starts (via lightdm or xrdp); `Mod4+Enter` opens urxvt;
   `Mod4+d` opens dmenu.
 * RDP from LAN reaches the session; `firefox` and `chromium` (snap) launch.
-* `ssh deskuser@lychee-dev-template` succeeds from desktop.
-* `ssh -X deskuser@lychee-dev-template` forwards X11; `xclock` run on dev
+* `ssh ${PERSONALIZATION_USERNAME}@lychee-dev-template` succeeds from desktop.
+* `ssh -X ${PERSONALIZATION_USERNAME}@lychee-dev-template` forwards X11; `xclock` run on dev
   VM displays on desktop.
 * `pactl info` shows PulseAudio running.
 * Golden contains no SSH host keys / machine-id / plaintext credential

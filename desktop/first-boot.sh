@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # first-boot.sh — Desktop VM first-boot configuration
-# Runs inside VM 100 (lychee / deskuser) on first boot.
+# Runs inside VM 100 (lychee / ${PERSONALIZATION_USERNAME}) on first boot.
 # Sets up i3, xrdp, Chrome, X11 forwarding, PulseAudio, low-mem trims.
 # Fetched at REF host_os_v0.1; logs to /var/log/desktop-firstboot.log.
 set -euo pipefail
@@ -9,6 +9,19 @@ LOG="/var/log/desktop-firstboot.log"
 mkdir -p "$(dirname "$LOG")"
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
+
+# --- Source shared personalization (§05) ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# When fetched from GitHub at REF, personalization.sh is alongside this script
+if [ -f "${SCRIPT_DIR}/personalization.sh" ]; then
+    . "${SCRIPT_DIR}/personalization.sh"
+else
+    # Fallback: hardcoded values (must match provision/personalization.sh)
+    PERSONALIZATION_USERNAME="popiel"
+    PERSONALIZATION_FULLNAME="T. Alexander Popiel"
+    PERSONALIZATION_EMAIL="tapopiel@gmail.com"
+    PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
+fi
 
 log "=== desktop first-boot starting ==="
 
@@ -28,13 +41,13 @@ log "Configuring xrdp and i3 session"
 adduser xrdp ssl-cert 2>/dev/null || true
 
 # Ensure .xsession launches i3
-DESKUSER_HOME=$(getent passwd deskuser | cut -d: -f6)
+DESKUSER_HOME=$(getent passwd "${PERSONALIZATION_USERNAME}" | cut -d: -f6)
 mkdir -p "${DESKUSER_HOME}/.config"
 cat > "${DESKUSER_HOME}/.xsession" <<'XSESSION_EOF'
 exec i3
 XSESSION_EOF
 chmod +x "${DESKUSER_HOME}/.xsession"
-chown deskuser:deskuser "${DESKUSER_HOME}/.xsession"
+chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${DESKUSER_HOME}/.xsession"
 
 systemctl enable --now xrdp
 log "xrdp enabled, .xsession set to i3"
@@ -151,7 +164,7 @@ bindsym XF86AudioRaiseVolume exec pactl set-sink-volume @DEFAULT_SINK@ +5%
 bindsym XF86AudioLowerVolume exec pactl set-sink-volume @DEFAULT_SINK@ -5%
 bindsym XF86AudioMute exec pactl set-sink-mute @DEFAULT_SINK@ toggle
 I3_EOF
-chown deskuser:deskuser "${DESKUSER_HOME}/.config/i3/config"
+chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${DESKUSER_HOME}/.config/i3/config"
 log "i3 config written"
 
 # --- 4. i3status config ---
@@ -197,7 +210,7 @@ tztime local {
     format = "%Y-%m-%d %H:%M:%S"
 }
 I3STATUS_EOF
-chown deskuser:deskuser "${DESKUSER_HOME}/.config/i3status/config"
+chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${DESKUSER_HOME}/.config/i3status/config"
 log "i3status config written"
 
 # --- 5. Chrome (snap) ---
@@ -211,14 +224,14 @@ cat > "${DESKUSER_HOME}/.config/chromium-flags.conf" <<'CHROME_EOF'
 --disable-gpu
 --no-sandbox
 CHROME_EOF
-chown deskuser:deskuser "${DESKUSER_HOME}/.config/chromium-flags.conf"
+chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${DESKUSER_HOME}/.config/chromium-flags.conf"
 log "Chrome flags configured (--disable-gpu)"
 
 # --- 6. PulseAudio ---
 log "Enabling PulseAudio"
-# Enable for deskuser at login (PAM linger)
-loginctl enable-linger deskuser 2>/dev/null || true
-sudo -u deskuser systemctl --user enable pulseaudio 2>/dev/null || true
+# Enable for ${PERSONALIZATION_USERNAME} at login (PAM linger)
+loginctl enable-linger "${PERSONALIZATION_USERNAME}" 2>/dev/null || true
+sudo -u "${PERSONALIZATION_USERNAME}" systemctl --user enable pulseaudio 2>/dev/null || true
 log "PulseAudio enabled"
 
 # --- 7. SSH X11 forwarding ---

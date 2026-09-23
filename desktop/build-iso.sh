@@ -14,6 +14,9 @@ ISO_DIR="${OUTPUT_DIR}/iso"
 WORK_DIR="${OUTPUT_DIR}/desktop-build-work"
 REF="host_os_v0.1"
 
+# Source shared personalization (§05)
+. "${REPO_ROOT}/provision/personalization.sh"
+
 # Ubuntu Desktop 26.04 ISO — pin version and SHA256
 UBUNTU_ISO_URL="https://releases.ubuntu.com/26.04/ubuntu-26.04-desktop-amd64.iso"
 UBUNTU_ISO_NAME="ubuntu-26.04-desktop-amd64.iso"
@@ -65,16 +68,22 @@ done
 
 # --- 4. Copy user-data to ISO root as cidata ---
 mkdir -p "${EXTRACT_DIR}/cidata"
-cp "${SCRIPT_DIR}/user-data/user-data" "${EXTRACT_DIR}/cidata/user-data"
+# Substitute personalization placeholders (§05)
+sed -e "s/__PERSONALIZATION_USERNAME__/${PERSONALIZATION_USERNAME}/g" \
+    -e "s/__PERSONALIZATION_FULLNAME__/${PERSONALIZATION_FULLNAME}/g" \
+    -e "s/__PERSONALIZATION_EMAIL__/${PERSONALIZATION_EMAIL}/g" \
+    "${SCRIPT_DIR}/user-data/user-data" > "${EXTRACT_DIR}/cidata/user-data"
 cp "${SCRIPT_DIR}/user-data/meta-data" "${EXTRACT_DIR}/cidata/meta-data"
-log "Copied user-data to cidata/"
+log "Copied user-data to cidata/ (personalization substituted)"
 
-# --- 5. Copy first-boot script to ISO root ---
+# --- 5. Copy first-boot script and personalization to ISO root ---
 # The first-boot script is fetched at <REF> inside the VM, but we also
 # embed it on the ISO as a fallback for air-gapped installs.
 cp "${SCRIPT_DIR}/first-boot.sh" "${EXTRACT_DIR}/first-boot.sh"
 chmod +x "${EXTRACT_DIR}/first-boot.sh"
-log "Embedded first-boot.sh on ISO"
+cp "${REPO_ROOT}/provision/personalization.sh" "${EXTRACT_DIR}/personalization.sh"
+chmod +x "${EXTRACT_DIR}/personalization.sh"
+log "Embedded first-boot.sh and personalization.sh on ISO"
 
 # --- 6. Repackage ISO ---
 DESKTOP_AUTO_ISO="${OUTPUT_DIR}/ubuntu-26.04-desktop-amd64_auto.iso"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # llm-firstboot.sh — LLM VM first-boot configuration
-# Runs inside VM 101 (llm-vm / llmuser) on first boot.
+# Runs inside VM 101 (llm-vm / ${PERSONALIZATION_USERNAME}) on first boot.
 # Installs NVIDIA driver, CUDA, Docker, NVIDIA Container Toolkit, Ollama.
 # Detects VRAM, prints model recommendations.
 # Fetched at REF host_os_v0.1; logs to /var/log/llm-firstboot.log.
@@ -11,6 +11,17 @@ mkdir -p "$(dirname "$LOG")"
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
 die() { printf '%s FATAL: %s\n' "$(date -Is)" "$*" | tee -a "$LOG" >&2; exit 1; }
+
+# --- Source shared personalization (§05) ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${SCRIPT_DIR}/personalization.sh" ]; then
+    . "${SCRIPT_DIR}/personalization.sh"
+else
+    PERSONALIZATION_USERNAME="popiel"
+    PERSONALIZATION_FULLNAME="T. Alexander Popiel"
+    PERSONALIZATION_EMAIL="tapopiel@gmail.com"
+    PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
+fi
 
 log "=== llm first-boot starting ==="
 
@@ -231,7 +242,7 @@ if [ -b /dev/vdb ]; then
             echo "/dev/vdb /data/models ext4 defaults,nofail 0 2" >> /etc/fstab
         fi
     fi
-    chown llmuser:llmuser /data/models 2>/dev/null || true
+    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" /data/models 2>/dev/null || true
     mkdir -p /data/models/ollama
     ln -sfn /data/models /opt/models
     log "Data volume mounted at /data/models"

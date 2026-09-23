@@ -30,7 +30,7 @@ discipline with mimo's Docker + Container Toolkit serving model.
 | Serving baseline | **Ollama container** (binds localhost + Desktop-VM peer); optional `vLLM` / `llama.cpp` profiles as containers |
 | Data volume | Separate `scsi1` disk from host provisioner, mounted at `/data/models`; `/opt/models` kept as symlink for mimo compat |
 | OS disk | **80 GB** virtio (mimo size retained; models live on data volume, not OS disk) |
-| Account | `llmuser`, SSH-key-only |
+| Account | `popiel` (§05), SSH-key-only |
 | Identity | No machine-specific data in image |
 | GPU config | Dual GTX 1080 (8 GB each, 16 GB total) via VFIO; single GPU fallback documented |
 | Model policy | No auto-pull; first-boot prints VRAM-based recommendations only |
@@ -86,6 +86,8 @@ automatically.
 
 ## 4. `user-data` (representative, 26.04)
 
+User identity values sourced from §05 via `provision/personalization.sh`.
+
 ```yaml
 #cloud-config
 autoinstall:
@@ -94,8 +96,9 @@ autoinstall:
   keyboard: {layout: "us"}
   identity:
     hostname: llm-vm
-    username: llmuser
+    username: ${PERSONALIZATION_USERNAME}   # §05 via personalization.sh
     password: "CHANGE_ME_HASHED"   # prefer ssh-only (allow-pw false)
+    realname: "${PERSONALIZATION_FULLNAME}"   # §05
   ssh:
     install-server: true
     allow-pw: false
@@ -151,7 +154,7 @@ Seeded like the desktop guest; fetched at `<REF>`; logs to
    * If `nvidia-smi` fails (no GPU passed through), print a warning and skip
      model recommendations; the Ollama container still runs on CPU.
 3. Data volume: ensure `/dev/vdb` mounted at `/data/models`, persist fstab,
-   `chown llmuser`; keep `/opt/models -> /data/models` symlink.
+   `chown ${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}` (§05); keep `/opt/models -> /data/models` symlink.
 4. Serving containers (examples; versions pinned in script):
    `ollama/ollama` on `11434` (`-v /data/models/ollama:/root/.ollama`);
    optional `vllm/vllm-openai:latest` on `8000` with

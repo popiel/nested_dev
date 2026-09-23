@@ -5,9 +5,9 @@ autoinstall:
   keyboard: {layout: "us"}
   identity:
     hostname: lychee
-    username: deskuser
+    username: __PERSONALIZATION_USERNAME__
     password: "CHANGE_ME_HASHED"
-    realname: "Desktop User"
+    realname: "__PERSONALIZATION_FULLNAME__"
   ssh:
     install-server: true
     allow-pw: false
@@ -48,7 +48,7 @@ autoinstall:
     - "curtin in-target --target=/target -- systemctl enable lightdm"
     - "curtin in-target --target=/target -- systemctl set-default graphical.target"
     # Configure xrdp to launch i3
-    - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/deskuser/.config && echo \"exec i3\" > /home/deskuser/.xsession && chmod +x /home/deskuser/.xsession && chown deskuser:deskuser /home/deskuser/.xsession'"
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/__PERSONALIZATION_USERNAME__/.config && echo \"exec i3\" > /home/__PERSONALIZATION_USERNAME__/.xsession && chmod +x /home/__PERSONALIZATION_USERNAME__/.xsession && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ /home/__PERSONALIZATION_USERNAME__/.xsession'"
     # Enable xrdp
     - "curtin in-target --target=/target -- systemctl enable xrdp"
     # Enable X11 forwarding in sshd
