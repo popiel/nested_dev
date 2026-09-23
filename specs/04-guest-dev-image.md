@@ -50,18 +50,22 @@ desktop access (Spec 02), host wiring (Spec 01 §5.3).
 | `dev/user-data/meta-data` | Empty |
 | `dev/user-data/user-data` | Autoinstall (§4) |
 | `dev/build-iso.sh` | Injects `autoinstall` param (same routes as Spec 02 §3) |
-| `dev/dev-firstboot.sh` | Docker + toolchain images + wrapper scripts, fetched at `<REF>` |
+| `dev/dev-firstboot.sh` | Docker + base image pulls + wrapper scripts, fetched at `<REF>` |
+| `dev/docker/Dockerfile.*` | Four Dockerfiles for tool images, embedded on ISO, built lazily |
 
-### Container images (built at first boot)
+### Container images (Dockerfiles in `dev/docker/`, built lazily by wrapper scripts)
 
-| Image tag | Base | Entry point | Purpose |
-|---|---|---|---|
-| `dev-java` | `eclipse-temurin:21-jre-jammy` | `java` | Java 21 runtime via coursier-managed JDK |
-| `dev-scala` | `coursier/jre:21` | `scala` | Scala REPL via coursier |
-| `dev-sbt` | `sbtscala/sbt:1.10.7_2.13.15_3` | `sbt` | sbt build tool |
-| `dev-opencode` | `node:20-slim` | `opencode` | opencode CLI (npm global install) |
+| Image tag | Dockerfile | Base | Entry point | Purpose |
+|---|---|---|---|---|
+| `dev-java` | `Dockerfile.java` | `eclipse-temurin:21-jre-jammy` | `java` | Java 21 runtime via coursier-managed JDK |
+| `dev-scala` | `Dockerfile.scala` | `coursier/jre:21` | `scala` | Scala REPL via coursier |
+| `dev-sbt` | `Dockerfile.sbt` | `sbtscala/sbt:1.10.7_2.13.15_3` | `sbt` | sbt build tool |
+| `dev-opencode` | `Dockerfile.opencode` | `node:20-slim` | `opencode` | opencode CLI (npm global install) |
 
-Image build is layer-cached: re-running first boot is idempotent.
+Images are **not** built at first boot. Base images are pulled at first boot;
+tool images are built lazily by wrapper scripts on first use (§5.5). Each
+Dockerfile accepts `ARG PERSONALIZATION_USERNAME` to create a matching user
+inside the container, avoiding bind-mount ownership mismatches.
 
 ### Wrapper scripts (in `/home/${PERSONALIZATION_USERNAME}/.local/bin/`)
 
@@ -113,12 +117,13 @@ Fetched at `<REF>`; logs to `/var/log/dev-firstboot.log`; self-disables.
 4. **Base image pulls** — pull pinned base images in parallel:
    `eclipse-temurin:21-jre-jammy`, `coursier/jre:21`,
    `sbtscala/sbt:1.10.7_2.13.15_3`, `node:20-slim`. Log each SHA.
-5. **Tool image builds** — `docker build` four images from inline Dockerfiles
-   (heredocs in first-boot script). Each sets `LABEL` with base pin and
-   `ENTRYPOINT`. Builds are layer-cached for idempotency.
+5. **Install Dockerfiles** — copy `dev/docker/*` to `/opt/dev-docker/` on the
+   VM. These are used by wrapper scripts for lazy image builds.
 6. **Wrapper scripts** — write four scripts to `/home/${PERSONALIZATION_USERNAME}/.local/bin/`:
-   `java`, `scala`, `sbt`, `opencode`. Each follows the ephemeral-container
-   pattern (§5.5). `chmod +x`. Add `~/.local/bin` to PATH via `.bashrc` snippet.
+   `java`, `scala`, `sbt`, `opencode`. Each checks if its image exists;
+   if not, builds it from `/opt/dev-docker/Dockerfile.*` with
+   `--build-arg PERSONALIZATION_USERNAME=${USER}`. Then runs the ephemeral
+   container (§5.5). `chmod +x`. Add `~/.local/bin` to PATH via `.bashrc` snippet.
 7. **Cache directories** — `mkdir -p ~/.sbt ~/.ivy2 ~/.cache/coursier
    ~/.config/opencode`; `chown ${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}` (§05) all. These are bind-mounted
    into containers for build-cache persistence.
@@ -173,42 +178,81 @@ Key properties:
 
 **Wrapper scripts** (`/home/${PERSONALIZATION_USERNAME}/.local/bin/java`, etc.):
 
+Each wrapper checks if its Docker image exists and builds it on first use
+from `/opt/dev-docker/Dockerfile.*`:
+
 `java`:
 ```bash
 #!/usr/bin/env bash
+set -euo pipefail
+DOCKER_DIR="/opt/dev-docker"
+IMAGE="dev-java"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "[dev] Building ${IMAGE} (first run)..."
+    docker build --tag "$IMAGE" \
+        --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        -f "${DOCKER_DIR}/Dockerfile.java" "$DOCKER_DIR"
+fi
 exec docker run --rm \
   -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.cache/coursier:/home/cs/.cache/coursier" \
-  dev-java java "$@"
+  -v "${HOME}/.cache/coursier:/home/${USER}/.cache/coursier" \
+  "$IMAGE" java "$@"
 ```
 
 `scala`:
 ```bash
 #!/usr/bin/env bash
+set -euo pipefail
+DOCKER_DIR="/opt/dev-docker"
+IMAGE="dev-scala"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "[dev] Building ${IMAGE} (first run)..."
+    docker build --tag "$IMAGE" \
+        --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        -f "${DOCKER_DIR}/Dockerfile.scala" "$DOCKER_DIR"
+fi
 exec docker run --rm \
   -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.cache/coursier:/home/cs/.cache/coursier" \
-  dev-scala scala "$@"
+  -v "${HOME}/.cache/coursier:/home/${USER}/.cache/coursier" \
+  "$IMAGE" scala "$@"
 ```
 
 `sbt`:
 ```bash
 #!/usr/bin/env bash
+set -euo pipefail
+DOCKER_DIR="/opt/dev-docker"
+IMAGE="dev-sbt"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "[dev] Building ${IMAGE} (first run)..."
+    docker build --tag "$IMAGE" \
+        --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        -f "${DOCKER_DIR}/Dockerfile.sbt" "$DOCKER_DIR"
+fi
 exec docker run --rm \
   -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.sbt:/root/.sbt" \
-  -v "${HOME}/.ivy2:/root/.ivy2" \
-  -v "${HOME}/.cache/coursier:/root/.cache/coursier" \
-  dev-sbt sbt "$@"
+  -v "${HOME}/.sbt:/home/${USER}/.sbt" \
+  -v "${HOME}/.ivy2:/home/${USER}/.ivy2" \
+  -v "${HOME}/.cache/coursier:/home/${USER}/.cache/coursier" \
+  "$IMAGE" sbt "$@"
 ```
 
 `opencode`:
 ```bash
 #!/usr/bin/env bash
+set -euo pipefail
+DOCKER_DIR="/opt/dev-docker"
+IMAGE="dev-opencode"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "[dev] Building ${IMAGE} (first run)..."
+    docker build --tag "$IMAGE" \
+        --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        -f "${DOCKER_DIR}/Dockerfile.opencode" "$DOCKER_DIR"
+fi
 exec docker run --rm \
   -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.config/opencode:/root/.config/opencode:ro" \
-  dev-opencode opencode "$@"
+  -v "${HOME}/.config/opencode:/home/${USER}/.config/opencode:ro" \
+  "$IMAGE" opencode "$@"
 ```
 
 No long-lived mutable containers; no toolchain baked into the VM; state

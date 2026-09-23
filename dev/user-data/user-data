@@ -1,0 +1,26 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard: {layout: "us"}
+  identity:
+    hostname: dev-template
+    username: __PERSONALIZATION_USERNAME__
+    password: "CHANGE_ME_HASHED"
+    realname: "__PERSONALIZATION_FULLNAME__"
+  ssh:
+    install-server: true
+    allow-pw: false
+  packages:
+    - curl
+    - ca-certificates
+    - gnupg
+    - git
+    - fakeroot
+    - qemu-guest-agent
+  late-commands:
+    # Create workspace (project volumes mounted per-clone, not in golden)
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /work && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ /work'"
+    # Enable serial console (access via `qm terminal` from host)
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d && printf \"[Service]\\nExecStart=\\nExecStart=-/sbin/agetty --autologin __PERSONALIZATION_USERNAME__ -o \"-p -f __PERSONALIZATION_USERNAME__\" %%I 115200 linux\\n\" > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf'"
+    - "curtin in-target --target=/target -- systemctl enable serial-getty@ttyS0"
