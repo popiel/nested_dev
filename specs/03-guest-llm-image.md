@@ -116,6 +116,10 @@ Seeded like the desktop guest; fetched at `<REF>`; logs to
    Bind APIs to localhost + `vmbr0` peer (Desktop/dev VMs); never public.
 4. Firewall: `ufw default deny incoming; allow outgoing; allow ssh` only.
    API ports reached via SSH tunnel or peer-VM allow rule, not LAN-wide.
+   **Host-level egress**: the LLM VM is restricted to HTTPS (443) only
+   by the host's iptables OUTPUT chain. MCP connections to external servers
+   use HTTPS; all other outbound is blocked at the host level regardless
+   of `ufw` settings inside the VM.
 
 ## 6. Image build + cleanup
 

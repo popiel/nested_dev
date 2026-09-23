@@ -1,0 +1,31 @@
+# PVE 9.2 autoinstall answer file
+# Fetched by build-iso.sh at build time; also available for offline install.
+# REF: host_os_v0.1 (tag)
+
+[global]
+keyboard = "us"
+country = "us"
+fqdn = "lychee-host.wolfskeep.com"
+timezone = "UTC"
+mailto = ""
+# SSH key only — password auth disabled
+root-ssh-keys = ["__ROOT_SSH_KEY__"]
+
+[network]
+source = "from-dhcp"
+
+[disk-setup]
+filesystem = "ext4"
+# Auto-detect: prefer NVMe/SSD; fallback to SATA
+disk-list = ["__AUTO_DETECT_DISK__"]
+
+[first-boot]
+source = "from-url"
+url = "https://raw.githubusercontent.com/popiel/nested_dev/host_os_v0.1/provision/host/provision-host.sh"
+ordering = "after-network"
+
+[late-commands]
+# Fetch full provisioner tree at pinned REF
+"fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/tags/host_os_v0.1 && tar -xzf nested_dev.tar.gz && mv nested_dev-host_os_v0.1/provision/host provision && rm -rf nested_dev.tar.gz nested_dev-host_os_v0.1 && chmod +x provision/provision-host.sh provision/frag/*.sh'"
+# Install systemd oneshot for first-boot provisioning
+"install-firstboot-unit" = "sh -c 'cat > /target/etc/systemd/system/pve-firstboot.service <<UNIT\n[Unit]\nDescription=PVE first boot provisioning\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/root/provision/provision-host.sh\n\n[Install]\nWantedBy=multi-user.target\nUNIT\nln -s /etc/systemd/system/pve-firstboot.service /target/etc/systemd/system/multi-user.target.wants/pve-firstboot.service'"

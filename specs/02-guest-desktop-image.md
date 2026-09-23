@@ -100,7 +100,8 @@ Notes:
 * RDP credential (`grdctl rdp set-credentials`) is **first-boot only** (§5),
   never in the image. xrdp path needs no baked secret.
 * Guest firewall: allow `22`, `3389/tcp` on `vmbr0` only (`ufw default deny
-  incoming`, `allow outgoing`).
+  incoming`, `allow outgoing`). Egress is unrestricted for the desktop VM;
+  host iptables do not restrict desktop outbound.
 
 ## 5. First-boot guest turns (`first-boot.sh`, inside VM 100)
 
@@ -117,8 +118,10 @@ Seeded via `late-commands`/`cloud-init`, fetched at `<REF>`:
    to enabling `xrdp`/Xorg GDM. Probe `echo $XDG_SESSION_TYPE`.
 4. Log to `/var/log/desktop-firstboot.log`; unit self-disables.
 
-Connection: Windows `mstsc <VM_IP>:3389`; Linux
-`xfreerdp /v:<VM_IP> /u:deskuser /dynamic-resolution`; macOS via MS RDP client.
+Connection: Windows `mstsc <host-LAN-IP>:3389` (DNAT to desktop);
+Linux `xfreerdp /v:<host-LAN-IP> /u:deskuser /dynamic-resolution`;
+macOS via MS RDP client. Alternatively, `ssh -J` through host or direct
+SSH to `host-LAN-IP:22` (DNAT to desktop:22).
 
 ## 6. Image build + cleanup
 

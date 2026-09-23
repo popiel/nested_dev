@@ -34,6 +34,12 @@ layout, IOMMU assertions, and guest conventions.
 * Target server: x86_64, VT-d/AMD-Vi enabled; iGPU with board outputs; one or
   more discrete NVIDIA GPUs (e.g. 2× GTX 1080); single NIC minimum; 16 GB RAM
   minimum (32 GB recommended); SSD/NVMe.
+* **LAN**: `192.168.14.0/24` (DHCP-provided). Host gets a dynamic address in
+  this range via `$PHYS_NIC`. VMs are on a **private subnet**
+  `192.168.100.0/24` (dnsmasq on host). VMs are not directly addressable
+  from the LAN; only reachable via host port forwarding. Fixed VM addresses
+  assigned by dnsmasq static leases: Desktop `192.168.100.100`,
+  LLM `192.168.100.101`, Dev `192.168.100.102+`.
 * The iGPU and each dGPU (+ companion audio functions) must sit in
   **separable IOMMU groups** (verify before acceptance, §7 R4).
 
@@ -45,7 +51,7 @@ layout, IOMMU assertions, and guest conventions.
 | `provision/host/answer-host.toml` | Installer answer file (§4), 9.2 schema |
 | `provision/host/provision-host.sh` | First-boot entry point (§5) |
 | `provision/host/frag/*.sh` | Fragments: GPU, memory, guest creation, finalize |
-| `provision/network/*.conf` | `vmbr0`/firewall fragments applied by provisioner |
+| `provision/network/*.conf` | `vmbr0`/firewall/dnsmasq fragments applied by provisioner |
 | `output/` | Build products + `MANIFEST` (gitignored) |
 
 ## 4. Answer file — `answer-host.toml` (representative, PVE 9.2)
@@ -69,9 +75,9 @@ source = "from-dhcp"
 # source = "preconfigured"
 # [network.interface]
 # name = "CHANGE_ME_enpXs0"
-# cidr = "192.168.1.10/24"
-# gateway = "192.168.1.1"
-# dns = "192.168.1.1"
+# cidr = "192.168.14.10/24"
+# gateway = "192.168.14.1"
+# dns = "192.168.14.1"
 
 [disk-setup]
 filesystem = "ext4"
@@ -178,24 +184,48 @@ Conventions (ds4 IDs win):
   no `hostpci`. Full contract in Spec 04. Reserve 200–249 for future workload
   guests (1 vCPU / 2 GB base, `vmbr0`, `local-lvm`).
 
-Network default (`/etc/network/interfaces` managed by PVE):
+Network default (`/etc/network/interfaces` managed by PVE; routed
+architecture):
 
 ```
 auto lo
 iface lo inet loopback
+
+auto CHANGE_ME_eno1
+iface CHANGE_ME_eno1 inet dhcp
+
 auto vmbr0
-iface vmbr0 inet dhcp
-    bridge-ports CHANGE_ME_eno1
+iface vmbr0 inet static
+    address 192.168.100.1/24
+    bridge-ports none
     bridge-stp off
     bridge-fd 0
 ```
 
+dnsmasq on host serves DHCP/DNS on `vmbr0` (192.168.100.0/24).
+Host NATs VM egress via MASQUERADE on `$PHYS_NIC`.
 PVE firewall: allow 22/8006 from management subnet only; block inter-VM by
 default; open documented ports per guest spec.
 
-### 5.4 `frag/90-finalize.sh` — screening
+### 5.4 `frag/90-finalize.sh` — screening and networking
 
 * Disable `pve-enterprise` repo, enable `pve-no-subscription` (or mirror).
+* Detect physical NIC (`$PHYS_NIC`); write `/etc/network/interfaces` with
+  `$PHYS_NIC` on DHCP and `vmbr0` as private bridge (`192.168.100.1/24`,
+  no `bridge-ports`).
+* Install and configure `dnsmasq`: static leases for VMs (MAC addresses
+  set in `frag/30`), DNS entries (short + FQDN), upstream DNS from host's
+  `/run/resolv.conf`. Enable as systemd service.
+* Enable IP forwarding (`sysctl net.ipv4.ip_forward=1`, persisted).
+* Apply iptables rules:
+  - **NAT**: DNAT `LAN:22→desktop:22`, `LAN:3389→desktop:3389`,
+    `LAN:2222(192.168.14.*)→host:22`; MASQUERADE `vmbr0→$PHYS_NIC`.
+  - **INPUT**: ACCEPT lo, ESTABLISHED, 2222/lan, 8006/lan, icmp; DROP rest.
+  - **FORWARD**: Desktop→any ALLOW; LLM/Dev→Desktop SSH ALLOW;
+    ESTABLISHED,RELATED ALLOW; DROP rest.
+  - **OUTPUT**: ACCEPT lo, ESTABLISHED, 443, 53, 123; DROP rest.
+* Configure host DNS (`/etc/resolv.conf` → `127.0.0.1`).
+* Write `/etc/hosts` with VM entries (short + FQDN).
 * Write `/etc/hosts`/motd summary; record ISO hash + REF in `output/MANIFEST`.
 * Self-disable unit (`systemctl disable --now pve-firstboot`); reboot or hand
   to operator.
@@ -224,9 +254,18 @@ PXE via `extract-dir` + HTTP/iPXE serving the same answer;
    `lspci -nnk` shows `vfio-pci` on passthrough set; R4 group checks passed.
 3. `free -h` / `zramctl` show ZRAM + swap active (16 GB profile).
 4. `qm list` shows 100/101 (+102 template as applicable); `qm start` succeeds.
-5. RDP `:3389` reaches vm 100 (Spec 02); `nvidia-smi` in vm 101 lists dGPUs
+5. **Network**:
+   - `ip addr show vmbr0` shows `192.168.100.1/24`.
+   - `systemctl status dnsmasq` active; `dnsmasq --test` clean.
+   - `cat /etc/resolv.conf` shows `nameserver 127.0.0.1`.
+   - `iptables -t nat -L PREROUTING -n` shows DNAT rules.
+   - `iptables -L OUTPUT -n` shows DROP policy with only 443/53/123 allowed.
+   - `ssh -p 2222 root@localhost` reaches host (from LAN).
+   - From LAN: `ssh root@<host-ip>` reaches desktop VM (DNAT).
+   - From LAN: `mstsc <host-ip>:3389` reaches desktop VM (DNAT).
+6. RDP `:3389` reaches vm 100 (Spec 02); `nvidia-smi` in vm 101 lists dGPUs
    (Spec 03); dev VM has no GPU and egress-deny holds (Spec 04).
-6. `/var/log/pve-firstboot.log` clean; unit disabled.
+7. `/var/log/pve-firstboot.log` clean; unit disabled.
 
 ## 8. Known risks / mitigation
 

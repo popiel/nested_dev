@@ -84,7 +84,11 @@ Fetched at `<REF>`; logs to `/var/log/dev-firstboot.log`; self-disables.
    in`; then allowlist egress: Ubuntu archive (`archive.ubuntu.com`,
    `security.ubuntu.com`), Docker Hub/registry endpoints in use, and the
    LLM-VM peer IP/port (e.g. `101:11434`) — everything else denied. PVE-level
-   `firewall=1` on the `net0` device enforces the same.
+   `firewall=1` on the `net0` device enforces the same. **Host-level
+   enforcement**: the host's iptables OUTPUT chain drops all outbound from
+   dev VMs by default (default-deny FORWARD + POSTROUTING MASQUERADE only
+   applies to allowed traffic). The `ufw` rules inside the VM are a
+   secondary defense; the host firewall is authoritative.
 3. Per-project clone contract (run by operator/provisioner, not in golden):
    ```bash
    qm clone <dev-golden-vmid> 102 --name dev-alpha --full
@@ -118,6 +122,7 @@ delivered to `payloads/` for `import-from`/clone (Spec 01 §5.3).
 * `docker run --rm hello-world` succeeds as `devuser`; daemon flags verified.
 * Egress-deny holds: `curl` to archive/allowlisted endpoints succeeds,
   arbitrary egress fails; only SSH reachable inbound; PVE `firewall=1` set.
+  Host iptables OUTPUT chain is the authoritative enforcement point.
 * `/work` bind-mount workflow demonstrated with an ephemeral container; no
   project state inside container layers.
 * Per-project clone produces unique hostname/keys/IP; golden has no identity.

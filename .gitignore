@@ -29,3 +29,10 @@ src/test/resources/pacer/
 bricklink_ids.json
 nul
 /node_modules/
+/keys/*
+!/keys/*.pub
+
+# Build output (ISOs, golden images, build artifacts)
+/output/*
+!/output/.gitkeep
+

@@ -32,27 +32,33 @@ Rationale for each resolution is recorded in §7.
 ## 2. Target topology
 
 ```
-+--------------------------------------------------------------+
-|  Host: Proxmox VE 9.2 (minimal, headless)                    |
-|                                                              |
-|  vmbr0 (bridge) --- NIC ---- LAN                             |
-|  storage: local-lvm thin (default); ZFS rpool variant §3     |
-|  RAM: 2 GB reserved for host; rest via balloon + ZRAM + swap |
-|                                                              |
-|  vm 100 desktop <-- iGPU (0000:00:02.x, VFIO)   --> hostpci0 |
-|  '-- Ubuntu Desktop 26.04 + XFCE/xrdp (default, :3389)      |
-|      Optional profile: GNOME + gnome-remote-desktop          |
-|                                                              |
-|  vm 101 llm      <-- dGPU(s) (VFIO)          --> hostpci0[,1]|
-|  '-- Ubuntu Server 26.04 + NVIDIA driver + CUDA + Docker    |
-|      + Ollama/vLLM containers; models on /data/models        |
-|                                                              |
-|  vm 102+ dev-<project> (one per project, §6 of Spec 04)     |
-|  '-- Ubuntu Server 26.04 + Docker engine only, no GPUs      |
-|      Ephemeral containers + bind mounts; egress-deny default  |
-|                                                              |
-|  vm 200..249   (reserved: future workload guests)            |
-+--------------------------------------------------------------+
++-----------------------------------------------------------------------+
+|  Host: Proxmox VE 9.2 (minimal, headless)                             |
+|                                                                       |
+|  $PHYS_NIC (DHCP) --- LAN 192.168.14.0/24                             |
+|  vmbr0 (private, 192.168.100.1/24) --- VMs                            |
+|  dnsmasq on vmbr0: DHCP + DNS for VMs                                 |
+|  NAT/MASQUERADE: VMs → $PHYS_NIC → LAN                                |
+|  storage: local-lvm thin (default); ZFS rpool variant §3              |
+|  RAM: 2 GB reserved for host; rest via balloon + ZRAM + swap          |
+|                                                                       |
+|  vm 100 desktop <-- iGPU (0000:00:02.x, VFIO)   --> hostpci0         |
+|  '-- Ubuntu Desktop 26.04 + XFCE/xrdp (default, :3389)               |
+|      192.168.100.100 (lychee / lychee.wolfskeep.com)                  |
+|      Optional profile: GNOME + gnome-remote-desktop                   |
+|                                                                       |
+|  vm 101 llm      <-- dGPU(s) (VFIO)          --> hostpci0[,1]        |
+|  '-- Ubuntu Server 26.04 + NVIDIA driver + CUDA + Docker             |
+|      + Ollama/vLLM containers; models on /data/models                 |
+|      192.168.100.101 (lychee-llm / lychee-llm.wolfskeep.com)         |
+|                                                                       |
+|  vm 102+ dev-<project> (one per project, §6 of Spec 04)              |
+|  '-- Ubuntu Server 26.04 + Docker engine only, no GPUs               |
+|      Ephemeral containers + bind mounts; egress-deny default          |
+|      192.168.100.102+ (lychee-dev-<project>)                          |
+|                                                                       |
+|  vm 200..249   (reserved: future workload guests)                     |
++-----------------------------------------------------------------------+
 ```
 
 Physical display outputs (motherboard HDMI/DP) belong to **vm 100** when the
@@ -73,7 +79,7 @@ console/management is via SSH, Proxmox web UI, or serial console.
 | Desktop session | XFCE + `xrdp` default (lightweight, 16 GB friendly); GNOME + `gnome-remote-desktop` optional profile | `specs-mimo` default wins on simplicity/RAM; `specs-ds4` grd kept as option for Wayland/HW-encode |
 | LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
 | Dev model | Docker engine only, ephemeral containers, bind mounts, egress-deny | From `README.md`; absent in both predecessors; new Spec 04 |
-| Host networking | Single NIC bridged to `vmbr0`, all VMs on `vmbr0`; PVE firewall default-deny inter-VM; `ufw` inside guests | Merge of both; L2-routed default, NAT/DNAT only where LAN routing unavailable (Spec 01) |
+| Host networking | Routed: `$PHYS_NIC` DHCP from LAN + private `vmbr0` (192.168.100.1/24); dnsmasq on host serves DHCP/DNS to VMs; host NATs VM egress via MASQUERADE; iptables firewall with per-VM egress policy (desktop=unrestricted, LLM=HTTPS-only, dev=denied, host=HTTPS/DNS/NTP-only) | Replaces bridged design; VMs not directly addressable from LAN; dnsmasq gives predictable IPs without depending on external DHCP |
 | Provisioning model | Answer file + provisioner/first-boot scripts fetched from `popiel/nested_dev` GitHub at install/first boot, pinned to `<REF>` tag/SHA | `specs-ds4` discipline wins over mimo's `main`-branch fetch |
 | **Sourcing policy** | GitHub serves **only files authored in this repo** (answer file, provisioner scripts/fragments, `user-data`, first-boot scripts, network fragments). Every third-party artifact (PVE/Ubuntu ISOs, Ubuntu archive packages, `linux-firmware`, NVIDIA driver/CUDA repo, Ollama, iPXE, firmware) is fetched **direct from its official upstream** — never vendored here | From `specs-ds4` 00 §3, retained verbatim |
 
@@ -105,6 +111,8 @@ provision/
     frag/90-finalize.sh        # screening, repo config (Spec 01 §5.3)
   network/
     vmbr0-*.conf               # netplan/iptables fragments
+    dnsmasq.conf               # DHCP + DNS for VMs on vmbr0
+    iptables-forwarding.conf   # firewall rule reference
 desktop/
   build-iso.sh
   first-boot.sh                # fetched inside VM 100 on first boot
