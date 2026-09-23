@@ -1,0 +1,57 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard: {layout: "us"}
+  identity:
+    hostname: lychee
+    username: deskuser
+    password: "CHANGE_ME_HASHED"
+    realname: "Desktop User"
+  ssh:
+    install-server: true
+    allow-pw: false
+  packages:
+    # Window manager
+    - i3
+    - i3status
+    - i3blocks
+    - dmenu
+    - picom
+    - lightdm
+    # Terminal
+    - rxvt-unicode
+    # RDP
+    - xrdp
+    - xorgxrdp
+    # Browsers
+    - firefox
+    # X11 forwarding
+    - xauth
+    # SSH
+    - openssh-client
+    - openssh-server
+    # Audio
+    - pulseaudio
+    - pavucontrol
+    # Display
+    - mesa-utils
+    - intel-media-va-driver-non-free
+    - xserver-xorg-video-amdgpu
+    # System
+    - network-manager
+    - qemu-guest-agent
+    - curl
+    - wget
+  late-commands:
+    # Enable lightdm as display manager
+    - "curtin in-target --target=/target -- systemctl enable lightdm"
+    - "curtin in-target --target=/target -- systemctl set-default graphical.target"
+    # Configure xrdp to launch i3
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/deskuser/.config && echo \"exec i3\" > /home/deskuser/.xsession && chmod +x /home/deskuser/.xsession && chown deskuser:deskuser /home/deskuser/.xsession'"
+    # Enable xrdp
+    - "curtin in-target --target=/target -- systemctl enable xrdp"
+    # Enable X11 forwarding in sshd
+    - "curtin in-target --target=/target -- sed -i \"s/#X11Forwarding yes/X11Forwarding yes/\" /etc/ssh/sshd_config"
+    # Set DNS to host dnsmasq (private network resolver)
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /etc/NetworkManager/conf.d && printf \"[Network]\\nDNS=192.168.100.1\\n\" > /etc/NetworkManager/conf.d/nested-dev.conf'"
