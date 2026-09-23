@@ -11,8 +11,8 @@ the LLM serving stack (Ollama baseline, vLLM optional).
 
 In scope: autoinstall `user-data`, first-boot fetch of driver + CUDA + Docker
 + serving baseline from official sources, data-volume contract,
-build/cleanup. Out of scope: model catalog, rate limiting, fleet topology,
-host wiring (Spec 01 §5.3).
+build/cleanup, VRAM-aware model recommendations (print-only, no auto-pull).
+Out of scope: rate limiting, fleet topology, host wiring (Spec 01 §5.3).
 
 Supersedes `specs-mimo/vm-llm.md` (FAI-baked driver/CUDA/Docker, `/opt/models`
 on OS disk, 80 GB) and `specs-ds4/03-guest-llm-image.md` (systemd Ollama,
@@ -32,12 +32,47 @@ discipline with mimo's Docker + Container Toolkit serving model.
 | OS disk | **80 GB** virtio (mimo size retained; models live on data volume, not OS disk) |
 | Account | `llmuser`, SSH-key-only |
 | Identity | No machine-specific data in image |
+| GPU config | Dual GTX 1080 (8 GB each, 16 GB total) via VFIO; single GPU fallback documented |
+| Model policy | No auto-pull; first-boot prints VRAM-based recommendations only |
 
 The image carries **no GPU driver, CUDA, Docker, or Ollama**. All are installed
 on **first boot from official upstreams** (Ubuntu archive / NVIDIA /
 `download.docker.com` / `ollama.com`), never from this repo (Spec 00 §3
 sourcing policy). The build machine needs no GPU; the golden disk stays
 GPU-agnostic across driver/toolkit versions.
+
+### 2.1 GPU configuration and model recommendations
+
+**Hardware**: Dual NVIDIA GTX 1080 (8 GB GDDR5X each, compute capability 6.1),
+passed through via VFIO. Total VRAM: 16 GB. Single GPU fallback (8 GB) is
+documented below for degraded configurations.
+
+Ollama splits models across GPUs when a model doesn't fit on one card.
+Models that fit on a single GPU stay on one card (faster, avoids PCIe
+cross-transfer). SLI is not required; each GPU is an independent PCIe device.
+
+**Model recommendations** (Q4_K_M quantization, no auto-pull):
+
+| Use Case | Model | VRAM | Fits On | Notes |
+|---|---|---|---|---|
+| Coding | `qwen2.5-coder:14b` | ~8.7 GB | 1 GPU | Best coding model at 14B scale |
+| Code Review | `qwen2.5:14b` | ~8.7 GB | 1 GPU | Strong general reasoning |
+| Spec Analysis | `deepseek-r1:14b` | ~8.5 GB | 1 GPU | Chain-of-thought reasoning |
+| Subagent Mgmt | `devstral-small-2:24b` | ~15 GB | 2 GPUs | Agentic coding, tool calling |
+
+**Single GPU fallback** (8 GB VRAM):
+
+| Use Case | Model | VRAM | Notes |
+|---|---|---|---|
+| Coding | `qwen2.5-coder:7b` | ~4.4 GB | Still outperforms CodeLlama 13B |
+| Code Review | `llama3.1:8b` | ~4.9 GB | General reasoning |
+| Spec Analysis | `deepseek-r1:8b` | ~4.5 GB | Lighter reasoning |
+| Subagent Mgmt | `llama3.1:8b` | ~4.9 GB | Tool calling, orchestration |
+
+First boot detects total VRAM via `nvidia-smi --query-gpu=memory.total
+--format=csv,noheader` (summed across all GPUs) and prints the matching
+recommendation table to the log and console. No models are pulled
+automatically.
 
 ## 3. Build inputs
 
@@ -107,14 +142,22 @@ Seeded like the desktop guest; fetched at `<REF>`; logs to
    * Harden daemon (`/etc/docker/daemon.json`):
      `{"storage-driver":"overlay2","log-driver":"json-file",
        "log-opts":{"max-size":"10m","max-file":"3"}}`.
-2. Data volume: ensure `/dev/vdb` mounted at `/data/models`, persist fstab,
+2. **VRAM detection and model recommendations**:
+   * Run `nvidia-smi --query-gpu=memory.total --format=csv,noheader` after
+     driver install; sum all GPUs for total VRAM.
+   * Print recommended models (§2.1 table) matching the detected VRAM budget
+     to both the log and console.
+   * Do NOT pull any models — user runs `ollama pull` manually.
+   * If `nvidia-smi` fails (no GPU passed through), print a warning and skip
+     model recommendations; the Ollama container still runs on CPU.
+3. Data volume: ensure `/dev/vdb` mounted at `/data/models`, persist fstab,
    `chown llmuser`; keep `/opt/models -> /data/models` symlink.
-3. Serving containers (examples; versions pinned in script):
+4. Serving containers (examples; versions pinned in script):
    `ollama/ollama` on `11434` (`-v /data/models/ollama:/root/.ollama`);
    optional `vllm/vllm-openai:latest` on `8000` with
    `--tensor-parallel-size N`; optional `llama.cpp` server on `8080`.
    Bind APIs to localhost + `vmbr0` peer (Desktop/dev VMs); never public.
-4. Firewall: `ufw default deny incoming; allow outgoing; allow ssh` only.
+5. Firewall: `ufw default deny incoming; allow outgoing; allow ssh` only.
    API ports reached via SSH tunnel or peer-VM allow rule, not LAN-wide.
    **Host-level egress**: the LLM VM is restricted to HTTPS (443) only
    by the host's iptables OUTPUT chain. MCP connections to external servers
@@ -142,6 +185,8 @@ Do not implement mimo FAI `package_config/LLM|DOCKER|GPU-NVIDIA`,
 * First boot: `nvidia-smi` lists exactly the passed-through dGPUs;
   `nvcc --version` matches pin; `docker run --rm --gpus all ... nvidia-smi`
   succeeds; `torch.cuda.device_count() > 0` (or CUDA sample) passes.
+  VRAM detection prints recommended models matching detected total VRAM.
+  No models are auto-pulled.
 * Ollama: `curl <vm-ip>:11434/api/tags` OK; `ollama run <pinned 8b model>`
   completes with tok/s recorded for the GPU class.
 * `/data/models` mounted from `scsi1`, survives reboot; `/opt/models` symlink OK.
