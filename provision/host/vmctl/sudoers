@@ -1,0 +1,2 @@
+# /etc/sudoers.d/vmctl — vmctl can only run vmctl-host as root
+vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host

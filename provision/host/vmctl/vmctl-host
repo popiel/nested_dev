@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# vmctl-host — restricted host-side control for dev VMs
+# Called by vmctl@host via ForceCommand; argv: <verb> [args...]
+# Validates verbs, VMIDs, and project names; wraps qm.
+# This script is root-owned and installed by frag/25-desktop-control.sh.
+set -euo pipefail
+
+INVENTORY="/etc/nested-dev/inventory"
+DEV_MIN=103
+DEV_MAX=249
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/nested-dev-vmctl.log; }
+
+die() { echo "ERROR: $*" >&2; log "REJECT: $*"; exit 1; }
+
+# --- Parse SSH_ORIGINAL_COMMAND or $@ ---
+CMD="${SSH_ORIGINAL_COMMAND:-$*}"
+set -- $CMD  # re-split into positional
+
+VERB="${1:-}"
+shift 2>/dev/null || true
+
+case "$VERB" in
+    list)
+        printf "%-5s %-18s %-24s %-17s %s\n" "VMID" "NAME" "HOSTNAME" "IP" "STATUS"
+        printf "%-5s %-18s %-24s %-17s %s\n" "----" "----" "--------" "--" "------"
+        # Static entries (always present)
+        printf "%-5s %-18s %-24s %-17s %s\n" 100 desktop lychee "192.168.100.100" "running"
+        printf "%-5s %-18s %-24s %-17s %s\n" 101 llm lychee-llm "192.168.100.101" "running"
+        printf "%-5s %-18s %-24s %-17s %s\n" 102 dev-template lychee-dev-template "192.168.100.102" "template"
+        # Dynamic entries from qm (dev VMs 103–249)
+        for vid in $(seq $DEV_MIN $DEV_MAX); do
+            if qm status "$vid" >/dev/null 2>&1; then
+                STATUS=$(qm status "$vid" 2>/dev/null | awk '{print $2}')
+                NAME=$(qm config "$vid" 2>/dev/null | grep '^name:' | awk '{print $2}')
+                HOST="${NAME:-dev-${vid}}"
+                printf "%-5s %-18s %-24s %-17s %s\n" "$vid" "$NAME" "$HOST" "192.168.100.${vid}" "$STATUS"
+            fi
+        done
+        ;;
+
+    status)
+        [ -n "${1:-}" ] || die "usage: status <vmid>"
+        VMID="$1"
+        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
+        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range ($DEV_MIN–$DEV_MAX)"
+        qm status "$VMID" 2>/dev/null || die "VM $VMID does not exist"
+        ;;
+
+    start)
+        [ -n "${1:-}" ] || die "usage: start <vmid>"
+        VMID="$1"
+        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
+        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        NAME=$(qm config "$VMID" 2>/dev/null | grep '^name:' | awk '{print $2}')
+        [[ "$NAME" == dev-* ]] || die "VM $VMID name '$NAME' does not match dev-* pattern"
+        STATUS=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+        [ "$STATUS" = "stopped" ] || die "VM $VMID is not stopped (status: $STATUS)"
+        qm start "$VMID"
+        log "START $VMID ($NAME)"
+        echo "VM $VMID ($NAME) started"
+        ;;
+
+    shutdown)
+        [ -n "${1:-}" ] || die "usage: shutdown <vmid>"
+        VMID="$1"
+        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
+        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        qm shutdown "$VMID" --forceStop 0 2>/dev/null || qm stop "$VMID" 2>/dev/null
+        log "SHUTDOWN $VMID"
+        echo "VM $VMID shutting down"
+        ;;
+
+    stop)
+        [ -n "${1:-}" ] || die "usage: stop <vmid>"
+        VMID="$1"
+        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
+        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        qm stop "$VMID" 2>/dev/null || true
+        log "STOP $VMID (forced)"
+        echo "VM $VMID stopped (forced)"
+        ;;
+
+    add)
+        [ -n "${1:-}" ] || die "usage: add <project-name>"
+        PROJECT="$1"
+        [[ "$PROJECT" =~ ^[a-z0-9][a-z0-9_-]{0,30}$ ]] || die "Project name must be lowercase alphanumeric/underscore/hyphen, max 32 chars"
+
+        # Find next available VMID
+        NEXT_VID=""
+        for vid in $(seq $DEV_MIN $DEV_MAX); do
+            if ! qm status "$vid" >/dev/null 2>&1; then
+                NEXT_VID="$vid"
+                break
+            fi
+        done
+        [ -n "$NEXT_VID" ] || die "No free VMIDs in range $DEV_MIN–$DEV_MAX"
+
+        # Clone template
+        FULLNAME="dev-${PROJECT}"
+        MAC_SUFFIX=$(printf '%02x' $((NEXT_VID & 255)))
+        MAC="52:54:00:00:02:${MAC_SUFFIX}"
+        HOSTNAME="lychee-${FULLNAME}"
+        IP="192.168.100.${NEXT_VID}"
+
+        qm clone 102 "$NEXT_VID" --name "$FULLNAME" --full
+        qm set "$NEXT_VID" --net0 "virtio=${MAC},bridge=vmbr0,firewall=1"
+        log "CLONE $NEXT_VID <- 102, name=$FULLNAME, MAC=$MAC"
+
+        # dnsmasq static entry
+        if [ ! -f /etc/dnsmasq.d/zz-dev.conf ]; then
+            echo "# Per-project dev VMs — added by vmctl-host on demand" > /etc/dnsmasq.d/zz-dev.conf
+        fi
+        cat >> /etc/dnsmasq.d/zz-dev.conf <<DNS_EOF
+dhcp-host=${MAC},${HOSTNAME},${IP}
+address=/${HOSTNAME}/${IP}
+address=/${HOSTNAME}.wolfskeep.com/${IP}
+DNS_EOF
+        systemctl reload dnsmasq
+        log "dnsmasq entry added: ${HOSTNAME} → ${IP}"
+
+        # /etc/hosts entry
+        if ! grep -q "^${IP} " /etc/hosts; then
+            echo "${IP} ${HOSTNAME}.wolfskeep.com ${HOSTNAME}" >> /etc/hosts
+            log "/etc/hosts updated: ${IP} ${HOSTNAME}"
+        fi
+
+        # Inventory
+        echo "${NEXT_VID}  ${FULLNAME}  ${HOSTNAME}  ${IP}  ${MAC}  stopped  ${PROJECT}" >> "$INVENTORY"
+        log "Inventory updated: VMID ${NEXT_VID} = ${PROJECT}"
+
+        echo "VM ${NEXT_VID} (${FULLNAME}) created and stopped. Start with: start ${NEXT_VID}"
+        ;;
+
+    log)
+        [ -n "${1:-}" ] || die "usage: log <vmid>"
+        VMID="$1"
+        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
+        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        # Guest agent required; fall back gracefully
+        qm guest exec "$VMID" -- tail -n 50 /var/log/dev-firstboot.log 2>/dev/null \
+            || qm guest exec "$VMID" -- cat /var/log/dev-firstboot.log 2>/dev/null \
+            || echo "Could not read log (VM may not be running or guest agent not ready)"
+        ;;
+
+    *)
+        echo "Usage: <command> [args]" >&2
+        echo "" >&2
+        echo "Commands:" >&2
+        echo "  list                    — list dev VMs" >&2
+        echo "  status <vmid>           — VM status" >&2
+        echo "  start <vmid>            — start a dev VM" >&2
+        echo "  shutdown <vmid>         — graceful stop" >&2
+        echo "  stop <vmid>             — force stop" >&2
+        echo "  add <project-name>      — create new dev VM from template" >&2
+        echo "  log <vmid>              — tail first-boot log" >&2
+        exit 1
+        ;;
+esac

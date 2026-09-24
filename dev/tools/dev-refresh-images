@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# dev-refresh-images — rebuild all dev tool images with latest base layers
+# Run on any dev VM that has Docker. Rebuilds java, scala, sbt, opencode,
+# and nested-build images with --pull to pick up updated base layers.
+# Digests are logged to ~/.local/share/dev-images-manifest.
+set -euo pipefail
+
+DOCKER_DIR="/opt/dev-docker"
+MANIFEST="${HOME}/.local/share/dev-images-manifest"
+mkdir -p "$(dirname "$MANIFEST")"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+
+log "=== Refreshing dev tool images ==="
+echo "" >> "$MANIFEST"
+echo "## Image refresh — $(date -Is)" >> "$MANIFEST"
+
+# Base arguments for build
+BASE_ARGS=""
+if [ -n "${PERSONALIZATION_USERNAME:-}" ]; then
+    BASE_ARGS="--build-arg PERSONALIZATION_USERNAME=${USER} --build-arg PERSONALIZATION_UID=$(id -u)"
+elif [ -n "${USER:-}" ]; then
+    BASE_ARGS="--build-arg PERSONALIZATION_USERNAME=${USER} --build-arg PERSONALIZATION_UID=$(id -u)"
+fi
+
+IMAGES=(
+    "dev-java:Dockerfile.java"
+    "dev-scala:Dockerfile.scala"
+    "dev-sbt:Dockerfile.sbt"
+    "dev-opencode:Dockerfile.opencode"
+)
+
+# Add dev-nested-build if Dockerfile.nested exists
+if [ -f "${DOCKER_DIR}/Dockerfile.nested" ]; then
+    IMAGES+=("dev-nested-build:Dockerfile.nested")
+fi
+
+FAIL=0
+for entry in "${IMAGES[@]}"; do
+    IFS=':' read -r TAG FILENAME <<< "$entry"
+    log "Rebuilding ${TAG}..."
+    if docker build --pull --tag "${TAG}" \
+        $BASE_ARGS \
+        -f "${DOCKER_DIR}/${FILENAME}" "${DOCKER_DIR}" 2>&1; then
+        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${TAG}" 2>/dev/null || echo "local")
+        log "  ${TAG}: ${DIGEST}"
+        echo "${TAG}: ${DIGEST}" >> "$MANIFEST"
+    else
+        log "  ${TAG}: BUILD FAILED"
+        echo "${TAG}: BUILD_FAILED" >> "$MANIFEST"
+        FAIL=1
+    fi
+done
+
+log "=== Refresh complete — digests saved to ${MANIFEST} ==="
+tail -20 "$MANIFEST"
+
+if [ "$FAIL" -eq 1 ]; then
+    log "WARNING: One or more images failed to build"
+    exit 1
+fi

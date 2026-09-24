@@ -58,3 +58,5 @@ autoinstall:
     - "curtin in-target --target=/target -- sed -i \"s/#X11Forwarding yes/X11Forwarding yes/\" /etc/ssh/sshd_config"
     # Set DNS to host dnsmasq (private network resolver)
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /etc/NetworkManager/conf.d && printf \"[Network]\\nDNS=192.168.100.1\\n\" > /etc/NetworkManager/conf.d/nested-dev.conf'"
+    # vmctl control key for dev fleet management (Spec 07)
+    - "curtin in-target --target=/target -- sh -c 'echo __VMCTL_PRIV_B64__ | base64 -d > /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl 2>/dev/null && chmod 600 /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl'"

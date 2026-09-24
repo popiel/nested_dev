@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# devctl — desktop-side dev VM control wrapper
+# Delegates to vmctl@pvehost via restricted SSH.
+# Installed to ~/.local/bin/devctl by desktop-firstboot.sh.
+set -euo pipefail
+
+PVEHOST="pvehost"  # ~/.ssh/config alias → 192.168.100.1
+SSH_OPTS="-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+
+usage() {
+    echo "Usage: devctl <command> [args]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  list                          List dev VMs" >&2
+    echo "  status <name|vmid>            VM status" >&2
+    echo "  start <name|vmid>             Start a dev VM" >&2
+    echo "  stop <name|vmid>              Graceful stop" >&2
+    echo "  kill <name|vmid>              Force stop" >&2
+    echo "  add <project-name>            Create new dev VM from template" >&2
+    echo "  log <name|vmid>               Tail first-boot log" >&2
+    echo "  ssh <name|vmid> [cmd...]      SSH to dev VM directly" >&2
+    exit 1
+}
+
+[ $# -ge 1 ] || usage
+
+# Resolve name→vmid (names start with "dev-")
+resolve() {
+    local arg="$1"
+    if [[ "$arg" =~ ^[0-9]+$ ]]; then
+        echo "$arg"
+        return
+    fi
+    # Look up by name via list
+    local line
+    line=$(ssh $SSH_OPTS vmctl@${PVEHOST} list 2>/dev/null | grep -E "^[0-9]+\s+${arg}\b" | head -1) || true
+    if [ -n "$line" ]; then
+        echo "$line" | awk '{print $1}'
+    else
+        echo ""
+    fi
+}
+
+case "$1" in
+    list)
+        ssh $SSH_OPTS vmctl@${PVEHOST} list
+        ;;
+    status)
+        [ $# -ge 2 ] || { echo "Usage: devctl status <name|vmid>" >&2; exit 1; }
+        VMID=$(resolve "$2")
+        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} status "$VMID"
+        ;;
+    start)
+        [ $# -ge 2 ] || { echo "Usage: devctl start <name|vmid>" >&2; exit 1; }
+        VMID=$(resolve "$2")
+        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} start "$VMID"
+        echo ""
+        echo "First boot may take several minutes. Check with: devctl log ${VMID}"
+        ;;
+    stop)
+        [ $# -ge 2 ] || { echo "Usage: devctl stop <name|vmid>" >&2; exit 1; }
+        VMID=$(resolve "$2")
+        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} shutdown "$VMID"
+        ;;
+    kill)
+        [ $# -ge 2 ] || { echo "Usage: devctl kill <name|vmid>" >&2; exit 1; }
+        VMID=$(resolve "$2")
+        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} stop "$VMID"
+        ;;
+    add)
+        [ $# -ge 2 ] || { echo "Usage: devctl add <project-name>" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} add "$2"
+        ;;
+    log)
+        [ $# -ge 2 ] || { echo "Usage: devctl log <name|vmid>" >&2; exit 1; }
+        VMID=$(resolve "$2")
+        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} log "$VMID"
+        ;;
+    ssh)
+        [ $# -ge 2 ] || { echo "Usage: devctl ssh <name|vmid> [cmd...]" >&2; exit 1; }
+        VMID=$(resolve "$2")
+        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
+        shift
+        ssh $SSH_OPTS popiel@192.168.100.${VMID} "$@"
+        ;;
+    *)
+        usage
+        ;;
+esac

@@ -280,6 +280,53 @@ fi
 hostnamectl set-hostname lychee
 log "Hostname set to lychee"
 
+# --- 11. Dev fleet control (devctl + SSH config) ---
+log "Installing devctl and SSH config for vmctl"
+BIN_DIR="${DESKUSER_HOME}/.local/bin"
+mkdir -p "$BIN_DIR"
+
+# Copy devctl script
+DEVCTL_SRC="${SCRIPT_DIR}/devctl"
+if [ -f "$DEVCTL_SRC" ]; then
+    cp "$DEVCTL_SRC" "${BIN_DIR}/devctl"
+    chmod +x "${BIN_DIR}/devctl"
+    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${BIN_DIR}/devctl"
+    log "devctl installed to ${BIN_DIR}/devctl"
+else
+    log "WARNING: devctl source not found at ${DEVCTL_SRC}"
+fi
+
+# SSH config for pvehost (vmctl user)
+mkdir -p "${DESKUSER_HOME}/.ssh"
+cat > "${DESKUSER_HOME}/.ssh/config" <<'SSH_CONFIG_EOF'
+Host pvehost
+    HostName 192.168.100.1
+    User vmctl
+    IdentityFile ~/.ssh/pvehost_vmctl
+    StrictHostKeyChecking accept-new
+    IdentitiesOnly yes
+SSH_CONFIG_EOF
+chmod 600 "${DESKUSER_HOME}/.ssh/config"
+chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${DESKUSER_HOME}/.ssh/config"
+
+# Add ~/.local/bin to PATH if not already there
+BASHRC="${DESKUSER_HOME}/.bashrc"
+if ! grep -q '.local/bin' "$BASHRC" 2>/dev/null; then
+    echo '' >> "$BASHRC"
+    echo '# Dev tool wrappers (§05)' >> "$BASHRC"
+    echo 'export PATH="${HOME}/.local/bin:${PATH}"' >> "$BASHRC"
+    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "$BASHRC"
+    log "Added ~/.local/bin to PATH in .bashrc"
+fi
+
+# Fix permissions on vmctl key if it was injected via seed
+VMCTL_KEY="${DESKUSER_HOME}/.ssh/pvehost_vmctl"
+if [ -f "$VMCTL_KEY" ]; then
+    chmod 600 "$VMCTL_KEY"
+    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "$VMCTL_KEY"
+    log "vmctl key permissions set"
+fi
+
 # --- Self-disable ---
 log "=== desktop first-boot complete — disabling unit ==="
 systemctl disable --now desktop-firstboot 2>/dev/null || true

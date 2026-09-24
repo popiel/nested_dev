@@ -1,0 +1,21 @@
+FROM ubuntu:26.04
+
+# Build dependencies for nested_dev ISO builder
+# Runs as root (required by build-iso.sh)
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+        wget \
+        xorriso \
+        libarchive-tools \
+        whois \
+        git \
+        curl \
+        gnupg \
+        ca-certificates \
+        openssh-client \
+        python3 \
+        file \
+        rsync \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+ENTRYPOINT ["bash"]

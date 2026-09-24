@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# nested — wrapper for popiel/nested_dev build toolchain
+# Runs inside dev VM (103 dev-nested or similar).
+# Binds repo checkout + keys + output from the per-project data volume.
+set -euo pipefail
+
+DOCKER_DIR="/opt/dev-docker"
+IMAGE="dev-nested-build"
+NESTED_DEV="${HOME}/work/nested_dev"
+
+# Ensure repo checkout exists
+if [ ! -d "${NESTED_DEV}/.git" ]; then
+    echo "[nested] Repository not found at ${NESTED_DEV}."
+    echo "  Clone it: git clone https://github.com/popiel/nested_dev.git ${NESTED_DEV}"
+    exit 1
+fi
+
+# Ensure image exists; build on first use
+if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+    echo "[nested] Building ${IMAGE} (first run)..."
+    docker build --tag "${IMAGE}" -f "${DOCKER_DIR}/Dockerfile.nested" "${DOCKER_DIR}"
+fi
+
+# Parse verb
+VERB="${1:-help}"
+shift 2>/dev/null || true
+
+case "$VERB" in
+    build)
+        echo "[nested] Building host ISO..."
+        docker run --rm \
+          -v "${NESTED_DEV}:/work/nested_dev" \
+          -w /work/nested_dev \
+          -e DEBIAN_FRONTEND=noninteractive \
+          "${IMAGE}" \
+          -c 'provision/host/build-iso.sh'
+        # Normalize ownership of output files (container runs as root)
+        chown -R "${USER}:${USER}" "${NESTED_DEV}/output/" 2>/dev/null || true
+        echo "[nested] Build complete. Output in ${NESTED_DEV}/output/"
+        ;;
+
+    verify)
+        echo "[nested] Verifying answer file..."
+        docker run --rm \
+          -v "${NESTED_DEV}:/work/nested_dev" \
+          -w /work/nested_dev \
+          "${IMAGE}" \
+          -c 'cat provision/host/answer-host.toml'
+        echo "[nested] Answer file OK"
+        ;;
+
+    refresh)
+        echo "[nested] Refreshing dev-nested-build image..."
+        docker build --pull --no-cache --tag "${IMAGE}" \
+          -f "${DOCKER_DIR}/Dockerfile.nested" "${DOCKER_DIR}"
+        echo "[nested] Refreshed. New digest:"
+        docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" 2>/dev/null \
+            || echo "  (local only, no registry digest)"
+        ;;
+
+    keys-status)
+        echo "[nested] Checking keys..."
+        if [ -f "${NESTED_DEV}/secrets/password-hash" ]; then
+            echo "  password-hash: present"
+        else
+            echo "  password-hash: MISSING"
+            echo "    Generate: mkpasswd -m yescrypt > ${NESTED_DEV}/secrets/password-hash"
+        fi
+        for key in host_os_ed25519.pub ubuntu-release-key.asc; do
+            if [ -f "${NESTED_DEV}/keys/${key}" ]; then
+                echo "  ${key}: present"
+            else
+                echo "  ${key}: MISSING"
+            fi
+        done
+        ;;
+
+    help|*)
+        echo "Usage: nested <command>" >&2
+        echo "" >&2
+        echo "Commands:" >&2
+        echo "  build        Build the host autoinstall ISO" >&2
+        echo "  verify       Verify the answer file" >&2
+        echo "  refresh      Rebuild the dev-nested-build image from scratch" >&2
+        echo "  keys-status  Check that required keys are present" >&2
+        echo "  help         Show this help" >&2
+        exit 1
+        ;;
+esac

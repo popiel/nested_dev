@@ -163,6 +163,9 @@ iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 # SSH to host on port 2222 — LAN only
 iptables -A INPUT -p tcp --dport 2222 -s 192.168.14.0/24 -j ACCEPT
 
+# SSH to host from desktop only (for vmctl/devctl control)
+iptables -A INPUT -p tcp --dport 22 -s 192.168.100.100 -j ACCEPT
+
 # PVE web UI — LAN only
 iptables -A INPUT -p tcp --dport 8006 -s 192.168.14.0/24 -j ACCEPT
 
@@ -238,6 +241,27 @@ hostnamectl set-hostname lychee-host.wolfskeep.com
 log "Hostname set to lychee-host.wolfskeep.com"
 
 # ============================================================
+# 10. Dev VM control (vmctl)
+# ============================================================
+# Ensure dnsmasq dev drop-in exists
+if [ ! -f /etc/dnsmasq.d/zz-dev.conf ]; then
+    echo "# Per-project dev VMs — added by vmctl-host on demand" > /etc/dnsmasq.d/zz-dev.conf
+    log "dnsmasq dev drop-in created"
+fi
+
+# Ensure inventory exists
+if [ ! -f /etc/nested-dev/inventory ]; then
+    mkdir -p /etc/nested-dev
+    cat > /etc/nested-dev/inventory <<'EOF'
+# VMID  NAME  HOSTNAME  IP  MAC  STATUS  PROJECT
+100  desktop  lychee  192.168.100.100  52:54:00:00:01:00  running  desktop
+101  llm  lychee-llm  192.168.100.101  52:54:00:00:01:01  running  llm
+102  dev-template  lychee-dev-template  192.168.100.102  52:54:00:00:01:02  template  dev-template
+EOF
+    log "Inventory created"
+fi
+
+# ============================================================
 # 10. Record build info
 # ============================================================
 mkdir -p /root/output
@@ -265,12 +289,14 @@ cat > /etc/motd <<'EOF'
   nested_dev main
   Routed network (192.168.100.0/24)
 ========================================
-  VMs: 100=desktop, 101=llm, 102+=dev
+  VMs: 100=desktop, 101=llm, 102=dev-template
+  Dev VMs: on demand via devctl from desktop
   PVE UI: https://<LAN-IP>:8006
   SSH to host: ssh -p 2222 root@<LAN-IP>
   SSH to desktop: ssh root@<LAN-IP> (DNAT)
   RDP to desktop: mstsc <LAN-IP>:3389
   Logs: /var/log/pve-firstboot.log
+  Dev control: devctl list/start/stop/add
 ========================================
 
 EOF

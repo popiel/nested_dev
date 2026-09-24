@@ -130,6 +130,26 @@ log "Creating wrapper scripts..."
 BIN_DIR="${PERSONALIZATION_HOME}/.local/bin"
 mkdir -p "$BIN_DIR"
 
+# Copy dev-refresh-images script
+REFRESH_SRC="${SCRIPT_DIR}/tools/dev-refresh-images"
+if [ -f "$REFRESH_SRC" ]; then
+    cp "$REFRESH_SRC" "${BIN_DIR}/dev-refresh-images"
+    chmod +x "${BIN_DIR}/dev-refresh-images"
+    log "dev-refresh-images installed"
+else
+    log "WARNING: dev-refresh-images not found at ${REFRESH_SRC}"
+fi
+
+# Copy nested wrapper script
+NESTED_SRC="${SCRIPT_DIR}/tools/nested"
+if [ -f "$NESTED_SRC" ]; then
+    cp "$NESTED_SRC" "${BIN_DIR}/nested"
+    chmod +x "${BIN_DIR}/nested"
+    log "nested wrapper installed"
+else
+    log "WARNING: nested wrapper not found at ${NESTED_SRC}"
+fi
+
 cat > "${BIN_DIR}/java" <<'WRAPPER_JAVA'
 #!/usr/bin/env bash
 # Ephemeral Java wrapper — builds dev-java image on first use
