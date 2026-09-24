@@ -63,13 +63,28 @@ detect_gpu_pci() {
         local v=$(echo "$vd" | cut -d: -f1)
         if [ "$v" = "$vendor_filter" ]; then
             ids+=("0000:${addr}")
-            local audio_addr=$(lspci -s "$addr" | grep -i audio | awk '{print $1}' || true)
+            # Find audio companion via BDF prefix (same bus, next function)
+            local bus_prefix=$(echo "$addr" | sed 's/\.[0-9]$//')
+            local audio_addr=$(lspci -s "${bus_prefix}." | grep -i audio | awk '{print $1}' || true)
             if [ -n "$audio_addr" ]; then
                 local audio_group="/sys/bus/pci/devices/0000:${audio_addr}/iommu_group/devices"
                 local gpu_group="/sys/bus/pci/devices/0000:${addr}/iommu_group/devices"
                 if [ -d "$audio_group" ] && [ -d "$gpu_group" ]; then
                     if ! diff -q <(ls "$audio_group" | sort) <(ls "$gpu_group" | sort) >/dev/null 2>&1; then
-                        ids+=("0000:${audio_addr}")
+                        # Separate IOMMU group — include audio in passthrough
+                        local audio_in_set=false
+                        for existing_id in "${ids[@]}"; do
+                            local existing_vd=$(echo "$existing_id" | sed 's/0000://')
+                            local audio_vd=$(lspci -n -s "$audio_addr" | awk '{print $3}')
+                            if [ "$existing_vd" = "$audio_vd" ]; then
+                                audio_in_set=true
+                                break
+                            fi
+                        done
+                        if [ "$audio_in_set" = false ]; then
+                            ids+=("0000:${audio_addr}")
+                            log "Added audio companion $audio_addr for GPU $addr"
+                        fi
                     fi
                 fi
             fi

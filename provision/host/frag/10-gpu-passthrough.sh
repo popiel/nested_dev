@@ -11,9 +11,9 @@ log "=== GPU passthrough setup ==="
 # --- Detect CPU vendor for IOMMU flag ---
 CPU_VENDOR=$(lscpu | awk '/Vendor ID/{print tolower($3)}')
 case "$CPU_VENDOR" in
-    intel) IOMMU_FLAG="intel_iommu=on" ;;
-    amd)   IOMMU_FLAG="amd_iommu=on" ;;
-    *)     log "ERROR: Unknown CPU vendor: $CPU_VENDOR"; exit 1 ;;
+    *intel*) IOMMU_FLAG="intel_iommu=on" ;;
+    *amd*)   IOMMU_FLAG="amd_iommu=on" ;;
+    *)       log "ERROR: Unknown CPU vendor: $CPU_VENDOR"; exit 1 ;;
 esac
 log "CPU vendor: $CPU_VENDOR, IOMMU flag: $IOMMU_FLAG"
 
@@ -38,24 +38,8 @@ while IFS= read -r line; do
         continue
     fi
 
-    # Get audio companion if exists
-    AUDIO_ADDR=$(lspci -s "$PCI_ADDR" | grep -i "audio" | awk '{print $1}' || true)
-
     GPU_IDS+=("${VENDOR}:${DEVICE}")
     GPU_NAMES+=("$PCI_ADDR $VENDOR_DEVICE $DESC")
-
-    # Check IOMMU group
-    IOMMU_GROUP_PATH="/sys/bus/pci/devices/0000:${PCI_ADDR}/iommu_group/devices"
-    if [ -d "$IOMMU_GROUP_PATH" ]; then
-        GROUP_SIZE=$(ls "$IOMMU_GROUP_PATH" | wc -l)
-        if [ "$GROUP_SIZE" -gt 1 ]; then
-            GROUP_DEVICES=$(ls "$IOMMU_GROUP_PATH" | tr '\n' ' ')
-            log "WARNING: IOMMU group for $PCI_ADDR ($DESC) contains $GROUP_SIZE devices: $GROUP_DEVICES"
-            log "  Group may not be separable. Verify before proceeding."
-        else
-            log "IOMMU group OK for $PCI_ADDR ($DESC): isolated"
-        fi
-    fi
 done < <(lspci | grep -iE 'vga|3d|display' | awk '{print $1, $0}' | cut -d' ' -f1,3-)
 
 if [ ${#GPU_IDS[@]} -eq 0 ]; then
@@ -63,23 +47,63 @@ if [ ${#GPU_IDS[@]} -eq 0 ]; then
     exit 0
 fi
 
-# --- Append audio companions to vfio-pci.ids ---
-VFIO_IDS=$(IFS=,; echo "${GPU_IDS[*]}")
-
-# For each GPU, also grab its audio function if in a separate IOMMU group
+# --- Collect audio companion functions via IOMMU groups ---
+# For each GPU, check if its audio function sits in a separate IOMMU group
 for name_entry in "${GPU_NAMES[@]}"; do
     PCI_ADDR=$(echo "$name_entry" | awk '{print $1}')
-    AUDIO_ADDR=$(lspci -s "$PCI_ADDR" | grep -i "audio" | awk '{print $1}' || true)
+    GPU_GROUP_PATH="/sys/bus/pci/devices/0000:${PCI_ADDR}/iommu_group/devices"
+    [ -d "$GPU_GROUP_PATH" ] || continue
+
+    GPU_GROUP_SIZE=$(ls "$GPU_GROUP_PATH" | wc -l)
+
+    # Check IOMMU group separability (Spec 01 §5.1 R4)
+    if [ "$GPU_GROUP_SIZE" -gt 1 ]; then
+        GROUP_DEVICES=$(ls "$GPU_GROUP_PATH" | tr '\n' ' ')
+        log "ERROR: IOMMU group for $PCI_ADDR contains $GROUP_SIZE devices: $GROUP_DEVICES"
+        log "  Group is NOT separable — aborting to prevent broken passthrough."
+        log "  Fix: enable ACS override in BIOS/firmware, or use a different host."
+        exit 1
+    fi
+
+    # Find the audio function — same bus, next function number
+    AUDIO_ADDR=$(lspci -s "$PCI_ADDR" | sed -n 's/.*\[\(Audio\).*/\1/p; t found; d; :found' || true)
+    # Fallback: look for any audio device on the same BDF domain:bus
+    if [ -z "$AUDIO_ADDR" ]; then
+        # Extract bus:device prefix (e.g. "01:00" from "01:00.0")
+        BUS_PREFIX=$(echo "$PCI_ADDR" | sed 's/\.[0-9]$//')
+        AUDIO_ADDR=$(lspci -s "${BUS_PREFIX}." | grep -i audio | awk '{print $1}' || true)
+    fi
     if [ -n "$AUDIO_ADDR" ]; then
         AUDIO_VD=$(lspci -n -s "$AUDIO_ADDR" | awk '{print $3}')
-        if echo "$VFIO_IDS" | grep -q "$AUDIO_VD"; then
-            continue  # already included
+        AUDIO_GROUP_PATH="/sys/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices"
+        if [ -d "$AUDIO_GROUP_PATH" ]; then
+            AUDIO_GROUP_SIZE=$(ls "$AUDIO_GROUP_PATH" | wc -l)
+            if [ "$AUDIO_GROUP_SIZE" -gt 1 ]; then
+                log "ERROR: Audio companion $AUDIO_ADDR for GPU $PCI_ADDR is in a shared IOMMU group (${AUDIO_GROUP_SIZE} devices)"
+                log "  Abort — audio function must be in the same group as its GPU or isolated."
+                exit 1
+            fi
         fi
-        VFIO_IDS="${VFIO_IDS},${AUDIO_VD}"
-        log "Added audio companion $AUDIO_ADDR ($AUDIO_VD) for $PCI_ADDR"
+        # Add audio companion to passthrough set
+        # Check if already in the set
+        AUDIO_IN_SET=false
+        for id in "${GPU_IDS[@]}"; do
+            if [ "$id" = "$AUDIO_VD" ]; then
+                AUDIO_IN_SET=true
+                break
+            fi
+        done
+        if [ "$AUDIO_IN_SET" = false ]; then
+            GPU_IDS+=("${AUDIO_VD}")
+            log "Added audio companion $AUDIO_ADDR ($AUDIO_VD) for GPU $PCI_ADDR"
+        fi
+    else
+        log "No audio companion found for GPU $PCI_ADDR"
     fi
 done
 
+# Build comma-separated vfio-pci.ids
+VFIO_IDS=$(IFS=,; echo "${GPU_IDS[*]}")
 log "vfio-pci.ids: $VFIO_IDS"
 
 # --- 1. GRUB cmdline ---
@@ -88,7 +112,6 @@ if grep -q "intel_iommu=on\|amd_iommu=on" "$GRUB_FILE"; then
     log "GRUB IOMMU already configured"
 else
     sed -i "s|GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"|GRUB_CMDLINE_LINUX_DEFAULT=\"\1 ${IOMMU_FLAG} iommu=pt\"|" "$GRUB_FILE"
-    # Add vfio-pci.ids if not present
     if ! grep -q "vfio-pci.ids" "$GRUB_FILE"; then
         sed -i "s|GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"|GRUB_CMDLINE_LINUX_DEFAULT=\"\1 vfio-pci.ids=${VFIO_IDS} disable_vga=1\"|" "$GRUB_FILE"
     fi
@@ -115,8 +138,6 @@ EOF
 log "modules-load.d/vfio.conf written"
 
 # --- 4. blacklist only passed-through GPU drivers ---
-# Blacklist nvidia/nouveau only if a dGPU is being passed through
-# Blacklist i915 only if the iGPU is being passed through
 BLACKLIST_FILE="/etc/modprobe.d/blacklist-gpu.conf"
 : > "$BLACKLIST_FILE"
 
@@ -144,13 +165,10 @@ update-initramfs -u -k all
 log "initramfs updated"
 
 # --- 6. GeForce workaround (consumer NVIDIA) ---
-# Check if any passed-through NVIDIA device is a consumer GeForce
 for name_entry in "${GPU_NAMES[@]}"; do
     PCI_ADDR=$(echo "$name_entry" | awk '{print $1}')
     VD=$(lspci -n -s "$PCI_ADDR" | awk '{print $3}')
     if echo "$VD" | grep -qi "^10de:"; then
-        # Consumer GeForce devices typically have device IDs in certain ranges
-        # The kvm=off,hidden=1 workaround is applied at VM creation time (frag/30)
         log "NVIDIA device detected at $PCI_ADDR — will apply kvm=off,hidden=1 at VM creation"
     fi
 done
