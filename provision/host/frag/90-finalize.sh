@@ -134,6 +134,12 @@ fi
 # VM subnet: 192.168.100.0/24
 # $PHYS_NIC = LAN-facing interface
 
+# --- Set DROP defaults (fail-closed) ---
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
+log "Default policies set to DROP"
+
 # --- NAT table ---
 iptables -t nat -F PREROUTING
 iptables -t nat -F POSTROUTING
