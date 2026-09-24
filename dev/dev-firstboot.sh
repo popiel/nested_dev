@@ -239,9 +239,11 @@ log "Wrapper scripts created in ${BIN_DIR}"
 # Add ~/.local/bin to PATH via .bashrc
 BASHRC="${PERSONALIZATION_HOME}/.bashrc"
 if ! grep -q '.local/bin' "$BASHRC" 2>/dev/null; then
-    echo '' >> "$BASHRC"
-    echo '# Dev tool wrappers (§05)' >> "$BASHRC"
-    echo 'export PATH="${HOME}/.local/bin:${PATH}"' >> "$BASHRC"
+    {
+        echo ''
+        echo '# Dev tool wrappers (§05)'
+        echo 'export PATH="${HOME}/.local/bin:${PATH}"'
+    } >> "$BASHRC"
     chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "$BASHRC"
     log "Added ~/.local/bin to PATH in .bashrc"
 fi

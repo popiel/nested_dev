@@ -101,7 +101,7 @@ main() {
     if [ ! -f "$SSH_KEY_FILE" ]; then
         die "SSH public key not found: ${SSH_KEY_FILE}"
     fi
-    SSH_KEY=$(cat "$SSH_KEY_FILE" | tr -d '\n')
+    SSH_KEY=$(tr -d '\n' < "$SSH_KEY_FILE")
     log "SSH key loaded from ${SSH_KEY_FILE}"
 
     # --- 3. Auto-detect target disk ---

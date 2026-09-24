@@ -30,14 +30,19 @@ detect_gpu_pci() {
     local vendor_filter="$1"
     local ids=()
     while IFS= read -r line; do
-        local addr=$(echo "$line" | awk '{print $1}')
-        local vd=$(lspci -n -s "$addr" | awk '{print $3}')
-        local v=$(echo "$vd" | cut -d: -f1)
+        local addr
+        addr=$(echo "$line" | awk '{print $1}')
+        local vd
+        vd=$(lspci -n -s "$addr" | awk '{print $3}')
+        local v
+        v=$(echo "$vd" | cut -d: -f1)
         if [ "$v" = "$vendor_filter" ]; then
             ids+=("0000:${addr}")
             # Find audio companion via BDF prefix (same bus, next function)
-            local bus_prefix=$(echo "$addr" | sed 's/\.[0-9]$//')
-            local audio_addr=$(lspci -s "${bus_prefix}." | grep -i audio | awk '{print $1}' || true)
+            local bus_prefix
+            bus_prefix="${addr%.*}"
+            local audio_addr
+            audio_addr=$(lspci -s "${bus_prefix}." | grep -i audio | awk '{print $1}' || true)
             if [ -n "$audio_addr" ]; then
                 local audio_group="/sys/bus/pci/devices/0000:${audio_addr}/iommu_group/devices"
                 local gpu_group="/sys/bus/pci/devices/0000:${addr}/iommu_group/devices"
@@ -46,8 +51,10 @@ detect_gpu_pci() {
                         # Separate IOMMU group — include audio in passthrough
                         local audio_in_set=false
                         for existing_id in "${ids[@]}"; do
-                            local existing_vd=$(echo "$existing_id" | sed 's/0000://')
-                            local audio_vd=$(lspci -n -s "$audio_addr" | awk '{print $3}')
+                            local existing_vd
+                            existing_vd="${existing_id#0000:}"
+                            local audio_vd
+                            audio_vd=$(lspci -n -s "$audio_addr" | awk '{print $3}')
                             if [ "$existing_vd" = "$audio_vd" ]; then
                                 audio_in_set=true
                                 break
@@ -220,7 +227,7 @@ main() {
             --vga none \
             --serial0 socket \
             --agent enabled=1 \
-            $DESKTOP_HOSTPCI \
+            ${DESKTOP_HOSTPCI:+"$DESKTOP_HOSTPCI"} \
             --cdrom0 "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}" \
             --ide0 "${SEED_DIR}/desktop-seed.iso,media=cdrom" \
             --scsi0 local-lvm:40,size=40G \
@@ -259,7 +266,7 @@ main() {
             --vga none \
             --serial0 socket \
             --agent enabled=1 \
-            $LLM_HOSTPCI \
+            ${LLM_HOSTPCI:+"$LLM_HOSTPCI"} \
             --cdrom0 "${ISO_DIR}/${UBUNTU_SERVER_ISO}" \
             --ide0 "${SEED_DIR}/llm-seed.iso,media=cdrom" \
             --scsi0 local-lvm:80,size=80G \

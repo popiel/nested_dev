@@ -44,7 +44,7 @@ find_audio_companion() {
     # Returns the BDF of the audio device, or empty string
     local gpu_addr="$1"
     local bus_prefix audio_addr
-    bus_prefix=$(echo "$gpu_addr" | sed 's/\.[0-9]$//')
+    bus_prefix="${gpu_addr%.*}"
     audio_addr=$(lspci -s "${bus_prefix}." | grep -i audio | awk '{print $1}' || true)
     echo "$audio_addr"
 }
@@ -55,7 +55,7 @@ check_iommu_group_separable() {
     local group_path="/sys/bus/pci/devices/0000:${pci_addr}/iommu_group/devices"
     [ -d "$group_path" ] || return 0
     local size
-    size=$(ls "$group_path" | wc -l)
+    size=$(find "$group_path" -maxdepth 1 -type f | wc -l)
     [ "$size" -le 1 ]
 }
 
@@ -87,10 +87,10 @@ main() {
         GPU_GROUP_PATH="/sys/bus/pci/devices/0000:${PCI_ADDR}/iommu_group/devices"
         [ -d "$GPU_GROUP_PATH" ] || continue
 
-        GPU_GROUP_SIZE=$(ls "$GPU_GROUP_PATH" | wc -l)
+        GPU_GROUP_SIZE=$(find "$GPU_GROUP_PATH" -maxdepth 1 -type f | wc -l)
 
         if [ "$GPU_GROUP_SIZE" -gt 1 ]; then
-            GROUP_DEVICES=$(ls "$GPU_GROUP_PATH" | tr '\n' ' ')
+            GROUP_DEVICES=$(find "$GPU_GROUP_PATH" -maxdepth 1 -type f -printf '%f ')
             log "ERROR: IOMMU group for $PCI_ADDR contains $GPU_GROUP_SIZE devices: $GROUP_DEVICES"
             log "  Group is NOT separable — aborting to prevent broken passthrough."
             log "  Fix: enable ACS override in BIOS/firmware, or use a different host."
@@ -102,7 +102,7 @@ main() {
             AUDIO_VD=$(lspci -n -s "$AUDIO_ADDR" | awk '{print $3}')
             AUDIO_GROUP_PATH="/sys/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices"
             if [ -d "$AUDIO_GROUP_PATH" ]; then
-                AUDIO_GROUP_SIZE=$(ls "$AUDIO_GROUP_PATH" | wc -l)
+                AUDIO_GROUP_SIZE=$(find "$AUDIO_GROUP_PATH" -maxdepth 1 -type f | wc -l)
                 if [ "$AUDIO_GROUP_SIZE" -gt 1 ]; then
                     log "ERROR: Audio companion $AUDIO_ADDR for GPU $PCI_ADDR is in a shared IOMMU group (${AUDIO_GROUP_SIZE} devices)"
                     log "  Abort — audio function must be in the same group as its GPU or isolated."
@@ -165,11 +165,13 @@ EOF
     : > "$BLACKLIST_FILE"
 
     if echo "$VFIO_IDS" | grep -qi "10de"; then
-        echo "blacklist nouveau" >> "$BLACKLIST_FILE"
-        echo "blacklist nvidia" >> "$BLACKLIST_FILE"
-        echo "blacklist nvidia_drm" >> "$BLACKLIST_FILE"
-        echo "blacklist nvidia_modeset" >> "$BLACKLIST_FILE"
-        echo "blacklist nvidia_uvm" >> "$BLACKLIST_FILE"
+        {
+            echo "blacklist nouveau"
+            echo "blacklist nvidia"
+            echo "blacklist nvidia_drm"
+            echo "blacklist nvidia_modeset"
+            echo "blacklist nvidia_uvm"
+        } >> "$BLACKLIST_FILE"
         log "Blacklisted nvidia/nouveau (dGPU in passthrough set)"
     fi
 

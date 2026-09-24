@@ -50,7 +50,6 @@ fi
 
 # --- 2. CUDA toolkit ---
 log "Installing CUDA toolkit..."
-UBUNTU_VER=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | tr -d '.')
 UBUNTU_SHORT=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | cut -d. -f1,2 | tr -d '.')
 CUDA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_SHORT}/x86_64/cuda-keyring_1.1-1_all.deb"
 CUDA_KEYRING_DEB="/tmp/cuda-keyring.deb"
