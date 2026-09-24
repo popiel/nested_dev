@@ -228,10 +228,11 @@ if ! qm status 100 >/dev/null 2>&1; then
         $DESKTOP_HOSTPCI \
         --cdrom0 "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}" \
         --ide0 "${SEED_DIR}/desktop-seed.iso,media=cdrom" \
+        --scsi0 local-lvm:40,size=40G \
         --boot order=scsi0
 
     qm start 100
-    log "VM 100 (desktop) created and started: ${DESKTOP_MEM}MB, ${DESKTOP_CORES} cores, MAC 52:54:00:00:01:00"
+    log "VM 100 (desktop) created and started: ${DESKTOP_MEM}MB, ${DESKTOP_CORES} cores, 40GB OS, MAC 52:54:00:00:01:00"
 else
     log "VM 100 already exists — skipping"
 fi
@@ -266,6 +267,7 @@ if ! qm status 101 >/dev/null 2>&1; then
         $LLM_HOSTPCI \
         --cdrom0 "${ISO_DIR}/${UBUNTU_SERVER_ISO}" \
         --ide0 "${SEED_DIR}/llm-seed.iso,media=cdrom" \
+        --scsi0 local-lvm:80,size=80G \
         --scsi1 local-lvm:${DATA_VOL_SIZE},size=${DATA_VOL_SIZE}G \
         --boot order=scsi0
 
@@ -276,7 +278,7 @@ if ! qm status 101 >/dev/null 2>&1; then
     fi
 
     qm start 101
-    log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, ${DATA_VOL_SIZE}GB data"
+    log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, 80GB OS, ${DATA_VOL_SIZE}GB data"
 else
     log "VM 101 already exists — skipping"
 fi
@@ -303,10 +305,11 @@ if ! qm status 102 >/dev/null 2>&1; then
             --agent enabled=1 \
             --cdrom0 "${ISO_DIR}/${UBUNTU_SERVER_ISO}" \
             --ide0 "${SEED_DIR}/dev-seed.iso,media=cdrom" \
+            --scsi0 local-lvm:40,size=40G \
             --boot order=scsi0
 
         qm start 102
-        log "VM 102 (dev-template) created and starting for provisioning: ${DEV_MEM}MB, ${DEV_CORES} cores"
+        log "VM 102 (dev-template) created and starting for provisioning: ${DEV_MEM}MB, ${DEV_CORES} cores, 40GB OS"
 
         # --- Provisioning gate: wait for first-boot to complete ---
         PROVISIONING_TIMEOUT=600  # 10 minutes
