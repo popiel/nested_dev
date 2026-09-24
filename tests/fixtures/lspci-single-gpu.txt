@@ -1,0 +1,2 @@
+01:00.0 VGA compatible controller: NVIDIA Corporation GA102 [GeForce RTX 3090] (rev a1)
+00:02.0 VGA compatible controller: Intel Corporation Coffee Lake-S GT2 [UHD Graphics 630] (rev 05)

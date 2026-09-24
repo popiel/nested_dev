@@ -1,0 +1,1 @@
+04:00.0 VGA compatible controller: Red Hat, Inc. Virtio GPU (rev 01)

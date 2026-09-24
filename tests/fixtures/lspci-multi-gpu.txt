@@ -1,0 +1,4 @@
+01:00.0 VGA compatible controller: NVIDIA Corporation GA102 [GeForce RTX 3090] (rev a1)
+01:00.1 Audio device: NVIDIA Corporation GA102 HDMI Audio (rev a1)
+00:02.0 VGA compatible controller: Intel Corporation Coffee Lake-S GT2 [UHD Graphics 630] (rev 05)
+04:00.0 VGA compatible controller: Red Hat, Inc. Virtio GPU (rev 01)

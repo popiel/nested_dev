@@ -1,0 +1,2 @@
+01:00.0 VGA compatible controller: NVIDIA Corporation GA102 [GeForce RTX 3090] (rev a1)
+01:00.1 Audio device: NVIDIA Corporation GA102 HDMI Audio (rev a1)

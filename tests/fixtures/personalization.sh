@@ -1,0 +1,9 @@
+# Test personalization — known values for unit tests
+PERSONALIZATION_USERNAME="popiel"
+PERSONALIZATION_FULLNAME="T. Alexander Popiel"
+PERSONALIZATION_EMAIL="tapopiel@gmail.com"
+PERSONALIZATION_UID="1401"
+PERSONALIZATION_GID="1401"
+PERSONALIZATION_HOME="/home/popiel"
+PERSONALIZATION_REPO="popiel/nested_dev"
+PERSONALIZATION_REF="main"

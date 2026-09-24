@@ -56,4 +56,9 @@ for file in $STAGED_ALL; do
     fi
 done
 
+# --- 4. Run fast static checks (skip if tests/run.sh not present) ---
+if [ -x "tests/run.sh" ]; then
+    tests/run.sh --fast || FAIL=1
+fi
+
 exit $FAIL
