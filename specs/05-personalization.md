@@ -11,8 +11,8 @@ references this spec (and the shared config file it defines) instead of
 hardcoding user values.
 
 In scope: username, full name, email, UID/GID, home directory, SSH key
-placement, git identity. Out of scope: per-VM hostnames, network config,
-package choices.
+placement, git identity, login password hash. Out of scope: per-VM
+hostnames, network config, package choices.
 
 ## 2. User identity
 
@@ -80,7 +80,59 @@ Each first-boot script sources `provision/personalization.sh` and
 uses the variables for `chown`, `usermod`, `loginctl`, `getent`, and
 `git config` calls.
 
-## 5. Git identity (dev VM only)
+## 5. Password hash
+
+The login password hash is stored in `keys/password-hash` (gitignored,
+never committed). The `user-data` YAML files contain only the placeholder
+`CHANGE_ME_HASHED`; the real hash is injected at build time.
+
+### 5.1 Generating the hash
+
+```bash
+# Generate a yescrypt hash (Ubuntu 24.04+ default) — run once, manually
+mkpasswd -m yescrypt > keys/password-hash
+# Paste or type the password when prompted; the hash is written to the file.
+chmod 600 keys/password-hash
+```
+
+### 5.2 Build-time injection
+
+Each `build-iso.sh` reads `keys/password-hash` and `sed`-replaces the
+placeholder in `user-data`:
+
+```bash
+PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
+PASS_HASH="$(cat "$PASSWORD_HASH_FILE")"
+sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
+    "${SCRIPT_DIR}/user-data/user-data" > "${EXTRACT_DIR}/cidata/user-data"
+```
+
+After writing the ISO cidata, the build script restores the placeholder
+in the source `user-data` file as a safety net:
+
+```bash
+sed -i 's|password: ".*"|password: "CHANGE_ME_HASHED"|' \
+    "${SCRIPT_DIR}/user-data/user-data"
+```
+
+### 5.3 Git hook
+
+`.githooks/pre-commit` blocks commits where any `user-data/user-data`
+file contains a real hash instead of `CHANGE_ME_HASHED`. Enable with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+### 5.4 File layout
+
+| File | Purpose | Committed? |
+|---|---|---|
+| `keys/password-hash` | yescrypt hash of login password | No (gitignored) |
+| `*/user-data/user-data` | Contains `CHANGE_ME_HASHED` placeholder | Yes |
+| `.githooks/pre-commit` | Blocks real hashes in user-data | Yes |
+
+## 6. Git identity (dev VM only)
 
 Set at first boot in the Dev VM (Spec 04 §5 step 3):
 
@@ -91,7 +143,7 @@ git config --global user.email "${PERSONALIZATION_EMAIL}"
 
 Only the Dev VM configures git; Desktop and LLM VMs do not.
 
-## 6. Cross-references
+## 7. Cross-references
 
 | Spec | How it uses personalization |
 |---|---|
@@ -102,7 +154,7 @@ Only the Dev VM configures git; Desktop and LLM VMs do not.
 All three specs' `Decisions` tables include an `Account` row that says
 "`popiel` (§05)" instead of repeating the full identity.
 
-## 7. Acceptance
+## 8. Acceptance
 
 * `provision/personalization.sh` defines all variables; no hardcoded
   `popiel` / `T. Alexander Popiel` / `tapopiel@gmail.com` in any build
@@ -111,3 +163,6 @@ All three specs' `Decisions` tables include an `Account` row that says
   `${PERSONALIZATION_USERNAME}`.
 * `grep -r 'popiel\|T\. Alexander\|tapopiel' provision/ desktop/ llm/`
   returns only the shared config file and references to it.
+* `keys/password-hash` exists and is gitignored; `user-data` files contain
+  only `CHANGE_ME_HASHED`.
+* `.githooks/pre-commit` is present and executable.

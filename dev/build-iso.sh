@@ -17,6 +17,9 @@ REF="host_os_v0.1"
 # Source shared personalization (§05)
 . "${REPO_ROOT}/provision/personalization.sh"
 
+# Password hash (not committed — read at build time only)
+PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
+
 # Ubuntu Server 26.04 ISO — pin version and SHA256
 UBUNTU_ISO_URL="https://releases.ubuntu.com/26.04/ubuntu-26.04-live-server-amd64.iso"
 UBUNTU_ISO_NAME="ubuntu-26.04-live-server-amd64.iso"
@@ -30,6 +33,7 @@ die() { printf '[dev-iso] ERROR: %s\n' "$*" >&2; exit 1; }
 for cmd in wget xorriso; do
     command -v "$cmd" >/dev/null 2>&1 || die "Missing: $cmd (apt-get install xorriso)"
 done
+[ -f "$PASSWORD_HASH_FILE" ] || die "Missing: ${PASSWORD_HASH_FILE} (generate with mkpasswd)"
 
 mkdir -p "$ISO_DIR" "$WORK_DIR"
 
@@ -64,13 +68,19 @@ done
 
 # --- 4. Copy user-data to ISO root as cidata ---
 mkdir -p "${EXTRACT_DIR}/cidata"
-# Substitute personalization placeholders (§05)
+# Substitute personalization placeholders (§05) and password hash
+PASS_HASH="$(cat "$PASSWORD_HASH_FILE")"
 sed -e "s/__PERSONALIZATION_USERNAME__/${PERSONALIZATION_USERNAME}/g" \
     -e "s/__PERSONALIZATION_FULLNAME__/${PERSONALIZATION_FULLNAME}/g" \
     -e "s/__PERSONALIZATION_EMAIL__/${PERSONALIZATION_EMAIL}/g" \
+    -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
     "${SCRIPT_DIR}/user-data/user-data" > "${EXTRACT_DIR}/cidata/user-data"
 cp "${SCRIPT_DIR}/user-data/meta-data" "${EXTRACT_DIR}/cidata/meta-data"
 log "Copied user-data to cidata/ (personalization substituted)"
+
+# --- 4b. Ensure source user-data retains placeholder (defensive) ---
+sed -i 's|password: ".*"|password: "CHANGE_ME_HASHED"|' \
+    "${SCRIPT_DIR}/user-data/user-data"
 
 # --- 5. Copy first-boot script, personalization, and Dockerfiles to ISO root ---
 # The first-boot script is fetched at <REF> inside the VM, but we also

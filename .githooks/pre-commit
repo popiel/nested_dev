@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# pre-commit hook — block commits that include real password hashes
+# in user-data files. Install: git config core.hooksPath .githooks
+set -euo pipefail
+
+# Find staged user-data files
+STAGED_USERDATA=$(git diff --cached --name-only --diff-filter=ACM | grep 'user-data/user-data$' || true)
+
+if [ -z "$STAGED_USERDATA" ]; then
+    exit 0
+fi
+
+# Check each staged file for real hashes
+for file in $STAGED_USERDATA; do
+    if grep -q 'password: "[^C]' "$file" 2>/dev/null; then
+        echo "ERROR: $file contains what looks like a real password hash." >&2
+        echo "  Only the placeholder CHANGE_ME_HASHED may be committed." >&2
+        echo "  The build-iso.sh scripts substitute the real hash from keys/password-hash at build time." >&2
+        exit 1
+    fi
+    if grep -q 'password: "CHANGE_ME_HASHED"' "$file" 2>/dev/null; then
+        continue
+    fi
+    # Catches: password: "x" where x is not C (start of CHANGE_ME_HASHED)
+    # Also catches empty or missing password line — let that through (different validation)
+done
+
+exit 0
