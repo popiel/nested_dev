@@ -17,23 +17,26 @@ REF="host_os_v0.1"
 # Source shared personalization (§05)
 . "${REPO_ROOT}/provision/personalization.sh"
 
+# Source shared Ubuntu release config
+. "${REPO_ROOT}/provision/ubuntu-release.conf"
+
 # Password hash (not committed — read at build time only)
 PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
 
-# Ubuntu Server 26.04 ISO — pin version and SHA256
-UBUNTU_ISO_URL="https://releases.ubuntu.com/26.04/ubuntu-26.04-live-server-amd64.iso"
-UBUNTU_ISO_NAME="ubuntu-26.04-live-server-amd64.iso"
-UBUNTU_ISO_SHA256="dec49008a71f6098d0bcfc822021f4d042d5f2db279e4d75bdd981304f1ca5d9"
+# Derive ISO URL and name from shared config
+UBUNTU_ISO_URL="${UBUNTU_BASE_URL}/${UBUNTU_SERVER_ISO}"
+UBUNTU_ISO_NAME="${UBUNTU_SERVER_ISO}"
 
 log() { printf '[dev-iso] %s\n' "$*"; }
 die() { printf '[dev-iso] ERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- Preflight ---
 [ "$(id -u)" -eq 0 ] || die "Run as root (needed for xorriso)"
-for cmd in wget xorriso; do
-    command -v "$cmd" >/dev/null 2>&1 || die "Missing: $cmd (apt-get install xorriso)"
+for cmd in wget xorriso gpg; do
+    command -v "$cmd" >/dev/null 2>&1 || die "Missing: $cmd (apt-get install $cmd)"
 done
 [ -f "$PASSWORD_HASH_FILE" ] || die "Missing: ${PASSWORD_HASH_FILE} (generate with mkpasswd)"
+[ -f "${REPO_ROOT}/${UBUNTU_SIGNING_KEY_FILE}" ] || die "Missing: ${UBUNTU_SIGNING_KEY_FILE}"
 
 mkdir -p "$ISO_DIR" "$WORK_DIR"
 
@@ -47,8 +50,55 @@ else
     log "Ubuntu ISO already present: $UBUNTU_ISO_PATH"
 fi
 
-# Verify SHA256 (uncomment after updating UBUNTU_ISO_SHA256 above)
-# echo "${UBUNTU_ISO_SHA256}  ${UBUNTU_ISO_PATH}" | sha256sum -c - || die "ISO SHA256 mismatch"
+# --- Verify ISO integrity (GPG + SHA256) ---
+SUMS_DIR="${WORK_DIR}/sums"
+rm -rf "$SUMS_DIR"
+mkdir -p "$SUMS_DIR"
+
+log "Fetching SHA256SUMS and signature..."
+wget -q -O "${SUMS_DIR}/SHA256SUMS" "${UBUNTU_BASE_URL}/SHA256SUMS"
+wget -q -O "${SUMS_DIR}/SHA256SUMS.gpg" "${UBUNTU_BASE_URL}/SHA256SUMS.gpg"
+
+# Verify GPG signature against stored key
+log "Verifying GPG signature..."
+STORED_KEY="${REPO_ROOT}/${UBUNTU_SIGNING_KEY_FILE}"
+
+# Fetch fresh copy from keyserver and compare to stored copy
+TMPKEY="$(mktemp)"
+trap 'rm -f "$TMPKEY"' EXIT
+gpg --keyid-format long --keyserver hkp://keyserver.ubuntu.com \
+    --export "$UBUNTU_SIGNING_KEY_ID" > "$TMPKEY" 2>/dev/null
+
+# Normalize both to canonical key format for comparison
+STORED_FP=$(gpg --with-colons --import-options show-only --import "$STORED_KEY" 2>/dev/null \
+    | grep '^fpr' | head -1 | cut -d: -f10)
+FETCHED_FP=$(gpg --with-colons --import-options show-only --import "$TMPKEY" 2>/dev/null \
+    | grep '^fpr' | head -1 | cut -d: -f10)
+
+if [ -z "$STORED_FP" ] || [ -z "$FETCHED_FP" ]; then
+    die "Could not extract key fingerprints for comparison"
+fi
+if [ "$STORED_FP" != "$FETCHED_FP" ]; then
+    die "Ubuntu signing key has changed! Stored: ${STORED_FP}, Fetched: ${FETCHED_FP}. Update ${UBUNTU_SIGNING_KEY_FILE}."
+fi
+log "Signing key fingerprint matches stored copy: ${STORED_FP}"
+
+# Import stored key into temporary keyring for verification
+GNUPGHOME="$(mktemp -d)"
+trap 'rm -rf "$GNUPGHOME"' EXIT
+export GNUPGHOME
+gpg --batch --quiet --import "$STORED_KEY" 2>/dev/null
+
+# Verify detached signature
+gpg --batch --verify "${SUMS_DIR}/SHA256SUMS.gpg" "${SUMS_DIR}/SHA256SUMS" 2>/dev/null \
+    || die "GPG signature verification failed"
+log "GPG signature verified"
+
+# Verify ISO checksum
+log "Verifying ISO SHA256..."
+grep "\*${UBUNTU_ISO_NAME}$" "${SUMS_DIR}/SHA256SUMS" | (cd "$ISO_DIR" && sha256sum -c -) \
+    || die "ISO SHA256 mismatch — re-download may be corrupted"
+log "ISO SHA256 verified"
 
 # --- 2. Extract ISO ---
 EXTRACT_DIR="${WORK_DIR}/iso-extract"
@@ -94,13 +144,13 @@ cp -r "${SCRIPT_DIR}/docker" "${EXTRACT_DIR}/docker"
 log "Embedded dev-firstboot.sh, personalization.sh, and docker/ on ISO"
 
 # --- 6. Repackage ISO ---
-DEV_AUTO_ISO="${OUTPUT_DIR}/ubuntu-26.04-server-amd64_dev_auto.iso"
+DEV_AUTO_ISO="${OUTPUT_DIR}/ubuntu-${UBUNTU_VERSION}-server-amd64_dev_auto.iso"
 log "Building autoinstall ISO..."
 cd "$EXTRACT_DIR"
 xorriso -as mkisofs \
     -o "$DEV_AUTO_ISO" \
     -R -J -joliet-long \
-    -V "UBUNTU-26-04-SERVER-DEV" \
+    -V "UBUNTU-${UBUNTU_VERSION//./-}-SERVER-DEV" \
     -b isolinux/isolinux.bin \
     -c isolinux/boot.cat \
     -no-emul-boot \

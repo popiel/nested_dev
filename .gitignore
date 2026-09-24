@@ -31,6 +31,7 @@ nul
 /node_modules/
 /keys/*
 !/keys/*.pub
+!/keys/*.asc
 
 # Build output (ISOs, golden images, build artifacts)
 /output/*
