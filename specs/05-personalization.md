@@ -27,6 +27,8 @@ hostnames, network config, package choices.
 | Shell | `/bin/bash` |
 | SSH | Key-only; `install-server: true`, `allow-pw: false` in cloud-init |
 | Docker group | Added at first boot where Docker is installed |
+| Repo | `popiel/nested_dev` (GitHub `<user>/<repo>`) |
+| Tag | `host_os_v0.1` (release tag for build manifests and first-boot refs) |
 
 ## 3. Canonical config file
 
@@ -44,6 +46,10 @@ PERSONALIZATION_EMAIL="tapopiel@gmail.com"
 PERSONALIZATION_UID="1401"
 PERSONALIZATION_GID="1401"
 PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
+
+# Repository and release tag
+PERSONALIZATION_REPO="popiel/nested_dev"
+PERSONALIZATION_TAG="host_os_v0.1"
 ```
 
 Scripts source it with:
@@ -143,7 +149,51 @@ git config --global user.email "${PERSONALIZATION_EMAIL}"
 
 Only the Dev VM configures git; Desktop and LLM VMs do not.
 
-## 7. Cross-references
+## 7. Fork and tagging protocol
+
+### 7.1 Forking
+
+Each user forks the repo and customizes `provision/personalization.sh`
+with their own identity. No other files need editing for personalization —
+all build scripts and first-boot scripts source the shared config.
+
+### 7.2 Tag format
+
+Tags mark a known-good set of ISOs. Format: `host_os_v<major>.<minor>`
+
+| Tag | Meaning |
+|---|---|
+| `host_os_v0.1` | First release — initial host + guest images |
+| `host_os_v0.2` | Incremental update (e.g. new package, config change) |
+| `host_os_v1.0` | Stable baseline for production use |
+
+Tags are **immutable** — once an ISO is built from a tagged commit, that
+commit is never modified. A new tag is created for any change that affects
+the built images.
+
+### 7.3 Tagging workflow
+
+1. Make changes, commit, verify builds.
+2. Update `PERSONALIZATION_TAG` in `provision/personalization.sh`:
+   ```bash
+   PERSONALIZATION_TAG="host_os_v0.2"
+   ```
+3. Commit the tag change.
+4. Create the git tag:
+   ```bash
+   git tag host_os_v0.2
+   git push origin host_os_v0.2
+   ```
+5. Build all ISOs — the manifest records the tag.
+
+### 7.4 What the tag controls
+
+- `build-iso.sh` sets `REF="${PERSONALIZATION_TAG}"` — recorded in each
+  ISO's `MANIFEST` entry.
+- `MANIFEST` entries include the repo name and tag for traceability.
+- First-boot script headers reference the tag as the fetch point.
+
+## 8. Cross-references
 
 | Spec | How it uses personalization |
 |---|---|
@@ -154,7 +204,7 @@ Only the Dev VM configures git; Desktop and LLM VMs do not.
 All three specs' `Decisions` tables include an `Account` row that says
 "`popiel` (§05)" instead of repeating the full identity.
 
-## 8. Acceptance
+## 9. Acceptance
 
 * `provision/personalization.sh` defines all variables; no hardcoded
   `popiel` / `T. Alexander Popiel` / `tapopiel@gmail.com` in any build
@@ -166,3 +216,7 @@ All three specs' `Decisions` tables include an `Account` row that says
 * `keys/password-hash` exists and is gitignored; `user-data` files contain
   only `CHANGE_ME_HASHED`.
 * `.githooks/pre-commit` is present and executable.
+* `PERSONALIZATION_REPO` and `PERSONALIZATION_TAG` are defined in
+  `provision/personalization.sh`; no hardcoded `host_os_v0.1` in any
+  build script.
+* `PERSONALIZATION_TAG` matches the current git tag.
