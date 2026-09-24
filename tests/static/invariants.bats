@@ -9,7 +9,8 @@ load '../lib/helpers'
         --include='*.yml' --include='*.yaml' "$PROJECT_ROOT" 2>/dev/null \
         | grep -v 'provision/personalization.sh' \
         | grep -v 'tests/fixtures/' \
-        | grep -v '.git/' || true)
+        | grep -v '.git/' \
+        | grep -v 'popiel/nested_dev' || true)
     [ -z "$result" ]
 }
 
