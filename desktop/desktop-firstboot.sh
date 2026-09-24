@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# first-boot.sh — Desktop VM first-boot configuration
+# desktop-firstboot.sh — Desktop VM first-boot configuration
 # Runs inside VM 100 (lychee / ${PERSONALIZATION_USERNAME}) on first boot.
 # Sets up i3, xrdp, Chrome, X11 forwarding, PulseAudio, low-mem trims.
-# Fetched at REF host_os_v0.1; logs to /var/log/desktop-firstboot.log.
+# Fetched at REF main; logs to /var/log/desktop-firstboot.log.
 set -euo pipefail
 
 LOG="/var/log/desktop-firstboot.log"

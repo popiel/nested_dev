@@ -3,7 +3,7 @@
 # Runs inside VM 102+ (dev-vm / ${PERSONALIZATION_USERNAME}) on first boot.
 # Installs Docker, pulls base images, installs Dockerfiles + wrapper scripts.
 # Tool images are built lazily by wrapper scripts on first use.
-# Fetched at REF host_os_v0.1; logs to /var/log/dev-firstboot.log.
+# Fetched at REF main; logs to /var/log/dev-firstboot.log.
 set -euo pipefail
 
 LOG="/var/log/dev-firstboot.log"

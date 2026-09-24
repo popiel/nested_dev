@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # provision-host.sh — first-boot entry point for PVE 9.2 host
 # Runs from systemd oneshot; sources fragments in order; self-disables on success.
-# REF: host_os_v0.1
+# REF: __GITHUB_REF__ (baked at build time)
 set -euo pipefail
 
 LOG="/var/log/pve-firstboot.log"

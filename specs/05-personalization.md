@@ -47,9 +47,13 @@ PERSONALIZATION_UID="1401"
 PERSONALIZATION_GID="1401"
 PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
 
-# Repository and release tag
+# Repository and release reference
+# Set to a branch name, tag, or full commit SHA:
+#   "main"              — track tip of main branch (latest changes)
+#   "some-tag"          — pinned to a specific tag
+#   "abc123def456..."   — pinned to an exact commit SHA (most reproducible)
 PERSONALIZATION_REPO="popiel/nested_dev"
-PERSONALIZATION_TAG="host_os_v0.1"
+PERSONALIZATION_REF="main"
 ```
 
 Scripts source it with:
@@ -168,24 +172,25 @@ the built images.
 ### 7.3 Tagging workflow
 
 1. Make changes, commit, verify builds.
-2. Update `PERSONALIZATION_TAG` in `provision/personalization.sh`:
+2. Update `PERSONALIZATION_REF` in `provision/personalization.sh`:
    ```bash
-   PERSONALIZATION_TAG="host_os_v0.2"
+   PERSONALIZATION_REF="some-tag"   # or a branch name, or a full SHA
    ```
-3. Commit the tag change.
-4. Create the git tag:
+3. Commit and push.
+4. If using a tag, create and push it:
    ```bash
-   git tag host_os_v0.2
-   git push origin host_os_v0.2
+   git tag some-tag
+   git push origin some-tag
    ```
-5. Build all ISOs — the manifest records the tag.
+5. Build the host ISO — the manifest records the REF and resolved SHA.
 
-### 7.4 What the tag controls
+### 7.4 What the REF controls
 
-- Host `build-iso.sh` sets `REF="${PERSONALIZATION_TAG}"` — recorded in
-  the host ISO's `MANIFEST` entry.
-- `MANIFEST` entries include the repo name and tag for traceability.
-- First-boot script headers reference the tag as the fetch point.
+- Host `build-iso.sh` sets `REF="${PERSONALIZATION_REF}"` — resolved to
+  a commit SHA via `git ls-remote`, recorded in the host ISO's `MANIFEST`.
+- Raw GitHub URLs use the REF directly (branch names and tags resolve
+  automatically); the SHA is for logging and reproducibility.
+- First-boot script headers reference the REF as the fetch point.
 
 ## 8. Cross-references
 
@@ -210,7 +215,6 @@ All three specs' `Decisions` tables include an `Account` row that says
 * `keys/password-hash` exists and is gitignored; `user-data` files contain
   only `CHANGE_ME_HASHED`.
 * `.githooks/pre-commit` is present and executable.
-* `PERSONALIZATION_REPO` and `PERSONALIZATION_TAG` are defined in
-  `provision/personalization.sh`; no hardcoded `host_os_v0.1` in any
-  build script.
-* `PERSONALIZATION_TAG` matches the current git tag.
+* `PERSONALIZATION_REPO` and `PERSONALIZATION_REF` are defined in
+  `provision/personalization.sh`; no hardcoded refs in any build script.
+* `PERSONALIZATION_REF` matches the intended branch, tag, or SHA.

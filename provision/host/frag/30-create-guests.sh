@@ -1,10 +1,38 @@
 #!/usr/bin/env bash
 # frag/30-create-guests.sh — Create Desktop (100), LLM (101), Dev (102+) VMs
-# Golden images imported via qm import-from; VMs created ready for first start.
-# Idempotent. REF: host_os_v0.1
+# Fetches user-data templates from GitHub, injects password hash, creates VMs
+# with NoCloud seeds. Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+
+# --- Resolve GitHub REF to SHA for reproducibility logging ---
+. /root/provision/../provision/personalization.sh 2>/dev/null || true
+GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
+GITHUB_REF="${PERSONALIZATION_REF:-main}"
+
+resolve_ref_to_sha() {
+    local repo="$1" ref="$2"
+    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$ref"
+        return
+    fi
+    local sha=""
+    sha=$(git ls-remote "https://github.com/${repo}.git" "refs/heads/${ref}" 2>/dev/null | awk '{print $1}')
+    if [ -z "$sha" ]; then
+        sha=$(git ls-remote "https://github.com/${repo}.git" "refs/tags/${ref}" 2>/dev/null | awk '{print $1}')
+    fi
+    echo "$sha"
+}
+
+REF_SHA=$(resolve_ref_to_sha "${GITHUB_REPO}" "${GITHUB_REF}")
+if [ -n "$REF_SHA" ]; then
+    log "GitHub REF resolved: ${GITHUB_REF} -> ${REF_SHA:0:12}"
+else
+    log "WARNING: Could not resolve REF '${GITHUB_REF}' — proceeding with branch name only"
+fi
+
+GITHUB_BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_REF}"
 
 log "=== Guest VM creation ==="
 

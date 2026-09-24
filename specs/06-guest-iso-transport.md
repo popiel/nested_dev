@@ -96,8 +96,8 @@ After install, the hash lives at `/root/.password-hash` on the host.
 ```bash
 # --- Configuration ---
 GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
-GITHUB_TAG="${PERSONALIZATION_TAG:-host_os_v0.1}"
-BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_TAG}"
+GITHUB_REF="${PERSONALIZATION_REF:-main}"
+BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_REF}"
 PASSWORD_HASH_FILE="/root/.password-hash"
 
 # --- Read password hash ---
@@ -220,9 +220,9 @@ Workstation                         Host (PVE)
 |---|---|---|
 | Host installer ISO | Built locally, USB | Manual (one-time) |
 | Password hash | Embedded in host ISO | USB (same as host) |
-| Host provisioner | GitHub (`<REF>` tag) | Network (late-commands) |
-| Guest user-data templates | GitHub (`main` branch) | Network (frag/30) |
-| Guest first-boot scripts | GitHub (`<REF>` tag) | Network (guest first-boot) |
+| Host provisioner | GitHub (`<REF>`) | Network (late-commands) |
+| Guest user-data templates | GitHub (`<REF>`) | Network (frag/30) |
+| Guest first-boot scripts | GitHub (`<REF>`) | Network (guest first-boot) |
 | NVIDIA/CUDA/Docker/Ollama | Official upstream repos | Network (guest first-boot) |
 | Ubuntu packages | Ubuntu archive | Network (install + first-boot) |
 

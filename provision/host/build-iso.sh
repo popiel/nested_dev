@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build-iso.sh — Build PVE 9.2 autoinstall ISO
 # Downloads PVE ISO, injects answer file, produces proxmox-ve_9.2-1_auto.iso
-# REF: host_os_v0.1
+# REF: __GITHUB_REF__ (resolved at build time)
 #
 # Requirements: Linux x86_64, wget, xorriso (or genisoimage), root or fakeroot
 # Usage: sudo ./build-iso.sh
@@ -15,7 +15,32 @@ WORK_DIR="${OUTPUT_DIR}/build-work"
 
 # Source shared personalization (§05)
 . "${REPO_ROOT}/provision/personalization.sh"
-REF="${PERSONALIZATION_TAG}"
+REF="${PERSONALIZATION_REF}"
+
+# Resolve REF to commit SHA (works for branches, tags, and literal SHAs)
+resolve_ref_to_sha() {
+    local repo="$1" ref="$2"
+    # Already a 40-char hex SHA? Return as-is.
+    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$ref"
+        return
+    fi
+    local sha=""
+    # Try branches first, then tags
+    sha=$(git ls-remote "https://github.com/${repo}.git" "refs/heads/${ref}" 2>/dev/null | awk '{print $1}')
+    if [ -z "$sha" ]; then
+        sha=$(git ls-remote "https://github.com/${repo}.git" "refs/tags/${ref}" 2>/dev/null | awk '{print $1}')
+    fi
+    echo "$sha"
+}
+
+log "Resolving REF '${REF}' to SHA..."
+REF_SHA=$(resolve_ref_to_sha "${PERSONALIZATION_REPO}" "${REF}")
+if [ -n "$REF_SHA" ]; then
+    log "REF resolved: ${REF} -> ${REF_SHA:0:12}"
+else
+    log "WARNING: Could not resolve REF '${REF}' — proceeding with branch name only"
+fi
 
 # PVE 9.2 ISO — pin version and SHA256
 PVE_ISO_URL="https://download.proxmox.com/iso/proxmox-ve_9.2-1.iso"
@@ -100,6 +125,7 @@ fi
 sed \
     -e "s|__ROOT_SSH_KEY__|${SSH_KEY}|g" \
     -e "s|__AUTO_DETECT_DISK__|${DISK_SHORT}|g" \
+    -e "s|__GITHUB_REF__|${REF}|g" \
     "$ANSWER_TEMPLATE" > "$ANSWER_WORK"
 
 log "Answer file generated: ${ANSWER_WORK}"
@@ -159,6 +185,7 @@ cat >> "$MANIFEST" <<EOF
 
 ## Host ISO build — $(date -Is)
 REF: ${REF}
+REF SHA: ${REF_SHA:-unknown}
 PVE ISO: ${PVE_ISO_NAME}
 PVE ISO SHA256: $(sha256sum "$PVE_ISO_PATH" | awk '{print $1}')
 Auto ISO: $(basename "$AUTO_ISO")

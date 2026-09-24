@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # frag/10-gpu-passthrough.sh — IOMMU + VFIO setup
 # Auto-detects GPUs, validates IOMMU groups, configures passthrough.
-# Idempotent. REF: host_os_v0.1
+# Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }

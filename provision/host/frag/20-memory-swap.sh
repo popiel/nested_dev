@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # frag/20-memory-swap.sh — ZRAM + swap for 32 GB host profile
-# Idempotent. REF: host_os_v0.1
+# Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }

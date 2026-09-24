@@ -80,7 +80,7 @@ console/management is via SSH, Proxmox web UI, or serial console.
 | LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
 | Dev model | Docker engine only, ephemeral containers, bind mounts, egress-deny | From `README.md`; absent in both predecessors; new Spec 04 |
 | Host networking | Routed: `$PHYS_NIC` DHCP from LAN + private `vmbr0` (192.168.100.1/24); dnsmasq on host serves DHCP/DNS to VMs; host NATs VM egress via MASQUERADE; iptables firewall with per-VM egress policy (desktop=unrestricted, LLM=HTTPS-only, dev=denied, host=HTTPS/DNS/NTP-only) | Replaces bridged design; VMs not directly addressable from LAN; dnsmasq gives predictable IPs without depending on external DHCP |
-| Provisioning model | Answer file + provisioner/first-boot scripts fetched from `popiel/nested_dev` GitHub at install/first boot, pinned to `<REF>` tag/SHA | `specs-ds4` discipline wins over mimo's `main`-branch fetch |
+| Provisioning model | Answer file + provisioner/first-boot scripts fetched from `popiel/nested_dev` GitHub at install/first boot, pinned to `<REF>` (branch/tag/SHA) | `specs-ds4` discipline wins over mimo's `main`-branch fetch |
 | **Sourcing policy** | GitHub serves **only files authored in this repo** (answer file, provisioner scripts/fragments, `user-data`, first-boot scripts, network fragments). Every third-party artifact (PVE/Ubuntu ISOs, Ubuntu archive packages, `linux-firmware`, NVIDIA driver/CUDA repo, Ollama, iPXE, firmware) is fetched **direct from its official upstream** — never vendored here | From `specs-ds4` 00 §3, retained verbatim |
 
 ## 4. Artifacts produced
@@ -111,10 +111,10 @@ provision/
     vmbr0-*.conf               # netplan/iptables fragments
     dnsmasq.conf               # DHCP + DNS for VMs on vmbr0
     iptables-forwarding.conf   # firewall rule reference
-  personalization.sh           # shared identity (username, UID, repo, tag)
+  personalization.sh           # shared identity (username, UID, repo, ref)
   ubuntu-release.conf          # shared Ubuntu version + URLs
 desktop/
-  first-boot.sh                # fetched inside VM 100 on first boot
+  desktop-firstboot.sh        # fetched inside VM 100 on first boot
   user-data/{meta-data,user-data}
 llm/
   llm-firstboot.sh             # fetched inside VM 101 on first boot
@@ -134,21 +134,23 @@ Repo-authored install- and first-boot-time fetches reference the raw base
 https://raw.githubusercontent.com/popiel/nested_dev/<REF>/<path>
 ```
 
-`<REF>` is a git tag or commit SHA, pinned per release for reproducibility
-(`main` is for development only). Manifest hashes in `output/MANIFEST` record
-what was verified per REF. Each build script must be idempotent and pinned to
-download hashes (see individual specs).
+`<REF>` is a branch name, git tag, or commit SHA — set via
+`PERSONALIZATION_REF` in `provision/personalization.sh`. Branch names
+and tags resolve automatically in GitHub raw URLs; the resolved commit
+SHA is recorded in `output/MANIFEST` for reproducibility. Each build
+script must be idempotent and pinned to download hashes (see individual
+specs).
 
 ## 6. Build order
 
-1. Edit and push provisioning inputs; tag a release (`git tag vX`, push).
-2. Spec 01 — build and verify the host install media against the tagged REF
+1. Edit and push provisioning inputs; set `PERSONALIZATION_REF` to a branch, tag, or SHA.
+2. Spec 01 — build and verify the host install media against the pinned REF
    (`proxmox-auto-install-assistant verify` + test boot).
 3. Spec 02 — build the desktop golden image (26.04 Desktop autoinstall).
 4. Spec 03 — build the LLM golden image (26.04 Server autoinstall, no GPU pkgs).
 5. Spec 04 — build the dev golden image (26.04 Server autoinstall, Docker only).
 6. Provision host, import golden images, start guests, run acceptance tests
-   (all against the same tagged REF).
+   (all against the same pinned REF).
 
 ## 7. What was merged / rejected (traceability to predecessors)
 

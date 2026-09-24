@@ -50,7 +50,7 @@ a retained profile.
 | `ubuntu-26.04-desktop-amd64.iso` | Official, URL pinned in `provision/ubuntu-release.conf` |
 | `desktop/user-data/meta-data` | Empty (NoCloud seed marker) |
 | `desktop/user-data/user-data` | Autoinstall config (§4) |
-| `desktop/first-boot.sh` | i3 config, Chrome snap, X11 setup, fetched inside VM 100 on first boot at pinned `<REF>` |
+| `desktop/desktop-firstboot.sh` | i3 config, Chrome snap, X11 setup, fetched inside VM 100 on first boot at pinned `<REF>` |
 
 Guest VMs are created by the host at first boot (Spec 06). The host
 fetches `desktop/user-data/user-data` from GitHub at the pinned `<REF>`,
@@ -143,7 +143,7 @@ Notes:
 * Chrome is **not** in the `packages:` list — installed via snap on first boot
   (§5) to avoid deb/snap conflicts during autoinstall.
 
-## 5. First-boot guest turns (`first-boot.sh`, inside VM 100)
+## 5. First-boot guest turns (`desktop-firstboot.sh`, inside VM 100)
 
 Seeded via `late-commands`/`cloud-init`, fetched at `<REF>`:
 

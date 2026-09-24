@@ -3,7 +3,7 @@
 # Runs inside VM 101 (llm-vm / ${PERSONALIZATION_USERNAME}) on first boot.
 # Installs NVIDIA driver, CUDA, Docker, NVIDIA Container Toolkit, Ollama.
 # Detects VRAM, prints model recommendations.
-# Fetched at REF host_os_v0.1; logs to /var/log/llm-firstboot.log.
+# Fetched at REF main; logs to /var/log/llm-firstboot.log.
 set -euo pipefail
 
 LOG="/var/log/llm-firstboot.log"

@@ -27,8 +27,8 @@ layout, IOMMU assertions, and guest conventions.
   `verify` from the same 9.2 tool before building).
 * All provisioning inputs live in `popiel/nested_dev` and are fetched as
   `https://raw.githubusercontent.com/popiel/nested_dev/<REF>/...` during
-  install (answer file) and first boot (provisioner). `<REF>` is a tag/SHA;
-  machines install against a tagged snapshot, never `main`.
+  install (answer file) and first boot (provisioner). `<REF>` is a branch
+  name, tag, or commit SHA set via `PERSONALIZATION_REF`.
 * Install-time HTTP must be reachable for `--fetch-from https://...`. For
   air-gapped sites, embed with `--answer-file` instead (see §6).
 * Target server: x86_64, VT-d/AMD-Vi enabled; iGPU with board outputs; one or
@@ -95,7 +95,7 @@ url = "https://raw.githubusercontent.com/popiel/nested_dev/<REF>/provision/host/
 ordering = "after-network"
 
 [late-commands]
-"fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/tags/<REF> && tar -xzf nested_dev.tar.gz && mv nested_dev-<REF>/provision/host provision && rm -rf nested_dev.tar.gz nested_dev-<REF> && chmod +x provision/provision-host.sh provision/frag/*.sh'"
+"fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/heads/<REF> && tar -xzf nested_dev.tar.gz && mv nested_dev-<REF>/provision/host provision && rm -rf nested_dev.tar.gz nested_dev-<REF> && chmod +x provision/provision-host.sh provision/frag/*.sh'"
 "install-firstboot-unit" = "sh -c 'cat > /target/etc/systemd/system/pve-firstboot.service <<EOF\n[Unit]\nDescription=PVE first boot provisioning\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=oneshot\nExecStart=/root/provision/provision-host.sh\n[Install]\nWantedBy=multi-user.target\nEOF\nln -s /etc/systemd/system/pve-firstboot.service /target/etc/systemd/system/multi-user.target.wants/pve-firstboot.service'"
 ```
 
@@ -233,7 +233,7 @@ default; open documented ports per guest spec.
 ## 6. Build procedure (PVE 9.2)
 
 ```bash
-REF=$(git describe --tags --exact-match)  # or explicit vX / SHA
+REF=$(git describe --tags --exact-match 2>/dev/null || echo "main")  # or explicit SHA
 proxmox-auto-install-assistant verify provision/host/answer-host.toml
 proxmox-auto-install-assistant prepare-iso \
   iso/proxmox-ve_9.2-1.iso \

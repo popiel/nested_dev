@@ -2,7 +2,7 @@
 # frag/90-finalize.sh — Final host configuration, networking, screening
 # Routed network: $PHYS_NIC = LAN (DHCP), vmbr0 = private (192.168.100.1/24)
 # dnsmasq on host serves DHCP/DNS to VMs on vmbr0.
-# Idempotent. REF: host_os_v0.1
+# Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
@@ -243,7 +243,7 @@ log "Hostname set to lychee-host.wolfskeep.com"
 mkdir -p /root/output
 cat > /root/output/MANIFEST <<EOF
 # nested_dev host build manifest
-# REF: host_os_v0.1
+# REF: __GITHUB_REF__
 # Built: $(date -Is)
 # PVE version: $(pveversion 2>/dev/null || echo "unknown")
 # CPU: $(lscpu | awk '/Model name/{print $0}')
@@ -262,7 +262,7 @@ cat > /etc/motd <<'EOF'
 
 ========================================
   lychee-host — Proxmox VE 9.2
-  nested_dev host_os_v0.1
+  nested_dev main
   Routed network (192.168.100.0/24)
 ========================================
   VMs: 100=desktop, 101=llm, 102+=dev
