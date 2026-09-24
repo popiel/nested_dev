@@ -10,7 +10,7 @@ set -euo pipefail
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
 
 # --- Source shared personalization (§05) ---
-. /root/provision/../provision/personalization.sh 2>/dev/null || true
+. /root/provision/personalization.sh 2>/dev/null || true
 GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
 GITHUB_REF="${PERSONALIZATION_REF:-main}"
 
@@ -40,7 +40,10 @@ GITHUB_BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_REF}"
 log "=== Guest VM creation ==="
 
 # --- Source Ubuntu release config ---
-UBUNTU_VERSION="26.04"
+. /root/provision/ubuntu-release.conf 2>/dev/null || {
+    UBUNTU_VERSION="26.04"
+    UBUNTU_CODENAME="noble"
+}
 UBUNTU_BASE_URL="https://releases.ubuntu.com/${UBUNTU_VERSION}"
 UBUNTU_DESKTOP_ISO="ubuntu-${UBUNTU_VERSION}-desktop-amd64.iso"
 UBUNTU_SERVER_ISO="ubuntu-${UBUNTU_VERSION}-live-server-amd64.iso"
@@ -163,10 +166,15 @@ for guest in desktop llm dev; do
     fi
 
     # Substitute password hash, vmctl key, and GitHub ref
+    # PERSONALIZATION_USERNAME/FULLNAME must come from personalization.sh (§05)
+    if [ -z "${PERSONALIZATION_USERNAME:-}" ] || [ -z "${PERSONALIZATION_FULLNAME:-}" ]; then
+        log "ERROR: PERSONALIZATION_USERNAME or PERSONALIZATION_FULLNAME not set — check /root/provision/personalization.sh"
+        exit 1
+    fi
     sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
         -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
-        -e "s|__PERSONALIZATION_USERNAME__|${PERSONALIZATION_USERNAME:-popiel}|g" \
-        -e "s|__PERSONALIZATION_FULLNAME__|${PERSONALIZATION_FULLNAME:-T. Alexander Popiel}|g" \
+        -e "s|__PERSONALIZATION_USERNAME__|${PERSONALIZATION_USERNAME}|g" \
+        -e "s|__PERSONALIZATION_FULLNAME__|${PERSONALIZATION_FULLNAME}|g" \
         -e "s|__GITHUB_REF__|${DEFAULT_REF}|g" \
         "${SEED_DIR}/${guest}-template" > "$SEED_FILE"
 
