@@ -1,8 +1,8 @@
 # Spec 06 — Guest VM provisioning (host-mediated autoinstall)
 
-Status: Draft (new; closes the gap between build and running guests)
+Status: Draft (normative; closes the gap between build and running guests)
 Depends on: Spec 01 (host), Spec 02 (desktop), Spec 03 (LLM), Spec 04 (Dev),
-            Spec 05 (personalization)
+            Spec 05 (personalization), Spec 07 (dev fleet lifecycle)
 
 ## 1. Problem
 
@@ -30,7 +30,7 @@ The build scripts produce custom autoinstall ISOs, but:
 **No custom guest ISOs. No golden qcow2. No virt-sysprep. No file
 transport. No password hash on GitHub.**
 
-## 3. How the password hash flows
+## 3. How the password hash and vmctl key flow
 
 ```
 keys/password-hash
@@ -45,18 +45,25 @@ provision/host/build-iso.sh
 Host disk: /root/.password-hash
        |
        v
-frag/30-create-guests.sh
-  reads /root/.password-hash
-  fetches user-data template from GitHub (CHANGE_ME_HASHED)
-  sed-replaces placeholder with real hash
-  writes result as NoCloud seed for each guest
+frag/25-desktop-control.sh
+  generates vmctl keypair at /root/.nested-dev/vmctl/
+  stages private key for frag/30
        |
        v
-Guest autoinstall reads NoCloud seed -> real password configured
+frag/30-create-guests.sh
+  reads /root/.password-hash
+  reads /root/.nested-dev/vmctl-priv-staged
+  fetches user-data template from GitHub (CHANGE_ME_HASHED + __VMCTL_PRIV_B64__)
+  sed-replaces placeholders with real values
+  writes result as NoCloud seed for each guest
+  (desktop seed includes vmctl private key via late-commands)
+       |
+       v
+Guest autoinstall reads NoCloud seed -> real password + vmctl key configured
 ```
 
-GitHub never sees the hash. The host is the only place it exists at
-runtime.
+GitHub never sees the hash or the vmctl key. The host is the only place
+they exist at runtime.
 
 ## 4. How autoinstall user-data reaches the VM
 
@@ -91,7 +98,17 @@ alongside the answer file.
 
 After install, the hash lives at `/root/.password-hash` on the host.
 
-### 5.2 `frag/30-create-guests.sh` — fetch template + inject hash
+### 5.2 `frag/25-desktop-control.sh` — vmctl keypair (runs before frag/30)
+
+Creates the `vmctl` user, generates the control keypair, installs sudoers
+and the `vmctl-host` script, and stages the private key for frag/30 to
+embed in the desktop seed. Full implementation in Spec 07 §3.1.
+
+### 5.3 `frag/30-create-guests.sh` — NoCloud seeds, guest creation
+
+Runs after frag/25. Reads password hash + staged vmctl private key.
+Fetches user-data templates from GitHub, injects placeholders, builds
+NoCloud seed ISOs (`genisoimage`), creates VMs with Ubuntu ISO + seed.
 
 ```bash
 # --- Configuration ---
@@ -99,6 +116,7 @@ GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
 GITHUB_REF="${PERSONALIZATION_REF:-main}"
 BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_REF}"
 PASSWORD_HASH_FILE="/root/.password-hash"
+VMCTL_KEY_FILE="/root/.nested-dev/vmctl-priv-staged"
 
 # --- Read password hash ---
 if [ ! -f "$PASSWORD_HASH_FILE" ]; then
@@ -106,81 +124,135 @@ if [ ! -f "$PASSWORD_HASH_FILE" ]; then
 fi
 PASS_HASH="$(cat "$PASSWORD_HASH_FILE")"
 
+# --- Read vmctl private key (base64 for desktop injection) ---
+VMCTL_KEY_B64=""
+if [ -f "$VMCTL_KEY_FILE" ]; then
+    VMCTL_KEY_B64=$(base64 -w0 "$VMCTL_KEY_FILE")
+fi
+
 # --- Create NoCloud seed directory ---
 SEED_DIR="/var/lib/vz/template/cidata"
 mkdir -p "$SEED_DIR"
 
-# --- Fetch templates and inject password hash ---
+# --- Fetch templates and inject placeholders ---
 for guest in desktop llm dev; do
     TEMPLATE_URL="${BASE_URL}/${guest}/user-data/user-data"
     SEED_FILE="${SEED_DIR}/${guest}-user-data"
 
-    if ! wget -q "$TEMPLATE_URL" -O "$SEED_FILE" 2>/dev/null; then
+    if ! wget -q "$TEMPLATE_URL" -O "${SEED_DIR}/${guest}-template" 2>/dev/null; then
         log "WARNING: Could not fetch ${guest} user-data from GitHub"
         continue
     fi
 
-    # Substitute password hash (templates have CHANGE_ME_HASHED)
-    sed -i "s|CHANGE_ME_HASHED|${PASS_HASH}|g" "$SEED_FILE"
+    # Substitute password hash + vmctl key (desktop only)
+    sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
+        -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
+        "${SEED_DIR}/${guest}-template" > "$SEED_FILE"
 
     # Write meta-data (empty, required by NoCloud)
     echo "instance-id: ${guest}-$(date +%s)" > "${SEED_DIR}/${guest}-meta-data"
+
+    # Build seed ISO
+    GENISOIMAGE_OPTS="-r -V cidata -joliet-long"
+    genisoimage $GENISOIMAGE_OPTS -o "${SEED_DIR}/${guest}-seed.iso" \
+        "${SEED_FILE}" "${SEED_DIR}/${guest}-meta-data"
 
     log "NoCloud seed prepared: ${guest}"
 done
 ```
 
-### 5.3 VM creation with NoCloud seed
+### 5.4 VM creation with NoCloud seed
 
 ```bash
-# Desktop (VM 100)
+# Desktop (VM 100) — started immediately
 if ! qm status 100 >/dev/null 2>&1; then
+    DESKTOP_HOSTPCI=""
+    if [ -n "$IGPU_IDS" ]; then
+        DESKTOP_HOSTPCI="--hostpci0 ${IGPU_IDS},pcie=1,x-vga=0"
+    fi
+
     qm create 100 \
         --name desktop \
         --memory 8192 --cores 4 --cpu host \
         --scsihw virtio-scsi-single \
-        --scsi0 local-lvm:8 \
         --net0 virtio=52:54:00:00:01:00,bridge=vmbr0 \
         --bios ovmf --machine q35 --vga none \
         --serial0 socket --agent enabled=1 \
-        --ide2 "${SEED_DIR}/desktop-user-data,media=cdrom" \
+        $DESKTOP_HOSTPCI \
+        --ide0 "${SEED_DIR}/desktop-user-data,media=cdrom" \
         --boot order=scsi0
-    # GPU passthrough applied if detected (see 5.4)
     qm start 100
     log "VM 100 (desktop) created and started"
 fi
 ```
 
-### 5.4 GPU passthrough
+GPU passthrough: `qm set 100 --hostpci0 "${IGPU_IDS},pcie=1,x-vga=0"`
+applied inline if detected.
 
-Apply inline at creation time (current `frag/30` already detects GPUs):
+### 5.5 LLM (VM 101) — started immediately
 
-```bash
-if [ -n "$IGPU_IDS" ]; then
-    qm set 100 --hostpci0 "${IGPU_IDS},pcie=1,x-vga=0"
-fi
-```
+Same pattern as desktop; add GPU passthrough and GeForce workaround.
+Data volume: `qm set 101 --scsi1 local-lvm:500,size=500G`.
 
-### 5.5 LLM data volume
+### 5.6 Dev template (VM 102) — provisioned once, then template
 
 ```bash
-if ! qm status 101 >/dev/null 2>&1; then
-    qm create 101 \
-        --name llm \
-        ... (same pattern as desktop) \
-        --ide2 "${SEED_DIR}/llm-user-data,media=cdrom" \
+# Dev template (VM 102) — provisioned once, then converted to template
+if ! qm status 102 >/dev/null 2>&1; then
+    qm create 102 \
+        --name dev-template \
+        --memory 8192 --cores 4 --cpu host \
+        --scsihw virtio-scsi-single \
+        --net0 virtio=52:54:00:00:01:02,bridge=vmbr0,firewall=1 \
+        --bios ovmf --machine q35 --vga none \
+        --serial0 socket --agent enabled=1 \
+        --ide0 "${SEED_DIR}/dev-user-data,media=cdrom" \
         --boot order=scsi0
-    qm set 101 --scsi1 local-lvm:500,size=500G
-    # GPU passthrough + GeForce workaround
-    qm start 101
+    qm start 102
+    log "VM 102 (dev-template) created and starting for provisioning"
+fi
+
+# --- Provisioning gate: wait for first-boot to complete ---
+provisioning_timeout=600  # 10 minutes
+elapsed=0
+while [ $elapsed -lt $provisioning_timeout ]; do
+    if qm guest exec 102 -- test -f /var/log/dev-firstboot.log >/dev/null 2>&1; then
+        # Check if first-boot script has disabled itself (success marker)
+        if qm guest exec 102 -- grep -q "dev first-boot complete" /var/log/dev-firstboot.log >/dev/null 2>&1; then
+            log "VM 102 first-boot complete"
+            break
+        fi
+    fi
+    sleep 10
+    elapsed=$((elapsed + 10))
+done
+
+if [ $elapsed -ge $provisioning_timeout ]; then
+    log "WARNING: VM 102 provisioning timed out after ${provisioning_timeout}s"
+    log "  Complete provisioning manually, then run: qm template 102"
+else
+    # Clean identity for future clones
+    qm guest exec 102 -- cloud-init clean 2>/dev/null || true
+    qm guest exec 102 -- /bin/bash -c 'truncate -s 0 /etc/machine-id && rm -f /etc/ssh/ssh_host_*' 2>/dev/null || true
+    qm shutdown 102 2>/dev/null || true
+    # Wait for shutdown
+    sleep 5
+    while qm status 102 2>/dev/null | grep -q "running"; do sleep 2; done
+    qm template 102
+    log "VM 102 converted to template"
 fi
 ```
 
-### 5.6 Idempotency
+### 5.7 Per-project dev VMs — created on demand (Spec 07)
 
-- VM exists and running -> skip
-- VM exists, stopped, autoinstall complete -> start
-- VM doesn't exist -> create, seed, start
+Not created by frag/30. Created via `devctl add` from the desktop, which
+delegates to `vmctl-host` on the host. All clones are created **stopped**.
+
+### 5.8 Idempotency
+
+- VM 100/101 exist and running → skip
+- VM 102 exists as template → skip
+- VM doesn't exist → create, seed, start (or template for 102)
 
 ## 6. End-to-end flow
 
@@ -202,16 +274,50 @@ Workstation                         Host (PVE)
                                     4. First boot -> provision-host.sh
                                       10-gpu-passthrough.sh
                                       20-memory-swap.sh
+                                      25-desktop-control.sh:
+                                        create vmctl user
+                                        generate control keypair
+                                        install sudoers + vmctl-host
                                       30-create-guests.sh:
                                         read /root/.password-hash
+                                        read vmctl private key
                                         fetch user-data templates
                                           from GitHub (placeholders)
-                                        substitute hash -> NoCloud seeds
-                                        qm create + qm start
-                                        -> autoinstall runs
-                                        -> first-boot scripts fetch
-                                           from GitHub, install stack
-                                      90-finalize.sh
+                                        substitute hash + vmctl key
+                                        build NoCloud seed ISOs
+                                        qm create + start (100/101)
+                                        qm create + start 102
+                                          provisioning gate
+                                          cloud-init clean
+                                          qm template 102
+                                      90-finalize.sh:
+                                        networking, firewall, dnsmasq
+                                        add INPUT rule for desktop:22
+```
+
+Desktop first boot:
+```
+                                    5. VM 100 autoinstall runs
+                                      -> first-boot scripts fetch
+                                         from GitHub, install stack
+                                      -> installs devctl + vmctl key
+                                      -> desktop ready for control
+```
+
+Dev VM lifecycle (after host + desktop provisioned):
+```
+Desktop                             Host (PVE)
+-------                             ----------
+6. devctl add nested          -->    vmctl-host: clone 102 -> 103
+                                     add dnsmasq + hosts + inventory
+                                     VM 103 created STOPPED
+
+7. devctl start 103           -->    qm start 103
+                                     -> clone boots (provisioned disk)
+                                     -> dev-firstboot.sh runs
+                                     -> dev-nested-provision.sh runs
+                                     -> nested_dev repo cloned
+                                     -> Docker images pulled
 ```
 
 ## 7. What comes from where
@@ -249,5 +355,10 @@ Workstation                         Host (PVE)
 |---|---|
 | `provision/host/build-iso.sh` | Copy `keys/password-hash` to ISO root |
 | `provision/host/answer-host.toml` | Add `persist-password-hash` late-command |
-| `provision/host/frag/30-create-guests.sh` | Rewrite: fetch templates, inject hash, create with NoCloud, start VMs |
+| `provision/host/frag/25-desktop-control.sh` | **New**: vmctl user, keypair, sudoers, staging |
+| `provision/host/frag/30-create-guests.sh` | Rewrite: NoCloud seeds, inject hash + vmctl key, create VMs, provisioning gate for 102 |
+| `provision/host/frag/90-finalize.sh` | Add INPUT rule for desktop→host SSH (port 22) |
+| `provision/host/vmctl/vmctl-host` | **New**: restricted control stub (Spec 07) |
+| `provision/host/vmctl/sudoers` | **New**: vmctl sudoers drop-in (Spec 07) |
+| `desktop/user-data/user-data` | Add `__VMCTL_PRIV_B64__` late-command placeholder |
 | `specs/06-guest-iso-transport.md` | This file |

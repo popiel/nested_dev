@@ -17,10 +17,14 @@ virtualization setup from install media, per `README.md`:
    where attached).
 3. **LLM guest (vm 101)**: Ubuntu Server VM that owns the discrete GPU(s)
    via VFIO and runs CUDA / LLM inference, Docker-based.
-4. **Dev guest(s) (vm 102+, 200–249 reserved)**: one Ubuntu Server VM per
-   software project. Each is primarily disk + Docker engine; all dev work
-   (AI harness, compiles) runs in ephemeral Docker containers, often with
-   bind-mounted disk access. Network severely constrained.
+4. **Dev template (vm 102)**: Ubuntu Server VM used as the clone source for
+   all per-project dev VMs. Created once at host first boot from ISO+NoCloud
+   seed, provisioned, then converted to a PVE template (never auto-started).
+5. **Dev project VMs (vm 103+)**: cloned on demand from the template via
+   `devctl` from the desktop VM. Each hosts one software project. Disk +
+   Docker engine only; dev work runs in ephemeral containers. Network
+   severely constrained. Created stopped; started/stopped via `devctl`.
+6. **Reserved (vm 200–249)**: future workload guests.
 
 No significant utilities run on the host. Additional workload guests can be
 added later without touching the ISO.
@@ -52,10 +56,14 @@ Rationale for each resolution is recorded in §7.
 |      + Ollama/vLLM containers; models on /data/models                 |
 |      192.168.100.101 (lychee-llm / lychee-llm.wolfskeep.com)         |
 |                                                                       |
-|  vm 102+ dev-<project> (one per project, §6 of Spec 04)              |
-|  '-- Ubuntu Server 26.04 + Docker engine only, no GPUs               |
-|      Ephemeral containers + bind mounts; egress-deny default          |
-|      192.168.100.102+ (lychee-dev-<project>)                          |
+|  vm 102    dev-template (clone source, PVE template)                  |
+|  '-- Ubuntu Server 26.04 + Docker engine; never auto-started          |
+|      192.168.100.102 (lychee-dev-template)                            |
+|                                                                       |
+|  vm 103+   dev-<project> (on demand via devctl, Spec 07)              |
+|  '-- Cloned from 102; stopped unless started by desktop               |
+|      192.168.100.103+ (lychee-dev-<project>)                          |
+|      vm 103 = dev-nested (nested_dev repo, Spec 08)                   |
 |                                                                       |
 |  vm 200..249   (reserved: future workload guests)                     |
 +-----------------------------------------------------------------------+
@@ -74,11 +82,11 @@ console/management is via SSH, Proxmox web UI, or serial console.
 | VM IDs | `100=desktop`, `101=llm`, `102+=dev-<project>`, `200–249` reserved | `specs-ds4` convention wins; `specs-mimo` (`100=llm`, `200=desktop`, `9001/9002` templates) is superseded |
 | Host storage | `ext4` root + `local-lvm` thin for guest disks + 4–8 GB swap (file or partition) | `specs-mimo` simplicity wins; ZFS `rpool` allowed as documented variant in Spec 01, not default |
 | Memory model (32 GB host) | Host hard-capped 2 GB; Desktop 8 GB / 4 cores; LLM 16 GB / 6 cores; each Dev 8 GB / 4 cores; QEMU balloon + ZRAM (zstd, 50%) + 4 GB disk swap; 64 GB+ tier: LLM 24 GB / 8 cores | 32 GB is the baseline; 16 GB was the original small-host profile (retained as scale-down path in scripts) |
-| Guest media build | `autoinstall` (Subiquity) ISO per guest → host-mediated NoCloud seed at VM creation (Spec 06) | Guest ISOs eliminated; host fetches user-data from GitHub, injects password hash, boots VM with cloud-init seed |
+| Guest media build | `autoinstall` (Subiquity) ISO per guest → host-mediated NoCloud seed at VM creation (Spec 06) | Host fetches user-data from GitHub, injects password hash (+ vmctl key for desktop), builds seed ISO, boots VM with NoCloud seed. No golden qcow2 files. |
 | GPU driver delivery | Golden images are **GPU-agnostic**; driver + CUDA + serving stack installed on **first boot from official upstreams** | `specs-ds4` wins; `specs-mimo` baked `nvidia-driver-590-server` into FAI image — rejected (ties image to driver/GPU, needs GPU builder) |
 | Desktop session | i3-gaps + dmenu + xrdp + lightdm (default, 32 GB friendly); GNOME + `gnome-remote-desktop` optional profile | i3 is lightweight tiling WM; lightdm for local console on passed-through iGPU; GNOME retained for HW-encode use cases |
 | LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
-| Dev model | Docker engine only, ephemeral containers, bind mounts, egress-deny | From `README.md`; absent in both predecessors; new Spec 04 |
+| Dev model | Docker engine only, ephemeral containers, bind mounts, egress-deny. Template 102 (clone source) created at host first boot, converted to PVE template. Per-project VMs 103+ cloned on demand via `devctl` from desktop, created stopped (Spec 07). | Spec 04 (toolchain) + Spec 07 (lifecycle) + Spec 08 (nested dev) |
 | Host networking | Routed: `$PHYS_NIC` DHCP from LAN + private `vmbr0` (192.168.100.1/24); dnsmasq on host serves DHCP/DNS to VMs; host NATs VM egress via MASQUERADE; iptables firewall with per-VM egress policy (desktop=unrestricted, LLM=HTTPS-only, dev=denied, host=HTTPS/DNS/NTP-only) | Replaces bridged design; VMs not directly addressable from LAN; dnsmasq gives predictable IPs without depending on external DHCP |
 | Provisioning model | Answer file + provisioner/first-boot scripts fetched from `popiel/nested_dev` GitHub at install/first boot, pinned to `<REF>` (branch/tag/SHA) | `specs-ds4` discipline wins over mimo's `main`-branch fetch |
 | **Sourcing policy** | GitHub serves **only files authored in this repo** (answer file, provisioner scripts/fragments, `user-data`, first-boot scripts, network fragments). Every third-party artifact (PVE/Ubuntu ISOs, Ubuntu archive packages, `linux-firmware`, NVIDIA driver/CUDA repo, Ollama, iPXE, firmware) is fetched **direct from its official upstream** — never vendored here | From `specs-ds4` 00 §3, retained verbatim |
@@ -103,10 +111,15 @@ provision/
     answer-host.toml           # PVE 9.2 installer answer file (Spec 01 §4)
     build-iso.sh               # host ISO builder (Spec 01 §4)
     provision-host.sh          # first-boot entry point (Spec 01 §5)
+    refresh-guests.sh          # operator-run template rebuild (Spec 08 §8.2)
     frag/10-gpu-passthrough.sh # IOMMU + VFIO (Spec 01 §5.1)
     frag/20-memory-swap.sh     # ZRAM + swap, balloon guidance (Spec 01)
-    frag/30-create-guests.sh   # qm create 100/101/102+ (Spec 01 §5.2)
-    frag/90-finalize.sh        # screening, repo config (Spec 01 §5.3)
+    frag/25-desktop-control.sh # vmctl user, keypair, sudoers (Spec 07 §3.1)
+    frag/30-create-guests.sh   # NoCloud seeds, qm create 100/101/102 (Spec 06)
+    frag/90-finalize.sh        # screening, networking, firewall (Spec 01 §5.3)
+    vmctl/
+      vmctl-host               # restricted control stub for dev VMs (Spec 07 §3.2)
+      sudoers                  # vmctl sudoers drop-in (Spec 07 §3.3)
   network/
     vmbr0-*.conf               # netplan/iptables fragments
     dnsmasq.conf               # DHCP + DNS for VMs on vmbr0
@@ -115,6 +128,7 @@ provision/
   ubuntu-release.conf          # shared Ubuntu version + URLs
 desktop/
   desktop-firstboot.sh        # fetched inside VM 100 on first boot
+  devctl                      # desktop-side dev VM control wrapper (Spec 07 §4.1)
   user-data/{meta-data,user-data}
 llm/
   llm-firstboot.sh             # fetched inside VM 101 on first boot
@@ -122,6 +136,15 @@ llm/
 dev/
   dev-firstboot.sh             # fetched inside VM 102+ on first boot
   docker/                      # Dockerfiles for lazy-build toolchain
+    Dockerfile.java            # dev-java (Spec 04 §3)
+    Dockerfile.scala           # dev-scala (Spec 04 §3)
+    Dockerfile.sbt             # dev-sbt (Spec 04 §3)
+    Dockerfile.opencode        # dev-opencode (Spec 04 §3)
+    Dockerfile.nested          # dev-nested-build (Spec 08 §5)
+  tools/
+    nested                     # build toolchain wrapper for nested_dev (Spec 08 §6.1)
+    dev-refresh-images         # rebuild all tool images (Spec 08 §6.2)
+    dev-nested-provision.sh    # one-time nested_dev repo setup (Spec 08 §7)
   user-data/{meta-data,user-data}
 specs/                         # this documentation set (merged)
 keys/                          # gitignored except *.pub and *.asc
@@ -146,11 +169,17 @@ specs).
 1. Edit and push provisioning inputs; set `PERSONALIZATION_REF` to a branch, tag, or SHA.
 2. Spec 01 — build and verify the host install media against the pinned REF
    (`proxmox-auto-install-assistant verify` + test boot).
-3. Spec 02 — build the desktop golden image (26.04 Desktop autoinstall).
-4. Spec 03 — build the LLM golden image (26.04 Server autoinstall, no GPU pkgs).
-5. Spec 04 — build the dev golden image (26.04 Server autoinstall, Docker only).
-6. Provision host, import golden images, start guests, run acceptance tests
-   (all against the same pinned REF).
+3. Spec 02 — desktop user-data + first-boot scripts (26.04 Desktop, NoCloud seed).
+4. Spec 03 — LLM user-data + first-boot scripts (26.04 Server, NoCloud seed).
+5. Spec 04 — dev user-data + first-boot scripts (26.04 Server, NoCloud seed, Docker only).
+6. Spec 07 — dev fleet lifecycle: vmctl/vmctl scripts, devctl, firewall additions.
+7. Spec 08 — nested dev repo VM: Dockerfile.nested, nested wrapper, dev-refresh-images.
+8. Provision host (host first boot): host ISO + first-boot provisioner creates
+   Desktop (100) and LLM (101) with NoCloud seeds and starts them; creates dev
+   template (102) with NoCloud seed, provisions it once, converts to PVE template.
+9. Desktop first boot: installs devctl + vmctl key; starts working.
+10. First `devctl add nested` creates VM 103; `devctl start 103` provisions it.
+11. Run acceptance tests (all against the same pinned REF).
 
 ## 7. What was merged / rejected (traceability to predecessors)
 

@@ -54,6 +54,10 @@ Edit `provision/personalization.sh` with your identity:
 No other files need editing — all build scripts and first-boot scripts
 source this shared config.
 
+The first dev VM (`dev-nested` for working on this repo) is created via
+`devctl add nested` from the desktop after provisioning completes
+([Spec 08](specs/08-nested-dev-repo-vm.md)).
+
 ### 3. Generate a password hash
 
 All three guest VMs share the same login password. Generate a yescrypt hash
@@ -161,9 +165,12 @@ This ISO contains:
    - Persists the password hash to `/root/.password-hash`
    - Fetches the provisioner from GitHub
    - Configures networking, GPU passthrough, dnsmasq, iptables
+   - Creates `vmctl` user + control keypair (Spec 07)
    - Fetches user-data templates from GitHub
-   - Injects password hash into templates
-   - Creates and starts guest VMs (Desktop, LLM, Dev)
+   - Injects password hash + vmctl key into templates
+   - Builds NoCloud seed ISOs (Spec 06)
+   - Creates and starts Desktop (100) + LLM (101)
+   - Creates dev-template (102), provisions it, converts to PVE template
    - Guest autoinstall runs, then first-boot scripts fetch from GitHub
 
 ### Step 3 — Verify
@@ -173,17 +180,20 @@ This ISO contains:
 ssh -p 2222 root@<lan-ip>
 
 # Check guest VMs
-qm status 100   # desktop
-qm status 101   # llm
-qm status 102   # dev-template
+qm status 100   # desktop (running)
+qm status 101   # llm (running)
+qm status 102   # dev-template (template, never started)
 
 # Check first-boot logs
 tail -f /var/log/pve-firstboot.log
+
+# From the desktop (via RDP or SSH):
+devctl list     # shows desktop, llm, dev-template
 ```
 
-Guest VMs should be running. First-boot scripts install remaining
-packages (NVIDIA drivers, Docker, Ollama, etc.) — this takes several
-minutes on first boot.
+Desktop and LLM should be running. Dev-template (102) is a PVE template
+(never auto-started). First-boot scripts install remaining packages
+(NVIDIA drivers, Docker, Ollama, etc.) — this takes several minutes.
 
 ## Network topology
 
@@ -195,9 +205,11 @@ minutes on first boot.
   [ PVE Host ]      192.168.14.x (management)
        |             192.168.100.1/24 (vmbr0, dnsmasq)
        |
-       +--- Desktop   192.168.100.100  (bastion, display, SSH jump)
-       +--- LLM       192.168.100.101  (Ollama, GPU passthrough)
-       +--- Dev       192.168.100.102+ (Docker, per-project)
+       +--- Desktop      192.168.100.100  (bastion, display, SSH jump)
+       +--- LLM          192.168.100.101  (Ollama, GPU passthrough)
+       +--- Dev template 192.168.100.102  (PVE template, clone source)
+       +--- Dev nested   192.168.100.103  (nested_dev repo, on demand)
+       +--- Dev <name>   192.168.100.103+ (other projects, on demand)
 ```
 
 ## Upgrading Ubuntu version
@@ -226,5 +238,8 @@ output/
 | `Missing: keys/password-hash` | Run `mkpasswd -m yescrypt > keys/password-hash` |
 | Build fails on WSL/older Ubuntu | Use a Ubuntu 24.04+ host; older distros may lack yescrypt support in `mkpasswd` |
 | Guest VMs not created | Check `/var/log/pve-firstboot.log`; ensure host has internet for GitHub fetches |
-| Guest VMs created but not running | Run `qm start <vmid>` manually; check serial console via `qm terminal <vmid>` |
+| Desktop/LLM created but not running | Run `qm start <vmid>` manually; check serial console via `qm terminal <vmid>` |
+| Dev template not converted to template | Check provisioning gate in `/var/log/pve-firstboot.log`; manually: `qm guest exec 102 -- cloud-init clean` + `qm shutdown 102` + `qm template 102` |
+| Dev template exists but can't start | Expected — it's a PVE template. Use `devctl add <project>` to clone it |
+| Dev VM not created by devctl | Check `/var/log/nested-dev-vmctl.log` on host; verify `devctl list` shows template 102 |
 | Guest first-boot stuck | Check `/var/log/desktop-firstboot.log` (or llm/dev variant); ensure host MASQUERADE is working |

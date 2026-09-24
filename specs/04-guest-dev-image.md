@@ -2,6 +2,11 @@
 
 Status: Draft (new; no predecessor — closes the `README.md` gap)
 Pinned versions: Ubuntu Server **26.04 LTS (Resolute Raccoon)**, Proxmox VE **9.2**
+Supersedes: Spec 04 §5.3 (manual `qm clone` block) — replaced by `devctl`
+            lifecycle (Spec 07). Golden image rebuild replaced by template
+            refresh (Spec 08 §8.2).
+Depends on: Spec 01 (host), Spec 05 (personalization), Spec 06 (guest
+            provisioning), Spec 07 (dev fleet lifecycle), Spec 08 (nested dev)
 
 ## 1. Purpose and scope
 
@@ -146,19 +151,37 @@ Fetched at `<REF>`; logs to `/var/log/dev-firstboot.log`; self-disables.
 9. **Hostname** — `hostnamectl set-hostname dev-vm`; self-disable
    `systemctl disable --now dev-firstboot`.
 
-### 5.3 Per-project clone contract (operator, not in golden)
+### 5.3 Per-project clone contract (`devctl` from desktop, Spec 07)
+
+Dev VMs are created on demand from the desktop via `devctl`. The host-side
+`vmctl-host` script (Spec 07 §3.2) handles cloning, MAC allocation, dnsmasq
+registration, and inventory. All clones are created **stopped**.
 
 ```bash
-qm clone <dev-golden-vmid> 102 --name dev-alpha --full
-qm set 102 --memory 4096 --cores 4 --cpu host
-qm set 102 --ciuser ${PERSONALIZATION_USERNAME} --sshkeys ~/.ssh/authorized_keys
-# optional per-project data volume:
-# qm set 102 --scsi1 local-lvm:50,size=100G  # mounted at /work/alpha
-qm start 102
+# From the desktop:
+devctl add <project-name>          # creates dev-<name>, stopped
+devctl start <name|vmid>           # starts the VM (first-boot runs)
+devctl stop <name|vmid>            # graceful shutdown
+devctl kill <name|vmid>            # force stop
+devctl log <name|vmid>             # tail first-boot log
+devctl ssh <name|vmid> [cmd...]    # SSH to dev VM directly
+devctl list                        # list all dev VMs
 ```
 
+The `vmctl-host` script on the host:
+- Clones template 102 → next available VMID (103+).
+- Sets deterministic MAC (`52:54:00:00:02:XX` where XX = vmid & 255).
+- Adds dnsmasq static lease + DNS entry in `/etc/dnsmasq.d/zz-dev.conf`.
+- Appends `/etc/hosts` entry.
+- Updates `/etc/nested-dev/inventory`.
+
+VMIDs 103–249 are the dev range. The dev-template (102) is a PVE template
+and cannot be started directly — this is the hard guarantee that dev VMs are
+never auto-started.
+
 Set unique hostname, regenerate `machine-id`/SSH keys via cloud-init,
-mount `/work/<project>`, record project→VMID mapping in ops docs.
+mount `/work/<project>` as per-project data volume, record project→VMID
+mapping in inventory (automated by `vmctl-host`).
 
 ### 5.5 Ephemeral-container + wrapper-script pattern
 
@@ -269,12 +292,24 @@ exec docker run --rm \
 No long-lived mutable containers; no toolchain baked into the VM; state
 lives in `/work`, containers are disposable.
 
-## 6. Image build + cleanup
+## 6. Image rebuild and template refresh
 
-Same discipline as Specs 02/03 §6: throwaway builder, `virt-sysprep`
-(host keys, machine-id, logs, history), `zerofree`, output to
-`output/dev-golden.qcow2` + SHA256 + `user-data` hash in `output/MANIFEST`,
-delivered to `payloads/` for `import-from`/clone (Spec 01 §5.3).
+Under NoCloud (Spec 06), guest VMs install from the official Ubuntu ISO + NoCloud
+seed — there are no golden qcow2 files to build. The "image" is the **template
+VM 102**, rebuilt via the provisioning gate sequence (Spec 07 §6):
+
+1. `qm destroy 102` (or operator-run `refresh-guests.sh`).
+2. `frag/30` re-creates VM 102 from ISO + seed at current `PERSONALIZATION_REF`.
+3. Provisioning gate: poll until first-boot completes.
+4. `cloud-init clean` + clear machine-id/SSH host keys.
+5. `qm shutdown` → `qm template 102`.
+
+**Tool image refresh** (all dev VMs): run `dev-refresh-images` (Spec 08 §6.2)
+to rebuild java/scala/sbt/opencode/nested-build images with `--pull`. Digests
+logged to `~/.local/share/dev-images-manifest`.
+
+**Per-project volume** is not part of the image — mounted by the operator or
+`vmctl-host add` at clone time.
 
 ## 7. Acceptance
 
@@ -293,7 +328,8 @@ delivered to `payloads/` for `import-from`/clone (Spec 01 §5.3).
 * Egress-deny holds: `curl` to archive/allowlisted endpoints succeeds,
   arbitrary egress fails; only SSH reachable inbound; PVE `firewall=1` set.
   Host iptables OUTPUT chain is the authoritative enforcement point.
-* Per-project clone produces unique hostname/keys/IP; golden has no identity.
+* Per-project clone via `devctl add` produces unique hostname/keys/IP; template
+  (102) has no project-specific identity (Spec 07).
 * `git config --global user.name` returns `${PERSONALIZATION_FULLNAME}` (§05);
   `git config --global user.email` returns `${PERSONALIZATION_EMAIL}`.
 * Rebuild at same REF reproduces (Docker pin + image SHAs recorded in MANIFEST).

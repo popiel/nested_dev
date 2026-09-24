@@ -50,7 +50,9 @@ layout, IOMMU assertions, and guest conventions.
 | Official `proxmox-ve_9.2-1.iso` (downloaded) | Unmodified; pin version + SHA256 in `provision/host/build-iso.sh` |
 | `provision/host/answer-host.toml` | Installer answer file (§4), 9.2 schema |
 | `provision/host/provision-host.sh` | First-boot entry point (§5) |
-| `provision/host/frag/*.sh` | Fragments: GPU, memory, guest creation, finalize |
+| `provision/host/frag/*.sh` | Fragments: GPU, memory, vmctl, guest creation, finalize |
+| `provision/host/vmctl/vmctl-host` | Restricted control stub for dev VMs (Spec 07) |
+| `provision/host/vmctl/sudoers` | vmctl sudoers drop-in (Spec 07) |
 | `provision/network/*.conf` | `vmbr0`/firewall/dnsmasq fragments applied by provisioner |
 | `output/` | Build products + `MANIFEST` (gitignored) |
 
@@ -156,33 +158,56 @@ echo '/swapfile none swap sw 0 0' >> /etc/fstab && swapon -a
 Host hard-capped at 2 GB; guests use QEMU ballooning (`balloon: 1`,
 `shares` as needed). On 32 GB hosts this fragment is a no-op beyond ZRAM.
 
-### 5.3 `frag/30-create-guests.sh` — guest definitions
+### 5.3 `frag/30-create-guests.sh` — guest definitions (NoCloud seeds)
 
-Golden `qcow2` paths come from `output/` / `payloads/` (Specs 02–04).
-Conventions (ds4 IDs win):
+NoCloud seeds (Spec 06): host fetches user-data templates from GitHub, injects
+password hash (+ vmctl private key for desktop), builds seed ISOs, and creates
+VMs with official Ubuntu ISO + NoCloud seed attached as cdrom. No golden qcow2
+files.
+
+New fragment: `frag/25-desktop-control.sh` (Spec 07) runs before frag/30 to
+create the `vmctl` user, generate the control keypair, install sudoers, and
+stage the private key for desktop seed injection. Frag/30 reads the staged
+key and embeds it into the desktop seed's `late-commands` as base64.
+
+Guest creation sequence:
 
 * **vm 100 desktop** (iGPU):
   `qm create 100 --name desktop --memory 8192 --cores 4 --cpu host
-  --scsihw virtio-scsi-single --net0 virtio,bridge=vmbr0 --ostype l26
-  --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
+  --scsihw virtio-scsi-single --net0 virtio=52:54:00:00:01:00,bridge=vmbr0
+  --ostype l26 --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
   --hostpci0 0000:00:02.0,pcie=1,x-vga=0
-  --ide0 local-lvm:0,import-from=<desktop-golden.qcow2> --boot order=scsi0`
-  plus audio function as `hostpci1` if in its own group. Runs i3-gaps +
-  xrdp + lightdm; Firefox + Chrome (snap); SSH client for bastion role;
-  X11 forwarding from dev VMs. RDP `:3389` is DNAT'd from LAN via host.
+  --cdrom0 <ubuntu-desktop-iso>
+  --ide0 "${SEED_DIR}/desktop-user-data,media=cdrom"
+  --boot order=scsi0`
+  Plus audio function as `hostpci1` if in its own group.
+  **Started immediately** (autoinstall + first-boot runs during frag/30 window).
 * **vm 101 llm** (dGPUs):
-  `qm create 101 --name llm --memory 10240 --cores 6 --cpu host
-  --scsihw virtio-scsi-single --net0 virtio,bridge=vmbr0 --ostype l26
-  --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
+  `qm create 101 --name llm --memory 16384 --cores 6 --cpu host
+  --scsihw virtio-scsi-single --net0 virtio=52:54:00:00:01:01,bridge=vmbr0
+  --ostype l26 --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
   --hostpci0 <DGPU0>,pcie=1 --hostpci1 <DGPU1>,pcie=1
-  --ide0 local-lvm:0,import-from=<llm-golden.qcow2>
-  --scsi1 local-lvm:200,size=200G --boot order=scsi0`
-  (size the data volume per host: 500G default on 32 GB hosts; 64 GB+ hosts
-   may increase further; one `hostpci` per dGPU + paired audio function).
-* **vm 102+ dev**: `qm create 10X --name dev-<project> --memory 8192 --cores 4
-  --net0 virtio,bridge=vmbr0,firewall=1 ... --ide0 ...import-from=<dev-golden.qcow2>`,
-  no `hostpci`. Full contract in Spec 04. Reserve 200–249 for future workload
-  guests (1 vCPU / 2 GB base, `vmbr0`, `local-lvm`).
+  --cdrom0 <ubuntu-server-iso>
+  --ide0 "${SEED_DIR}/llm-user-data,media=cdrom"
+  --scsi1 local-lvm:500,size=500G
+  --boot order=scsi0`
+  (size the data volume per host; one `hostpci` per dGPU + paired audio function).
+  GeForce workaround: `qm set 101 --args '-cpu host,kvm=off,hidden=1'`.
+  **Started immediately**.
+* **vm 102 dev-template**:
+  `qm create 102 --name dev-template --memory 8192 --cores 4 --cpu host
+  --scsihw virtio-scsi-single --net0 virtio=52:54:00:00:01:02,bridge=vmbr0,firewall=1
+  --ostype l26 --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
+  --cdrom0 <ubuntu-server-iso>
+  --ide0 "${SEED_DIR}/dev-user-data,media=cdrom"
+  --boot order=scsi0`
+  **Started for provisioning, then converted to template** (Spec 07 §6):
+  provisioning gate (poll `qm guest cmd` + log tail), `cloud-init clean`,
+  clear machine-id/SSH host keys, `qm shutdown`, `qm template`.
+  Template can never be started directly — ensures dev VMs are not auto-started.
+* **vm 103+ dev-\<project\>**: created on demand via `devctl add` (Spec 07),
+  cloned from template 102, **created stopped**. Per-project data volume
+  (`scsi1`) optional at clone time.
 
 Network default (`/etc/network/interfaces` managed by PVE; routed
 architecture):
@@ -253,7 +278,8 @@ PXE via `extract-dir` + HTTP/iPXE serving the same answer;
 2. SSH in: `/proc/cmdline` has `intel_iommu=on iommu=pt` (or AMD equiv);
    `lspci -nnk` shows `vfio-pci` on passthrough set; R4 group checks passed.
 3. `free -h` / `zramctl` show ZRAM + swap active (32 GB profile).
-4. `qm list` shows 100/101 (+102 template as applicable); `qm start` succeeds.
+4. `qm list` shows 100 (running), 101 (running), 102 (template). No other VMs.
+   `qm start 102` is rejected by PVE (template).
 5. **Network**:
    - `ip addr show vmbr0` shows `192.168.100.1/24`.
    - `systemctl status dnsmasq` active; `dnsmasq --test` clean.
@@ -264,7 +290,8 @@ PXE via `extract-dir` + HTTP/iPXE serving the same answer;
    - From LAN: `ssh root@<host-ip>` reaches desktop VM (DNAT).
    - From LAN: `mstsc <host-ip>:3389` reaches desktop VM (DNAT).
 6. RDP `:3389` reaches vm 100 (Spec 02); `nvidia-smi` in vm 101 lists dGPUs
-   (Spec 03); dev VM has no GPU and egress-deny holds (Spec 04).
+   (Spec 03); `qm status 102` shows template; `devctl add test` from desktop
+   creates vm 103 stopped; `devctl start 103` boots it (Spec 07).
 7. `/var/log/pve-firstboot.log` clean; unit disabled.
 
 ## 8. Known risks / mitigation
