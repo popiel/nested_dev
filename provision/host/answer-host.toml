@@ -28,6 +28,6 @@ ordering = "after-network"
 # Persist password hash for guest VM provisioning (§06)
 "persist-password-hash" = "sh -c 'cp /cdrom/password-hash /target/root/.password-hash && chmod 600 /target/root/.password-hash'"
 # Fetch full provisioner tree at pinned REF
-"fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/heads/__GITHUB_REF__ && tar -xzf nested_dev.tar.gz && mv nested_dev-__GITHUB_REF__/provision/host provision && rm -rf nested_dev.tar.gz nested_dev-__GITHUB_REF__ && chmod +x provision/provision-host.sh provision/frag/*.sh'"
+"fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/heads/__GITHUB_REF__ && tar -xzf nested_dev.tar.gz && mv nested_dev-__GITHUB_REF__/provision provision && rm -rf nested_dev.tar.gz nested_dev-__GITHUB_REF__ && chmod +x provision/host/provision-host.sh provision/host/frag/*.sh'"
 # Install systemd oneshot for first-boot provisioning
 "install-firstboot-unit" = "sh -c 'cat > /target/etc/systemd/system/pve-firstboot.service <<UNIT\n[Unit]\nDescription=PVE first boot provisioning\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/root/provision/provision-host.sh\n\n[Install]\nWantedBy=multi-user.target\nUNIT\nln -s /etc/systemd/system/pve-firstboot.service /target/etc/systemd/system/multi-user.target.wants/pve-firstboot.service'"
