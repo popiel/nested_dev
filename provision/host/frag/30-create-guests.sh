@@ -162,11 +162,12 @@ for guest in desktop llm dev; do
         continue
     fi
 
-    # Substitute password hash and vmctl key (desktop only)
+    # Substitute password hash, vmctl key, and GitHub ref
     sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
         -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
         -e "s|__PERSONALIZATION_USERNAME__|${PERSONALIZATION_USERNAME:-popiel}|g" \
         -e "s|__PERSONALIZATION_FULLNAME__|${PERSONALIZATION_FULLNAME:-T. Alexander Popiel}|g" \
+        -e "s|__GITHUB_REF__|${DEFAULT_REF}|g" \
         "${SEED_DIR}/${guest}-template" > "$SEED_FILE"
 
     # Write meta-data (empty, required by NoCloud)
