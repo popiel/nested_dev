@@ -39,6 +39,7 @@ FAIL=0
 for entry in "${IMAGES[@]}"; do
     IFS=':' read -r TAG FILENAME <<< "$entry"
     log "Rebuilding ${TAG}..."
+    # shellcheck disable=SC2086
     if docker build --pull --tag "${TAG}" \
         $BASE_ARGS \
         -f "${DOCKER_DIR}/${FILENAME}" "${DOCKER_DIR}" 2>&1; then

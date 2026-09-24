@@ -47,7 +47,8 @@ detect_gpu_pci() {
                 local audio_group="/sys/bus/pci/devices/0000:${audio_addr}/iommu_group/devices"
                 local gpu_group="/sys/bus/pci/devices/0000:${addr}/iommu_group/devices"
                 if [ -d "$audio_group" ] && [ -d "$gpu_group" ]; then
-                    if ! diff -q <(ls "$audio_group" | sort) <(ls "$gpu_group" | sort) >/dev/null 2>&1; then
+                    if ! diff -q <(find "$audio_group" -maxdepth 1 -type f -printf '%f\n' | sort) \
+                                 <(find "$gpu_group" -maxdepth 1 -type f -printf '%f\n' | sort) >/dev/null 2>&1; then
                         # Separate IOMMU group — include audio in passthrough
                         local audio_in_set=false
                         for existing_id in "${ids[@]}"; do

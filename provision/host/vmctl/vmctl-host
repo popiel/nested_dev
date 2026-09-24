@@ -15,6 +15,7 @@ die() { echo "ERROR: $*" >&2; log "REJECT: $*"; exit 1; }
 
 # --- Parse SSH_ORIGINAL_COMMAND or $@ ---
 CMD="${SSH_ORIGINAL_COMMAND:-$*}"
+# shellcheck disable=SC2086
 set -- $CMD  # re-split into positional
 
 VERB="${1:-}"

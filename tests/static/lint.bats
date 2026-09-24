@@ -12,7 +12,8 @@ load '../lib/helpers'
         -not -path '*/.git/*'); do
         # SC1091: can't follow dynamic source paths (expected)
         # SC2034: unused variables in sourced config files (expected)
-        run shellcheck -x -s bash -e SC1091,SC2034 "$script"
+        # SC2016: intentional single quotes in echo (e.g. .bashrc PATH export)
+        run shellcheck -x -s bash -e SC1091,SC2034,SC2016 "$script"
         if [ "$status" -ne 0 ]; then
             echo "FAIL: $script" >&2
             echo "$output" >&2
