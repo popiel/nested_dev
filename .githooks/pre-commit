@@ -1,28 +1,59 @@
 #!/usr/bin/env bash
-# pre-commit hook — block commits that include real password hashes
-# in user-data files. Install: git config core.hooksPath .githooks
+# pre-commit hook — block commits with password hashes + verify shell syntax
+# Install: git config core.hooksPath .githooks
 set -euo pipefail
 
-# Find staged user-data files
+FAIL=0
+
+# --- 1. Block real password hashes in user-data ---
 STAGED_USERDATA=$(git diff --cached --name-only --diff-filter=ACM | grep 'user-data/user-data$' || true)
 
-if [ -z "$STAGED_USERDATA" ]; then
-    exit 0
-fi
-
-# Check each staged file for real hashes
 for file in $STAGED_USERDATA; do
     if grep -q 'password: "[^C]' "$file" 2>/dev/null; then
         echo "ERROR: $file contains what looks like a real password hash." >&2
         echo "  Only the placeholder CHANGE_ME_HASHED may be committed." >&2
         echo "  The password hash is injected at host runtime (Spec 06), never on GitHub." >&2
-        exit 1
+        FAIL=1
     fi
-    if grep -q 'password: "CHANGE_ME_HASHED"' "$file" 2>/dev/null; then
-        continue
-    fi
-    # Catches: password: "x" where x is not C (start of CHANGE_ME_HASHED)
-    # Also catches empty or missing password line — let that through (different validation)
 done
 
-exit 0
+# --- 2. Shellcheck staged shell scripts ---
+STAGED_SH=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.sh$' || true)
+# Also check staged files without .sh extension that have a bash shebang
+STAGED_BASH=$(git diff --cached --name-only --diff-filter=ACM | while read -r f; do
+    if head -1 "$f" 2>/dev/null | grep -qE '^#!/usr/bin/env bash|^#!/bin/bash'; then
+        echo "$f"
+    fi
+done || true)
+
+ALL_SH=$(printf '%s\n%s' "$STAGED_SH" "$STAGED_BASH" | sort -u | grep -v '^$' || true)
+
+if [ -n "$ALL_SH" ]; then
+    if command -v shellcheck >/dev/null 2>&1; then
+        for script in $ALL_SH; do
+            if ! shellcheck -x -s bash "$script" 2>/dev/null; then
+                echo "WARNING: shellcheck found issues in $script" >&2
+                echo "  Fix before committing, or use: git commit --no-verify" >&2
+                FAIL=1
+            fi
+        done
+    else
+        echo "NOTE: shellcheck not installed — skipping syntax verification" >&2
+        echo "  Install: apt install shellcheck" >&2
+    fi
+fi
+
+# --- 3. Check for __CHANGE_ME__ placeholders (besides known ones) ---
+STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACM || true)
+KNOWN="CHANGE_ME_HASHED CHANGE_ME_DETECT_AT_PROVISION CHANGE_ME_AFTER_DOWNLOAD __PERSONALIZATION_USERNAME__ __PERSONALIZATION_FULLNAME__ __VMCTL_PRIV_B64__ __GITHUB_REF__"
+
+for file in $STAGED_ALL; do
+    # Skip binary files
+    file --mime-type "$file" 2>/dev/null | grep -q 'text/' || continue
+    if grep -n '__CHANGE_ME' "$file" 2>/dev/null | grep -v -F "$KNOWN" >/dev/null; then
+        echo "WARNING: $file contains __CHANGE_ME__ placeholders that should be replaced before commit" >&2
+        grep -n '__CHANGE_ME' "$file" 2>/dev/null | head -5 >&2
+    fi
+done
+
+exit $FAIL
