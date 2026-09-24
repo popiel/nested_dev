@@ -9,6 +9,7 @@ LOG="/var/log/desktop-firstboot.log"
 mkdir -p "$(dirname "$LOG")"
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
+die() { printf '%s FATAL: %s\n' "$(date -Is)" "$*" | tee -a "$LOG" >&2; exit 1; }
 
 # --- Source shared personalization (§05) ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,13 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${SCRIPT_DIR}/personalization.sh" ]; then
     . "${SCRIPT_DIR}/personalization.sh"
 else
-    # Fallback: hardcoded values (must match provision/personalization.sh)
-    PERSONALIZATION_USERNAME="popiel"
-    PERSONALIZATION_FULLNAME="T. Alexander Popiel"
-    PERSONALIZATION_EMAIL="tapopiel@gmail.com"
-    PERSONALIZATION_UID="1401"
-    PERSONALIZATION_GID="1401"
-    PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
+    die "personalization.sh not found at ${SCRIPT_DIR}/personalization.sh — cannot continue"
 fi
 
 log "=== desktop first-boot starting ==="
@@ -326,6 +321,17 @@ if [ -f "$VMCTL_KEY" ]; then
     chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "$VMCTL_KEY"
     log "vmctl key permissions set"
 fi
+
+# --- 10. Firewall ---
+log "Configuring firewall..."
+apt-get install -y --no-install-recommends ufw >/dev/null 2>&1 || true
+ufw default deny incoming 2>&1 | tee -a "$LOG"
+ufw default allow outgoing 2>&1 | tee -a "$LOG"
+ufw allow ssh 2>&1 | tee -a "$LOG"
+# Allow RDP from host only
+ufw allow from 192.168.100.1 to any port 3389 2>&1 | tee -a "$LOG"
+echo "y" | ufw enable 2>&1 | tee -a "$LOG" || true
+log "Firewall configured (deny incoming, allow outgoing, allow ssh, allow RDP from host)"
 
 # --- Self-disable ---
 log "=== desktop first-boot complete — disabling unit ==="

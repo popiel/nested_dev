@@ -36,6 +36,7 @@ case "$VERB" in
           -c 'provision/host/build-iso.sh'
         # Normalize ownership of output files (container runs as root)
         chown -R "${USER}:${USER}" "${NESTED_DEV}/output/" 2>/dev/null || true
+        chown -R "${USER}:${USER}" "${NESTED_DEV}/keys/" 2>/dev/null || true
         echo "[nested] Build complete. Output in ${NESTED_DEV}/output/"
         ;;
 

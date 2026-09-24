@@ -17,12 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${SCRIPT_DIR}/personalization.sh" ]; then
     . "${SCRIPT_DIR}/personalization.sh"
 else
-    PERSONALIZATION_USERNAME="popiel"
-    PERSONALIZATION_FULLNAME="T. Alexander Popiel"
-    PERSONALIZATION_EMAIL="tapopiel@gmail.com"
-    PERSONALIZATION_UID="1401"
-    PERSONALIZATION_GID="1401"
-    PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
+    die "personalization.sh not found at ${SCRIPT_DIR}/personalization.sh — cannot continue"
 fi
 
 log "=== dev first-boot starting ==="
@@ -91,11 +86,17 @@ docker pull eclipse-temurin:21-jre-jammy 2>&1 | tee -a "$LOG" &
 PID_JAVA=$!
 docker pull node:20-slim 2>&1 | tee -a "$LOG" &
 PID_NODE=$!
+docker pull python:3.12-slim 2>&1 | tee -a "$LOG" &
+PID_PYTHON=$!
+docker pull opencode/opencode:latest 2>&1 | tee -a "$LOG" &
+PID_OPENCODE=$!
 
 # Wait for all pulls
 FAIL=0
 wait $PID_JAVA || FAIL=1
 wait $PID_NODE || FAIL=1
+wait $PID_PYTHON || FAIL=1
+wait $PID_OPENCODE || FAIL=1
 
 if [ "$FAIL" -eq 1 ]; then
     log "WARNING: One or more base image pulls failed"
@@ -104,7 +105,7 @@ else
 fi
 
 # Log image SHAs
-for img in eclipse-temurin:21-jre-jammy node:20-slim; do
+for img in eclipse-temurin:21-jre-jammy node:20-slim python:3.12-slim opencode/opencode:latest; do
     sha=$(docker inspect --format='{{index .RepoDigests 0}}' "$img" 2>/dev/null || echo "unknown")
     log "  ${img}: ${sha}"
 done
@@ -113,14 +114,17 @@ done
 log "Installing Dockerfiles..."
 DOCKER_DIR="/opt/dev-docker"
 mkdir -p "$DOCKER_DIR"
-# Dockerfiles are embedded on the ISO at /dev/docker/
-if [ -d "${SCRIPT_DIR}/docker" ]; then
-    cp -r "${SCRIPT_DIR}/docker/"* "$DOCKER_DIR/"
-elif [ -d /dev/docker ]; then
-    cp -r /dev/docker/* "$DOCKER_DIR/"
-else
-    die "Dockerfiles not found on ISO"
-fi
+
+# Fetch Dockerfiles from GitHub at pinned REF
+GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
+GITHUB_REF="${PERSONALIZATION_REF:-main}"
+GITHUB_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_REF}"
+
+DOCKERFILES=(Dockerfile.java Dockerfile.nested Dockerfile.opencode Dockerfile.sbt Dockerfile.scala)
+for df in "${DOCKERFILES[@]}"; do
+    wget -q "${GITHUB_BASE}/dev/docker/${df}" -O "${DOCKER_DIR}/${df}" 2>/dev/null \
+        || log "WARNING: Could not fetch ${df} from GitHub"
+done
 chown -R root:root "$DOCKER_DIR"
 chmod -R 755 "$DOCKER_DIR"
 log "Dockerfiles installed to ${DOCKER_DIR}"
