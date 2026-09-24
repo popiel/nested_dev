@@ -236,12 +236,12 @@ Workstation                         Host (PVE)
 | `keys/password-hash` | Build workstation (gitignored) | No |
 | `keys/host_os_ed25519.pub` | Repo (committed) | Yes (public key) |
 
-## 9. Air-gapped fallback
+## 9. Open questions
 
-If GitHub is unreachable:
-- Host: provisioner scripts embedded on ISO (current behavior)
-- Guests: custom ISOs with baked-in user-data (built optionally via
-  `build-iso.sh`), SCP to host, attach as CD-ROM, boot manually
+- Should `frag/30` cache fetched templates locally (e.g.
+  `/root/.cache/cidata/`) to avoid re-fetching on re-runs?
+- Should the host serve the NoCloud seeds over HTTP for PXE boot, or
+  is direct attachment sufficient?
 
 ## 10. Files to create/modify
 
@@ -251,11 +251,3 @@ If GitHub is unreachable:
 | `provision/host/answer-host.toml` | Add `persist-password-hash` late-command |
 | `provision/host/frag/30-create-guests.sh` | Rewrite: fetch templates, inject hash, create with NoCloud, start VMs |
 | `specs/06-guest-iso-transport.md` | This file |
-
-## 11. Open questions
-
-- Should `frag/30` cache fetched templates locally (e.g.
-  `/root/.cache/cidata/`) to avoid re-fetching on re-runs?
-- Should there be a `--offline` flag that falls back to local ISOs?
-- Should the host serve the NoCloud seeds over HTTP for PXE boot, or
-  is direct attachment sufficient?

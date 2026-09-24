@@ -15,7 +15,7 @@ for file in $STAGED_USERDATA; do
     if grep -q 'password: "[^C]' "$file" 2>/dev/null; then
         echo "ERROR: $file contains what looks like a real password hash." >&2
         echo "  Only the placeholder CHANGE_ME_HASHED may be committed." >&2
-        echo "  The build-iso.sh scripts substitute the real hash from keys/password-hash at build time." >&2
+        echo "  The password hash is injected at host runtime (Spec 06), never on GitHub." >&2
         exit 1
     fi
     if grep -q 'password: "CHANGE_ME_HASHED"' "$file" 2>/dev/null; then

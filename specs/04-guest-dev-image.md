@@ -49,9 +49,13 @@ desktop access (Spec 02), host wiring (Spec 01 §5.3).
 | `ubuntu-26.04-live-server-amd64.iso` | Official, same pin as Spec 03 |
 | `dev/user-data/meta-data` | Empty |
 | `dev/user-data/user-data` | Autoinstall (§4) |
-| `dev/build-iso.sh` | Injects `autoinstall` param (same routes as Spec 02 §3) |
 | `dev/dev-firstboot.sh` | Docker + base image pulls + wrapper scripts, fetched at `<REF>` |
-| `dev/docker/Dockerfile.*` | Four Dockerfiles for tool images, embedded on ISO, built lazily |
+| `dev/docker/Dockerfile.*` | Four Dockerfiles for tool images, fetched from GitHub at first boot |
+
+Guest VMs are created by the host at first boot (Spec 06). The host
+fetches `dev/user-data/user-data` from GitHub at the pinned `<REF>`,
+injects the password hash from `/root/.password-hash`, and boots the VM
+with a NoCloud seed containing the assembled user-data.
 
 ### Container images (Dockerfiles in `dev/docker/`, built lazily by wrapper scripts)
 

@@ -12,3 +12,7 @@ PERSONALIZATION_EMAIL="tapopiel@gmail.com"
 PERSONALIZATION_UID="1401"
 PERSONALIZATION_GID="1401"
 PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
+
+# Repository and release tag (used in build manifests and first-boot comments)
+PERSONALIZATION_REPO="popiel/nested_dev"
+PERSONALIZATION_TAG="host_os_v0.1"

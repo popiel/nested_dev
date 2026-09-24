@@ -12,7 +12,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUTPUT_DIR="${REPO_ROOT}/output"
 ISO_DIR="${OUTPUT_DIR}/iso"
 WORK_DIR="${OUTPUT_DIR}/build-work"
-REF="host_os_v0.1"
+
+# Source shared personalization (§05)
+. "${REPO_ROOT}/provision/personalization.sh"
+REF="${PERSONALIZATION_TAG}"
 
 # PVE 9.2 ISO — pin version and SHA256
 PVE_ISO_URL="https://download.proxmox.com/iso/proxmox-ve_9.2-1.iso"
@@ -27,6 +30,10 @@ die() { printf '[build-iso] ERROR: %s\n' "$*" >&2; exit 1; }
 for cmd in wget xorriso; do
     command -v "$cmd" >/dev/null 2>&1 || die "Missing: $cmd (apt-get install xorriso)"
 done
+
+# Password hash (not committed — read at build time only)
+PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
+[ -f "$PASSWORD_HASH_FILE" ] || die "Missing: ${PASSWORD_HASH_FILE} (generate with mkpasswd)"
 
 mkdir -p "$ISO_DIR" "$WORK_DIR"
 
@@ -97,70 +104,51 @@ sed \
 
 log "Answer file generated: ${ANSWER_WORK}"
 
-# --- 5. Verify answer file with PVE tool ---
-# proxmox-auto-install-assistant is bundled with PVE installer or downloadable
-ASSISTANT=""
+# --- 4b. Verify answer file with PVE tool (optional, schema check only) ---
 if command -v proxmox-auto-install-assistant >/dev/null 2>&1; then
-    ASSISTANT="proxmox-auto-install-assistant"
-elif [ -f /proxmox-auto-install-assistant ]; then
-    ASSISTANT="/proxmox-auto-install-assistant"
-else
-    log "WARNING: proxmox-auto-install-assistant not found"
-    log "  Install from PVE repo or download from https://enterprise.proxmox.com"
-    log "  Skipping verification — answer file may have schema issues"
-    ASSISTANT=""
+    log "Verifying answer file schema..."
+    proxmox-auto-install-assistant verify "$ANSWER_WORK" || log "WARNING: Answer file schema check failed"
 fi
 
-if [ -n "$ASSISTANT" ]; then
-    log "Verifying answer file..."
-    "$ASSISTANT" verify "$ANSWER_WORK" || die "Answer file verification failed"
-    log "Answer file verified"
-fi
-
-# --- 6. Build autoinstall ISO ---
+# --- 5. Build autoinstall ISO (manual extraction — includes password hash) ---
 AUTO_ISO="${OUTPUT_DIR}/proxmox-ve_9.2-1_auto.iso"
+EXTRACT_DIR="${WORK_DIR}/iso-extract"
+rm -rf "$EXTRACT_DIR"
+mkdir -p "$EXTRACT_DIR"
 
-if [ -n "$ASSISTANT" ]; then
-    log "Building autoinstall ISO..."
-    "$ASSISTANT" prepare-iso \
-        "$PVE_ISO_PATH" \
-        --answer-file="$ANSWER_WORK" \
-        --rng-source=autorandom \
-        --output="$AUTO_ISO"
-else
-    # Manual fallback: extract ISO, modify grub, repackage
-    log "Building ISO manually (no proxmox-auto-install-assistant)..."
-    EXTRACT_DIR="${WORK_DIR}/iso-extract"
-    mkdir -p "$EXTRACT_DIR"
-    bsdtar -xf "$PVE_ISO_PATH" -C "$EXTRACT_DIR"
+log "Extracting PVE ISO..."
+bsdtar -xf "$PVE_ISO_PATH" -C "$EXTRACT_DIR"
 
-    # Patch GRUB config to add autoinstall parameter
-    for cfg in isolinux/txt.cfg boot/grub/grub.cfg; do
-        if [ -f "${EXTRACT_DIR}/${cfg}" ]; then
-            sed -i 's|append /boot/\(.*\)|append autoinstall ds=nocloud;s=http://localhost/ \1|' \
-                "${EXTRACT_DIR}/${cfg}"
-        fi
-    done
+# Patch GRUB/isolinux to add autoinstall parameter
+for cfg in isolinux/txt.cfg boot/grub/grub.cfg; do
+    if [ -f "${EXTRACT_DIR}/${cfg}" ]; then
+        sed -i 's|append /boot/\(.*\)|append autoinstall ds=nocloud;s=http://localhost/ \1|' \
+            "${EXTRACT_DIR}/${cfg}"
+        log "Patched ${cfg}"
+    fi
+done
 
-    # Copy answer file to ISO root as cidata
-    mkdir -p "${EXTRACT_DIR}/cidata"
-    cp "$ANSWER_WORK" "${EXTRACT_DIR}/cidata/user-data"
-    echo "#cloud-config" > "${EXTRACT_DIR}/cidata/meta-data"
+# Copy answer file + password hash to ISO root as cidata
+mkdir -p "${EXTRACT_DIR}/cidata"
+cp "$ANSWER_WORK" "${EXTRACT_DIR}/cidata/user-data"
+echo "#cloud-config" > "${EXTRACT_DIR}/cidata/meta-data"
+cp "$PASSWORD_HASH_FILE" "${EXTRACT_DIR}/password-hash"
+log "Copied answer file, meta-data, and password hash to ISO"
 
-    # Repackage ISO
-    cd "$EXTRACT_DIR"
-    xorriso -as mkisofs \
-        -o "$AUTO_ISO" \
-        -R -J -joliet-long \
-        -V "PVE-9-2-AUTO" \
-        -b isolinux/isolinux.bin \
-        -c isolinux/boot.cat \
-        -no-emul-boot \
-        -boot-load-size 4 \
-        -boot-info-table \
-        .
-    cd "$REPO_ROOT"
-fi
+# Repackage ISO
+log "Building autoinstall ISO..."
+cd "$EXTRACT_DIR"
+xorriso -as mkisofs \
+    -o "$AUTO_ISO" \
+    -R -J -joliet-long \
+    -V "PVE-9-2-AUTO" \
+    -b isolinux/isolinux.bin \
+    -c isolinux/boot.cat \
+    -no-emul-boot \
+    -boot-load-size 4 \
+    -boot-info-table \
+    .
+cd "$REPO_ROOT"
 
 log "Autoinstall ISO built: ${AUTO_ISO}"
 log "SHA256: $(sha256sum "$AUTO_ISO" | awk '{print $1}')"
@@ -177,6 +165,7 @@ Auto ISO: $(basename "$AUTO_ISO")
 Auto ISO SHA256: $(sha256sum "$AUTO_ISO" | awk '{print $1}')
 Target disk: ${DISK_SHORT}
 SSH key: ${SSH_KEY_FILE}
+Password hash: embedded in ISO (copied from keys/password-hash)
 EOF
 
 log "Manifest updated: ${MANIFEST}"

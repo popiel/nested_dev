@@ -11,3 +11,8 @@ Its network access will be severely constrained.
 Even so, the VM is intended to be primarily disk storage and docker engine,
 with all development tasks (running an AI harness, doing compiles, etc)
 delegated to ephemeral docker instances (often working with bind-mounted disk access).
+
+## Getting started
+
+See [BUILDING.md](BUILDING.md) for build prerequisites, one-time setup, the
+ISO build sequence, and deployment instructions.

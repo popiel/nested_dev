@@ -69,12 +69,12 @@ console/management is via SSH, Proxmox web UI, or serial console.
 
 | Decision | Default | Rationale / alternative |
 |---|---|---|
-| Host distro | Proxmox VE **9.2** (official ISO, SHA256 pinned in `build-iso.sh`) | `specs-mimo` 9.2 wins over `specs-ds4` 8.x; purpose-built KVM, first-class VFIO |
+| Host distro | Proxmox VE **9.2** (official ISO, SHA256 pinned in `provision/host/build-iso.sh`) | `specs-mimo` 9.2 wins over `specs-ds4` 8.x; purpose-built KVM, first-class VFIO |
 | Guest OS | Ubuntu **26.04 LTS** Desktop (vm 100) / Server (vm 101, 102+) | `specs-mimo` 26.04 wins over `specs-ds4` 24.04 per task instruction; `resolute` archive everywhere |
 | VM IDs | `100=desktop`, `101=llm`, `102+=dev-<project>`, `200–249` reserved | `specs-ds4` convention wins; `specs-mimo` (`100=llm`, `200=desktop`, `9001/9002` templates) is superseded |
 | Host storage | `ext4` root + `local-lvm` thin for guest disks + 4–8 GB swap (file or partition) | `specs-mimo` simplicity wins; ZFS `rpool` allowed as documented variant in Spec 01, not default |
 | Memory model (32 GB host) | Host hard-capped 2 GB; Desktop 8 GB / 4 cores; LLM 16 GB / 6 cores; each Dev 8 GB / 4 cores; QEMU balloon + ZRAM (zstd, 50%) + 4 GB disk swap; 64 GB+ tier: LLM 24 GB / 8 cores | 32 GB is the baseline; 16 GB was the original small-host profile (retained as scale-down path in scripts) |
-| Guest media build | `autoinstall` (Subiquity) ISO per guest → `virt-sysprep` golden `qcow2` | `specs-ds4` wins; FAI (`fai-server`, `fai-diskimage`, class space on host) rejected — heavier host dependency, baked-in drivers slow rebuilds |
+| Guest media build | `autoinstall` (Subiquity) ISO per guest → host-mediated NoCloud seed at VM creation (Spec 06) | Guest ISOs eliminated; host fetches user-data from GitHub, injects password hash, boots VM with cloud-init seed |
 | GPU driver delivery | Golden images are **GPU-agnostic**; driver + CUDA + serving stack installed on **first boot from official upstreams** | `specs-ds4` wins; `specs-mimo` baked `nvidia-driver-590-server` into FAI image — rejected (ties image to driver/GPU, needs GPU builder) |
 | Desktop session | i3-gaps + dmenu + xrdp + lightdm (default, 32 GB friendly); GNOME + `gnome-remote-desktop` optional profile | i3 is lightweight tiling WM; lightdm for local console on passed-through iGPU; GNOME retained for HW-encode use cases |
 | LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
@@ -87,23 +87,21 @@ console/management is via SSH, Proxmox web UI, or serial console.
 
 | Artifact | Produced from | Consumed by |
 |---|---|---|
-| `pve_auto.iso` | Official PVE 9.2 ISO + `answer-host.toml` (fetched from GitHub at `<REF>`) | Host installer |
+| `pve_auto.iso` | Official PVE 9.2 ISO + `answer-host.toml` + `keys/password-hash` | Host installer |
 | `provision-host.sh` (+ `frag/*.sh`) | `provision/host/` in GitHub at `<REF>` | Host first boot (systemd oneshot) |
-| `desktop-golden.qcow2` (+ `user-data`) | Ubuntu Desktop 26.04 autoinstall ISO | VM 100 disk (`import-from`) |
-| `llm-golden.qcow2` (+ `user-data`) | Ubuntu Server 26.04 autoinstall ISO | VM 101 disk (`import-from`) |
-| `dev-golden.qcow2` (+ `user-data`) | Ubuntu Server 26.04 autoinstall ISO | VM 102+ disks (`import-from` / clone) |
-| PXE/boot files (optional) | Same answer served over HTTP + iPXE netboot | Network-boot hosts |
+| Guest VMs | Ubuntu official ISO + NoCloud seed assembled by host from GitHub-fetched user-data + local password hash (Spec 06) | VMs 100/101/102+ |
 
 ## 5. Repository layout (`popiel/nested_dev`, this repo)
 
 Single source of truth for every provisioning input. Built media (ISOs,
-golden disks) is never versioned — `build-iso.sh` scripts produce it into a
-gitignored `output/`.
+golden disks) is never versioned — `provision/host/build-iso.sh` produces
+the host ISO into a gitignored `output/`.
 
 ```
 provision/
   host/
     answer-host.toml           # PVE 9.2 installer answer file (Spec 01 §4)
+    build-iso.sh               # host ISO builder (Spec 01 §4)
     provision-host.sh          # first-boot entry point (Spec 01 §5)
     frag/10-gpu-passthrough.sh # IOMMU + VFIO (Spec 01 §5.1)
     frag/20-memory-swap.sh     # ZRAM + swap, balloon guidance (Spec 01)
@@ -113,20 +111,21 @@ provision/
     vmbr0-*.conf               # netplan/iptables fragments
     dnsmasq.conf               # DHCP + DNS for VMs on vmbr0
     iptables-forwarding.conf   # firewall rule reference
+  personalization.sh           # shared identity (username, UID, repo, tag)
+  ubuntu-release.conf          # shared Ubuntu version + URLs
 desktop/
-  build-iso.sh
   first-boot.sh                # fetched inside VM 100 on first boot
   user-data/{meta-data,user-data}
 llm/
-  build-iso.sh
   llm-firstboot.sh             # fetched inside VM 101 on first boot
   user-data/{meta-data,user-data}
 dev/
-  build-iso.sh
   dev-firstboot.sh             # fetched inside VM 102+ on first boot
+  docker/                      # Dockerfiles for lazy-build toolchain
   user-data/{meta-data,user-data}
 specs/                         # this documentation set (merged)
-output/                        # gitignored: ISOs, golden qcow2, MANIFEST
+keys/                          # gitignored except *.pub and *.asc
+output/                        # gitignored: ISOs, MANIFEST
 ```
 
 Repo-authored install- and first-boot-time fetches reference the raw base

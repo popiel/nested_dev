@@ -25,6 +25,8 @@ url = "https://raw.githubusercontent.com/popiel/nested_dev/host_os_v0.1/provisio
 ordering = "after-network"
 
 [late-commands]
+# Persist password hash for guest VM provisioning (§06)
+"persist-password-hash" = "sh -c 'cp /cdrom/password-hash /target/root/.password-hash && chmod 600 /target/root/.password-hash'"
 # Fetch full provisioner tree at pinned REF
 "fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/tags/host_os_v0.1 && tar -xzf nested_dev.tar.gz && mv nested_dev-host_os_v0.1/provision/host provision && rm -rf nested_dev.tar.gz nested_dev-host_os_v0.1 && chmod +x provision/provision-host.sh provision/frag/*.sh'"
 # Install systemd oneshot for first-boot provisioning

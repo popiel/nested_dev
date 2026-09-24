@@ -47,7 +47,7 @@ layout, IOMMU assertions, and guest conventions.
 
 | File (repo path) | Description |
 |---|---|
-| Official `proxmox-ve_9.2-1.iso` (downloaded) | Unmodified; pin version + SHA256 in `build-iso.sh` |
+| Official `proxmox-ve_9.2-1.iso` (downloaded) | Unmodified; pin version + SHA256 in `provision/host/build-iso.sh` |
 | `provision/host/answer-host.toml` | Installer answer file (§4), 9.2 schema |
 | `provision/host/provision-host.sh` | First-boot entry point (§5) |
 | `provision/host/frag/*.sh` | Fragments: GPU, memory, guest creation, finalize |
@@ -245,7 +245,7 @@ proxmox-auto-install-assistant prepare-iso \
 Variants: offline `--answer-file=provision/host/answer-host.toml`;
 PXE via `extract-dir` + HTTP/iPXE serving the same answer;
 `--seed-should-lock` to fail closed on resize. Pin ISO SHA256 in
-`build-iso.sh`; record REF + hash in `output/MANIFEST`.
+`provision/host/build-iso.sh`; record REF + hash in `output/MANIFEST`.
 
 ## 7. Verification (acceptance) on target hardware
 

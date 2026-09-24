@@ -78,11 +78,15 @@ automatically.
 
 | File | Description |
 |---|---|
-| `ubuntu-26.04-live-server-amd64.iso` | Official, pinned + SHA256 in `build-iso.sh` |
+| `ubuntu-26.04-live-server-amd64.iso` | Official, URL pinned in `provision/ubuntu-release.conf` |
 | `llm/user-data/meta-data` | Empty |
 | `llm/user-data/user-data` | Autoinstall (§4) |
-| `llm/build-iso.sh` | Injects `autoinstall` param (same routes as Spec 02 §3) |
 | `llm/llm-firstboot.sh` | First-boot installer (§5), fetched at `<REF>` |
+
+Guest VMs are created by the host at first boot (Spec 06). The host
+fetches `llm/user-data/user-data` from GitHub at the pinned `<REF>`,
+injects the password hash from `/root/.password-hash`, and boots the VM
+with a NoCloud seed containing the assembled user-data.
 
 ## 4. `user-data` (representative, 26.04)
 

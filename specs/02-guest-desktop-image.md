@@ -26,7 +26,7 @@ a retained profile.
 
 | Decision | Default |
 |---|---|
-| Base OS | Ubuntu Desktop **26.04 LTS** (official `ubuntu-26.04-desktop-amd64.iso`, SHA256 pinned in `build-iso.sh`) |
+| Base OS | Ubuntu Desktop **26.04 LTS** (official `ubuntu-26.04-desktop-amd64.iso`, URL pinned in `provision/ubuntu-release.conf`) |
 | Window manager | **i3-gaps + dmenu + i3status + i3blocks + picom** (lightweight, tiling, 32 GB friendly) |
 | Display manager | **lightdm** (required for local console on passed-through iGPU) |
 | Session (optional profile) | GNOME Wayland + `gnome-remote-desktop` primary, xrdp fallback (from ds4; use where HW-encode wanted) |
@@ -47,26 +47,21 @@ a retained profile.
 
 | File | Description |
 |---|---|
-| `ubuntu-26.04-desktop-amd64.iso` | Official, pinned + SHA256 in `build-iso.sh` |
+| `ubuntu-26.04-desktop-amd64.iso` | Official, URL pinned in `provision/ubuntu-release.conf` |
 | `desktop/user-data/meta-data` | Empty (NoCloud seed marker) |
 | `desktop/user-data/user-data` | Autoinstall config (§4) |
-| `desktop/build-iso.sh` | Injects `autoinstall` kernel args into ISO grub/isolinux AND/OR provisions HTTP `cidata` seed |
 | `desktop/first-boot.sh` | i3 config, Chrome snap, X11 setup, fetched inside VM 100 on first boot at pinned `<REF>` |
 
-Injection routes (same as ds4, versions bumped):
-
-* Embedded: unpack ISO, append ` autoinstall ds=nocloud\;/cdrom/` to `linux`
-  lines in `isolinux/txt.cfg` + `boot/grub/grub.cfg`, drop `user-data` at ISO
-  root, repack (xorriso). Rebuild ISO per change.
-* HTTP (recommended): boot stock ISO with
-  `autoinstall ds=nocloud;s=http://<docroot>/desktop/`; keep `user-data` in
-  docroot so edits don't rebuild the ISO.
+Guest VMs are created by the host at first boot (Spec 06). The host
+fetches `desktop/user-data/user-data` from GitHub at the pinned `<REF>`,
+injects the password hash from `/root/.password-hash`, and boots the VM
+with a NoCloud seed containing the assembled user-data.
 
 ## 4. `user-data` (representative, 26.04)
 
 User identity values (`username`, `realname`) sourced from §05 via
-`provision/personalization.sh`. The `build-iso.sh` script substitutes them
-into the template at ISO build time.
+`provision/personalization.sh`. The host's `frag/30-create-guests.sh`
+substitutes them into the template at VM creation time (Spec 06).
 
 ```yaml
 #cloud-config
@@ -133,7 +128,7 @@ autoinstall:
 
 GNOME/grd profile: replace i3/gaps pkgs with `gnome gnome-remote-desktop
 pipewire`, keep `xrdp xorgxrdp` as fallback, enable `grd.service` instead.
-Select profile in `build-iso.sh` via `DESKTOP_PROFILE=i3|gnome`.
+Select profile in `user-data` via `DESKTOP_PROFILE=i3|gnome`.
 
 Notes:
 

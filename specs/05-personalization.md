@@ -101,24 +101,18 @@ mkpasswd -m yescrypt > keys/password-hash
 chmod 600 keys/password-hash
 ```
 
-### 5.2 Build-time injection
+### 5.2 Runtime injection (host-mediated)
 
-Each `build-iso.sh` reads `keys/password-hash` and `sed`-replaces the
-placeholder in `user-data`:
+The host reads `keys/password-hash` at ISO build time and embeds it in
+the host ISO. During PVE install, the password hash is persisted to
+`/root/.password-hash`. At guest VM creation time (Spec 06), the host's
+`frag/30-create-guests.sh` reads this file and injects the hash into
+fetched user-data templates:
 
 ```bash
-PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
-PASS_HASH="$(cat "$PASSWORD_HASH_FILE")"
+PASS_HASH="$(cat /root/.password-hash)"
 sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
-    "${SCRIPT_DIR}/user-data/user-data" > "${EXTRACT_DIR}/cidata/user-data"
-```
-
-After writing the ISO cidata, the build script restores the placeholder
-in the source `user-data` file as a safety net:
-
-```bash
-sed -i 's|password: ".*"|password: "CHANGE_ME_HASHED"|' \
-    "${SCRIPT_DIR}/user-data/user-data"
+    "${TEMPLATE_DIR}/user-data/user-data" > "${WORK_DIR}/user-data"
 ```
 
 ### 5.3 Git hook
@@ -188,8 +182,8 @@ the built images.
 
 ### 7.4 What the tag controls
 
-- `build-iso.sh` sets `REF="${PERSONALIZATION_TAG}"` — recorded in each
-  ISO's `MANIFEST` entry.
+- Host `build-iso.sh` sets `REF="${PERSONALIZATION_TAG}"` — recorded in
+  the host ISO's `MANIFEST` entry.
 - `MANIFEST` entries include the repo name and tag for traceability.
 - First-boot script headers reference the tag as the fetch point.
 
