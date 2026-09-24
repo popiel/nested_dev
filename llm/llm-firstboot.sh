@@ -17,12 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${SCRIPT_DIR}/personalization.sh" ]; then
     . "${SCRIPT_DIR}/personalization.sh"
 else
-    PERSONALIZATION_USERNAME="popiel"
-    PERSONALIZATION_FULLNAME="T. Alexander Popiel"
-    PERSONALIZATION_EMAIL="tapopiel@gmail.com"
-    PERSONALIZATION_UID="1401"
-    PERSONALIZATION_GID="1401"
-    PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
+    die "personalization.sh not found at ${SCRIPT_DIR}/personalization.sh — cannot continue"
 fi
 
 log "=== llm first-boot starting ==="
@@ -55,7 +50,9 @@ fi
 
 # --- 2. CUDA toolkit ---
 log "Installing CUDA toolkit..."
-CUDA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/cuda-keyring_1.1-1_all.deb"
+UBUNTU_VER=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | tr -d '.')
+UBUNTU_SHORT=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | cut -d. -f1,2 | tr -d '.')
+CUDA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_SHORT}/x86_64/cuda-keyring_1.1-1_all.deb"
 CUDA_KEYRING_DEB="/tmp/cuda-keyring.deb"
 
 wget -q -O "$CUDA_KEYRING_DEB" "$CUDA_KEYRING_URL" 2>&1 | tee -a "$LOG"
@@ -141,7 +138,7 @@ systemctl restart docker
 
 # Verify GPU access in Docker
 log "Verifying Docker GPU access..."
-if docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
+if docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu26.04 nvidia-smi >/dev/null 2>&1; then
     log "Docker GPU access verified"
 else
     log "WARNING: Docker GPU access failed — check NVIDIA Container Toolkit"
@@ -263,7 +260,7 @@ else
         --name ollama \
         --restart unless-stopped \
         --gpus all \
-        -p 127.0.0.1:11434:11434 \
+        -p 192.168.100.101:11434:11434 \
         -v /data/models/ollama:/root/.ollama \
         ollama/ollama 2>&1 | tee -a "$LOG"
     log "Ollama container created and started"
@@ -271,8 +268,8 @@ fi
 
 # Verify Ollama API
 sleep 3
-if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-    log "Ollama API responding on localhost:11434"
+if curl -sf http://192.168.100.101:11434/api/tags >/dev/null 2>&1; then
+    log "Ollama API responding on 192.168.100.101:11434"
 else
     log "WARNING: Ollama API not yet responding (may need a moment to start)"
 fi
