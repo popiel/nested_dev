@@ -23,7 +23,7 @@ PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
 # Ubuntu Desktop 26.04 ISO — pin version and SHA256
 UBUNTU_ISO_URL="https://releases.ubuntu.com/26.04/ubuntu-26.04-desktop-amd64.iso"
 UBUNTU_ISO_NAME="ubuntu-26.04-desktop-amd64.iso"
-UBUNTU_ISO_SHA256="CHANGE_ME_AFTER_DOWNLOAD"
+UBUNTU_ISO_SHA256="487f87faaf547ea30e0aba4d5b53346292571256b25333a978db1692bcee9dd2"
 
 # Profile: i3 (default) or gnome
 DESKTOP_PROFILE="${DESKTOP_PROFILE:-i3}"

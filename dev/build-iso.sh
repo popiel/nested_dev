@@ -23,7 +23,7 @@ PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
 # Ubuntu Server 26.04 ISO — pin version and SHA256
 UBUNTU_ISO_URL="https://releases.ubuntu.com/26.04/ubuntu-26.04-live-server-amd64.iso"
 UBUNTU_ISO_NAME="ubuntu-26.04-live-server-amd64.iso"
-UBUNTU_ISO_SHA256="CHANGE_ME_AFTER_DOWNLOAD"
+UBUNTU_ISO_SHA256="dec49008a71f6098d0bcfc822021f4d042d5f2db279e4d75bdd981304f1ca5d9"
 
 log() { printf '[dev-iso] %s\n' "$*"; }
 die() { printf '[dev-iso] ERROR: %s\n' "$*" >&2; exit 1; }
