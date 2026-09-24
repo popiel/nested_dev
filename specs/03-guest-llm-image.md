@@ -110,6 +110,9 @@ autoinstall:
     - gnupg
     - qemu-guest-agent
   late-commands:
+    # Set UID/GID to 1401 (§05) — must run before any chown on this user
+    - "curtin in-target --target=/target -- usermod -u 1401 ${PERSONALIZATION_USERNAME}"
+    - "curtin in-target --target=/target -- groupmod -g 1401 ${PERSONALIZATION_USERNAME}"
     # GPU stack explicitly NOT baked — first boot (§5).
     # /data/models mount (filesystem created by host on first attach if blank):
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /data/models /opt/models && (mkfs.ext4 -F /dev/vdb || true) && echo \"/dev/vdb /data/models ext4 defaults,nofail 0 2\" >> /etc/fstab && mount -a || true && ln -sfn /data/models /opt/models'"

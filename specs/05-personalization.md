@@ -21,8 +21,8 @@ package choices.
 | Username | `popiel` |
 | Full name | `T. Alexander Popiel` |
 | Email | `tapopiel@gmail.com` |
-| UID | `1000` (first regular user on Ubuntu autoinstall) |
-| GID | `1000` (primary group) |
+| UID | `1401` (explicitly set via `usermod` in `late-commands`; avoids collision with container default UIDs) |
+| GID | `1401` (set via `groupmod` in `late-commands`) |
 | Home | `/home/popiel` |
 | Shell | `/bin/bash` |
 | SSH | Key-only; `install-server: true`, `allow-pw: false` in cloud-init |
@@ -41,8 +41,8 @@ first-boot scripts. Contains shell variables for every value above.
 PERSONALIZATION_USERNAME="popiel"
 PERSONALIZATION_FULLNAME="T. Alexander Popiel"
 PERSONALIZATION_EMAIL="tapopiel@gmail.com"
-PERSONALIZATION_UID="1000"
-PERSONALIZATION_GID="1000"
+PERSONALIZATION_UID="1401"
+PERSONALIZATION_GID="1401"
 PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
 ```
 
@@ -67,7 +67,16 @@ identity:
 
 The `user-data` YAML files for each VM use the shell variables above in
 `late-commands` via `sed` substitution or direct reference to the shared
-config. Each first-boot script sources `provision/personalization.sh` and
+config. The autoinstall `identity:` block does not support a `uid` field,
+so the UID/GID are set via `late-commands`:
+
+```yaml
+late-commands:
+  - "curtin in-target --target=/target -- usermod -u ${PERSONALIZATION_UID} ${PERSONALIZATION_USERNAME}"
+  - "curtin in-target --target=/target -- groupmod -g ${PERSONALIZATION_GID} ${PERSONALIZATION_USERNAME}"
+```
+
+Each first-boot script sources `provision/personalization.sh` and
 uses the variables for `chown`, `usermod`, `loginctl`, `getent`, and
 `git config` calls.
 

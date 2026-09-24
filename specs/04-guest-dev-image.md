@@ -28,7 +28,7 @@ desktop access (Spec 02), host wiring (Spec 01 §5.3).
 | Base OS | Ubuntu Server **26.04 LTS** (same ISO as Spec 03, SHA256 pinned) |
 | GPUs | **None** — no `hostpci` on dev VMs; GPU work goes via Spec 03 APIs |
 | Runtime | Docker CE only (no NVIDIA toolkit, no CUDA, no Ollama in image or first boot) |
-| JDK | **21 LTS** (`eclipse-temurin:21-jre-jammy`) — required by Scala 3.x and sbt 1.10+ |
+| JDK | **21 LTS** (`eclipse-temurin:21-jre-jammy`) — shared base for all Java/Scala/sbt images |
 | Java/Scala | Coursier-managed inside containers; `dev-java` and `dev-scala` images |
 | sbt | Official `sbtscala/sbt:1.10.7_2.13.15_3` image; `dev-sbt` wrapper |
 | opencode | `node:20-slim` + npm global install; `dev-opencode` wrapper; config mount **read-only** |
@@ -55,11 +55,15 @@ desktop access (Spec 02), host wiring (Spec 01 §5.3).
 
 ### Container images (Dockerfiles in `dev/docker/`, built lazily by wrapper scripts)
 
+All three JVM images share `eclipse-temurin:21-jre-jammy` as the base,
+guaranteeing JDK version parity across compilation (sbt) and execution
+(java, scala).
+
 | Image tag | Dockerfile | Base | Entry point | Purpose |
 |---|---|---|---|---|
-| `dev-java` | `Dockerfile.java` | `eclipse-temurin:21-jre-jammy` | `java` | Java 21 runtime via coursier-managed JDK |
-| `dev-scala` | `Dockerfile.scala` | `coursier/jre:21` | `scala` | Scala REPL via coursier |
-| `dev-sbt` | `Dockerfile.sbt` | `sbtscala/sbt:1.10.7_2.13.15_3` | `sbt` | sbt build tool |
+| `dev-java` | `Dockerfile.java` | `eclipse-temurin:21-jre-jammy` | `java` | Java 21 runtime |
+| `dev-scala` | `Dockerfile.scala` | `eclipse-temurin:21-jre-jammy` | `scala` | Scala REPL (coursier-installed) |
+| `dev-sbt` | `Dockerfile.sbt` | `eclipse-temurin:21-jre-jammy` | `sbt` | sbt build tool (coursier-installed) |
 | `dev-opencode` | `Dockerfile.opencode` | `node:20-slim` | `opencode` | opencode CLI (npm global install) |
 
 Images are **not** built at first boot. Base images are pulled at first boot;
@@ -96,6 +100,9 @@ autoinstall:
     - git
     - qemu-guest-agent
   late-commands:
+    # Set UID/GID to 1401 (§05) — must run before any chown on this user
+    - "curtin in-target --target=/target -- usermod -u 1401 ${PERSONALIZATION_USERNAME}"
+    - "curtin in-target --target=/target -- groupmod -g 1401 ${PERSONALIZATION_USERNAME}"
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /work && chown ${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME} /work'"
 ```
 

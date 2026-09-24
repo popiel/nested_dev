@@ -19,6 +19,9 @@ autoinstall:
     - fakeroot
     - qemu-guest-agent
   late-commands:
+    # Set UID/GID to 1401 (§05) — must run before any chown on this user
+    - "curtin in-target --target=/target -- usermod -u 1401 __PERSONALIZATION_USERNAME__"
+    - "curtin in-target --target=/target -- groupmod -g 1401 __PERSONALIZATION_USERNAME__"
     # Create workspace (project volumes mounted per-clone, not in golden)
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /work && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ /work'"
     # Enable serial console (access via `qm terminal` from host)

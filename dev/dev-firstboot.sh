@@ -20,6 +20,8 @@ else
     PERSONALIZATION_USERNAME="popiel"
     PERSONALIZATION_FULLNAME="T. Alexander Popiel"
     PERSONALIZATION_EMAIL="tapopiel@gmail.com"
+    PERSONALIZATION_UID="1401"
+    PERSONALIZATION_GID="1401"
     PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
 fi
 
@@ -87,18 +89,12 @@ log "Git config: user.name='${PERSONALIZATION_FULLNAME}', user.email='${PERSONAL
 log "Pulling base images (parallel)..."
 docker pull eclipse-temurin:21-jre-jammy 2>&1 | tee -a "$LOG" &
 PID_JAVA=$!
-docker pull coursier/jre:21 2>&1 | tee -a "$LOG" &
-PID_SCALA=$!
-docker pull sbtscala/sbt:1.10.7_2.13.15_3 2>&1 | tee -a "$LOG" &
-PID_SBT=$!
 docker pull node:20-slim 2>&1 | tee -a "$LOG" &
 PID_NODE=$!
 
 # Wait for all pulls
 FAIL=0
 wait $PID_JAVA || FAIL=1
-wait $PID_SCALA || FAIL=1
-wait $PID_SBT || FAIL=1
 wait $PID_NODE || FAIL=1
 
 if [ "$FAIL" -eq 1 ]; then
@@ -108,7 +104,7 @@ else
 fi
 
 # Log image SHAs
-for img in eclipse-temurin:21-jre-jammy coursier/jre:21 sbtscala/sbt:1.10.7_2.13.15_3 node:20-slim; do
+for img in eclipse-temurin:21-jre-jammy node:20-slim; do
     sha=$(docker inspect --format='{{index .RepoDigests 0}}' "$img" 2>/dev/null || echo "unknown")
     log "  ${img}: ${sha}"
 done
@@ -144,6 +140,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "[dev] Building ${IMAGE} (first run)..."
     docker build --tag "$IMAGE" \
         --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        --build-arg PERSONALIZATION_UID="$(id -u)" \
         -f "${DOCKER_DIR}/Dockerfile.java" "$DOCKER_DIR"
 fi
 exec docker run --rm \
@@ -162,6 +159,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "[dev] Building ${IMAGE} (first run)..."
     docker build --tag "$IMAGE" \
         --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        --build-arg PERSONALIZATION_UID="$(id -u)" \
         -f "${DOCKER_DIR}/Dockerfile.scala" "$DOCKER_DIR"
 fi
 exec docker run --rm \
@@ -180,6 +178,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "[dev] Building ${IMAGE} (first run)..."
     docker build --tag "$IMAGE" \
         --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        --build-arg PERSONALIZATION_UID="$(id -u)" \
         -f "${DOCKER_DIR}/Dockerfile.sbt" "$DOCKER_DIR"
 fi
 exec docker run --rm \
@@ -200,6 +199,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "[dev] Building ${IMAGE} (first run)..."
     docker build --tag "$IMAGE" \
         --build-arg PERSONALIZATION_USERNAME="${USER}" \
+        --build-arg PERSONALIZATION_UID="$(id -u)" \
         -f "${DOCKER_DIR}/Dockerfile.opencode" "$DOCKER_DIR"
 fi
 exec docker run --rm \

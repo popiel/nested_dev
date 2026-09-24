@@ -44,6 +44,9 @@ autoinstall:
     - curl
     - wget
   late-commands:
+    # Set UID/GID to 1401 (§05) — must run before any chown on this user
+    - "curtin in-target --target=/target -- usermod -u 1401 __PERSONALIZATION_USERNAME__"
+    - "curtin in-target --target=/target -- groupmod -g 1401 __PERSONALIZATION_USERNAME__"
     # Enable lightdm as display manager
     - "curtin in-target --target=/target -- systemctl enable lightdm"
     - "curtin in-target --target=/target -- systemctl set-default graphical.target"
