@@ -12,14 +12,38 @@ A Linux x86_64 host (or VM) with:
 | Tool | Package | Purpose |
 |---|---|---|
 | `wget` | `wget` | ISO downloads |
-| `xorriso` | `xorriso` | ISO repackaging |
-| `bsdtar` | `libarchive-tools` | ISO extraction |
+| `sha256sum` | `coreutils` | ISO integrity verification |
 | `mkpasswd` | `whois` | Generating the login password hash (one-time) |
+| `proxmox-auto-install-assistant` | see below | Official ISO preparation tool |
+| `docker` *(optional)* | Docker Desktop / engine | WSL/alternative carrier for the assistant |
 
-Install in one shot on Ubuntu/Debian:
+### Getting `proxmox-auto-install-assistant`
+
+You need this tool **either natively or via Docker**. If neither is
+available, `build-iso.sh` will tell you exactly what to install.
+
+**Option A — Native install (PVE host, Debian, or compatible):**
 
 ```bash
-sudo apt-get install -y wget xorriso libarchive-tools whois
+wget https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg \
+    -O /etc/apt/trusted.gpg.d/proxmox-release-trixie.gpg
+echo "deb [signed-by=/etc/apt/trusted.gpg.d/proxmox-release-trixie.gpg] \
+    http://download.proxmox.com/debian/pve trixie pve-no-subscription" \
+    > /etc/apt/sources.list.d/pve-install-repo.list
+apt-get update && apt-get install -y proxmox-auto-install-assistant
+```
+
+**Option B — Docker (WSL, macOS, any host):**
+
+No extra installs needed — `build-iso.sh` auto-detects Docker and pulls
+the container on first run. The in-repo Dockerfile
+(`provision/host/Dockerfile.autoinstall-assistant`) builds from Debian
+trixie + the official PVE repo. Requires Docker Desktop or Docker Engine.
+
+### Install helper packages in one shot (native path)
+
+```bash
+sudo apt-get install -y wget whois proxmox-auto-install-assistant
 ```
 
 ## One-time setup
@@ -68,8 +92,9 @@ mkpasswd -m yescrypt > keys/password-hash
 chmod 600 keys/password-hash
 ```
 
-The hash is embedded in the host ISO at build time. The host persists it
-to `/root/.password-hash` during PVE install, then injects it into
+The hash is embedded in the host ISO at build time via the
+`root-password-hashed` answer field. The host persists it to
+`/root/.password-hash` during PVE install, then injects it into
 guest user-data at VM creation time (Spec 06). The hash never reaches
 GitHub.
 
@@ -144,15 +169,19 @@ automatically by the host's first-boot provisioning.
 ### Step 1 — Build host ISO
 
 ```bash
-sudo provision/host/build-iso.sh
+provision/host/build-iso.sh
 ```
+
+No `sudo` required — the script runs unprivileged and delegates ISO
+preparation to the assistant (native or Docker).
 
 Output: `output/proxmox-ve_9.2-1_auto.iso`
 
 This ISO contains:
 - PVE 9.2 autoinstall answer file (personalized with your SSH key)
-- Password hash (from `keys/password-hash`, embedded for guest provisioning)
+- Password hash (via `root-password-hashed`, embedded for guest provisioning)
 - First-boot provisioner (fetched from GitHub at install time)
+- UEFI + BIOS boot (handled by `proxmox-auto-install-assistant prepare-iso`)
 
 ### Step 2 — Install PVE on bare metal
 
@@ -160,7 +189,7 @@ This ISO contains:
    ```bash
    dd if=output/proxmox-ve_9.2-1_auto.iso of=/dev/sdX bs=4M status=progress
    ```
-2. Boot the USB on the target machine.
+2. Boot the USB on the target machine (UEFI or legacy BIOS).
 3. PVE autoinstall runs unattended. On first boot, the host:
    - Persists the password hash to `/root/.password-hash`
    - Fetches the provisioner from GitHub
@@ -226,7 +255,8 @@ All artifacts land in `output/` (gitignored):
 ```
 output/
   iso/                                   # Downloaded upstream ISOs
-  proxmox-ve_9.2-1_auto.iso             # Host installer ISO
+  build-work/                            # Working files (answer file, etc.)
+  proxmox-ve_9.2-1_auto.iso             # Host installer ISO (UEFI + BIOS)
   MANIFEST                               # Build metadata (versions, hashes)
 ```
 
@@ -234,12 +264,17 @@ output/
 
 | Problem | Fix |
 |---|---|
-| `Missing: xorriso` | `sudo apt-get install xorriso` |
+| `Missing: wget` | `sudo apt-get install wget` |
+| `No proxmox-auto-install-assistant found` | See [Getting `proxmox-auto-install-assistant`](#getting-proxmox-auto-install-assistant) above |
 | `Missing: keys/password-hash` | Run `mkpasswd -m yescrypt > keys/password-hash` |
-| Build fails on WSL/older Ubuntu | Use a Ubuntu 24.04+ host; older distros may lack yescrypt support in `mkpasswd` |
+| ISO download fails or 0-byte file | Check internet; delete `output/iso/proxmox-ve_9.2-1.iso` and re-run |
+| ISO SHA256 mismatch after re-download | Verify file wasn't truncated; re-run from a fresh `output/iso/` directory |
+| Docker image build fails | Ensure Docker is running; check `docker build` output for dependency errors |
+| Build fails on WSL | Use Docker path (default if Docker is available) or install the assistant natively via the PVE apt repo |
 | Guest VMs not created | Check `/var/log/pve-firstboot.log`; ensure host has internet for GitHub fetches |
 | Desktop/LLM created but not running | Run `qm start <vmid>` manually; check serial console via `qm terminal <vmid>` |
 | Dev template not converted to template | Check provisioning gate in `/var/log/pve-firstboot.log`; manually: `qm guest exec 102 -- cloud-init clean` + `qm shutdown 102` + `qm template 102` |
 | Dev template exists but can't start | Expected — it's a PVE template. Use `devctl add <project>` to clone it |
 | Dev VM not created by devctl | Check `/var/log/nested-dev-vmctl.log` on host; verify `devctl list` shows template 102 |
 | Guest first-boot stuck | Check `/var/log/desktop-firstboot.log` (or llm/dev variant); ensure host MASQUERADE is working |
+| PVE validation error on answer file | Ensure `keys/password-hash` exists; the answer requires exactly one of `root-password` or `root-password-hashed` |
