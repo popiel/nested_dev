@@ -3,7 +3,6 @@
 # Called by vmctl@host via ForceCommand; argv: <verb> [args...]
 # Validates verbs, VMIDs, and project names; wraps qm.
 # This script is root-owned and installed by frag/25-desktop-control.sh.
-# shellcheck disable=SC2015  # A && B || C is intentional guard pattern
 set -euo pipefail
 
 INVENTORY="/etc/nested-dev/inventory"
