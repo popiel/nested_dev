@@ -49,6 +49,7 @@ layout, IOMMU assertions, and guest conventions.
 |---|---|
 | Official `proxmox-ve_9.2-1.iso` (downloaded) | Unmodified; pin version + SHA256 in `provision/host/build-iso.sh` |
 | `provision/host/answer-host.toml` | Installer answer file (§4), 9.2 schema |
+| `provision/host/first-boot.sh` | First-boot bootstrap template (§4.1), embedded via `--on-first-boot`; carries the password hash |
 | `provision/host/provision-host.sh` | First-boot entry point (§5) |
 | `provision/host/frag/*.sh` | Fragments: GPU, memory, vmctl, guest creation, finalize |
 | `provision/host/vmctl/vmctl-host` | Restricted control stub for dev VMs (Spec 07) |
@@ -63,11 +64,11 @@ Replace every `CHANGE_ME` before building. Prefer SSH-key-only root (omit
 
 ```toml
 [global]
-keyboard = "us"
+keyboard = "en-us"
 country = "us"
 fqdn = "pve-host.CHANGE_ME"
 timezone = "UTC"
-mailto = ""
+mailto = "CHANGE_ME_admin@example.com"
 root-password = "CHANGE_ME_8plus_complex"
 root-ssh-keys = ["CHANGE_ME_ssh_ed25519_admin"]
 
@@ -92,26 +93,66 @@ disk-list = ["CHANGE_ME_sda"]
 # compress = "zstd"
 
 [first-boot]
-source = "from-url"
-url = "https://raw.githubusercontent.com/popiel/nested_dev/<REF>/provision/host/provision-host.sh"
-ordering = "after-network"
-
-[late-commands]
-"fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/heads/<REF> && tar -xzf nested_dev.tar.gz && mv nested_dev-<REF>/provision/host provision && rm -rf nested_dev.tar.gz nested_dev-<REF> && chmod +x provision/provision-host.sh provision/frag/*.sh'"
-"install-firstboot-unit" = "sh -c 'cat > /target/etc/systemd/system/pve-firstboot.service <<EOF\n[Unit]\nDescription=PVE first boot provisioning\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=oneshot\nExecStart=/root/provision/provision-host.sh\n[Install]\nWantedBy=multi-user.target\nEOF\nln -s /etc/systemd/system/pve-firstboot.service /target/etc/systemd/system/multi-user.target.wants/pve-firstboot.service'"
+source = "from-iso"
+ordering = "network-online"
 ```
 
 Notes:
 
 * `[global]`/`[network]`/`[disk-setup]` follow the mimo 9.2 field names
-  (`keyboard`, `disk-list`); `[network.interface]` preconfigured shape and
-  `[late-commands]` chroot (`/target/...`) semantics follow ds4. Validate the
-  merged file with the 9.2 `verify` subcommand — schema is version-sensitive.
+  (`keyboard`, `disk-list`); `[network.interface]` preconfigured shape follows
+  ds4. Validate the file with the 9.2 `validate-answer` subcommand — the
+  schema is version-sensitive and the tool is the authority.
+* `keyboard` takes an **XKB layout name**, not an ISO country code
+  (`en-us`, not `us`); `country` is the two-letter code.
+* `first-boot.ordering` is one of `before-network`, `network-online`,
+  `fully-up`.
 * `disks`/disk-list: restrict to the OS disk pattern if the server has
   separate OS vs data disks; never blindly wipe data disks.
-* `first-boot from-url` and the `late-commands` unit are redundant by design:
-  the unit is authoritative (full `frag/` tree at pinned REF); the `first-boot`
-  URL is a fallback bootstrap. Both must reference the same `<REF>`.
+
+### 4.1 No `late-commands` — bootstrap via `--on-first-boot`
+
+There is **no `late-commands` section** in the PVE autoinstall schema. The
+only valid top-level sections are `global`, `network`, `disk-setup`,
+`post-installation-webhook` and `first-boot`. (`late-commands` and its
+`/target/...` chroot semantics are a ds4/cloud-init concept that PVE never
+adopted. Setting it produces a hard validation error: *unknown field
+`late-commands`*.)
+
+Post-install work is instead carried by a script embedded in the ISO at
+build time:
+
+```bash
+prepare-iso /path/to/source.iso \
+  --fetch-from iso \
+  --answer-file /work/answer-host.toml \
+  --on-first-boot /work/first-boot.sh \   # rendered from provision/host/first-boot.sh
+  --tmp /work \                            # required: staging defaults to the
+                                          # source ISO's dir, which is :ro
+  --output /output/proxmox-ve_9.2-1_auto.iso
+```
+
+`provision/host/first-boot.sh` is a template rendered by `build-iso.sh` with
+the same `__PLACEHOLDER__` set as the answer file, and performs the three
+jobs the removed `late-commands` carried, in order:
+
+1. Persist the root password hash to `/root/.password-hash` (§06), mode 600.
+2. Fetch the `provision/` tree at the pinned `<REF>`.
+3. Install and enable the `pve-firstboot.service` oneshot unit, then run
+   the provisioner directly — the hook already executes *during* the first
+   boot, so merely enabling the unit would defer provisioning to the second
+   boot.
+
+**Why `from-iso` and not `from-url`:** the hash must never transit the
+network or a public repository. `from-iso` keeps it in the installer media,
+the same trust domain as `root-password-hashed` in the answer file. The
+rendered `output/build-work/first-boot.sh` contains the hash in plaintext and
+is therefore as sensitive as `keys/password-hash`; it is gitignored and must
+not be committed.
+
+The `pve-firstboot.service` unit remains authoritative — it runs the full
+`frag/` tree at the pinned REF. `first-boot` is the bootstrap that installs
+it. Both reference the same `<REF>`.
 
 ## 5. First-boot provisioner — `provision-host.sh` requirements
 

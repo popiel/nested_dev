@@ -183,6 +183,34 @@ This ISO contains:
 - First-boot provisioner (fetched from GitHub at install time)
 - UEFI + BIOS boot (handled by `proxmox-auto-install-assistant prepare-iso`)
 
+The build fails loudly if the ISO is missing or empty. `prepare-iso` can
+exit 0 after printing its own errors, so the script treats the presence of
+a non-empty `proxmox-ve_9.2-1_auto.iso` as the only trustworthy success
+signal — it will never print `=== Build complete ===` or write a
+`MANIFEST` entry for a build that produced no artifact.
+
+### Running from Git Bash (Windows)
+
+`build-iso.sh` can be run directly from Git Bash on Windows, including the
+Docker path. This works because the script disables MSYS argument
+conversion for every `docker` invocation and pre-converts host paths with
+`cygpath`:
+
+```bash
+provision/host/build-iso.sh
+```
+
+> **Historical pitfall.** Earlier versions passed raw POSIX paths to
+> `docker.exe`. The MSYS runtime rewrote them, so container-side arguments
+> such as `/work` became `C:/Program Files/Git/work`, and the multi-colon
+> bind-mount spec `.../output/iso:/iso:ro` was shredded (its `o:` read as a
+> Windows drive letter). The assistant then operated on nonexistent files
+> and exited 0. If you see stray directories named `output;C`,
+> `output/iso;C`, or `output/build-work;C` in the repo, they are leftovers
+> from that failure mode and can be deleted — they are always empty.
+
+WSL2 and native Linux work without any of this. Use them if you have them.
+
 ### Step 2 — Install PVE on bare metal
 
 1. Write the ISO to a USB stick:
@@ -271,6 +299,8 @@ output/
 | ISO SHA256 mismatch after re-download | Verify file wasn't truncated; re-run from a fresh `output/iso/` directory |
 | Docker image build fails | Ensure Docker is running; check `docker build` output for dependency errors |
 | Build fails on WSL | Use Docker path (default if Docker is available) or install the assistant natively via the PVE apt repo |
+| `=== Build complete ===` printed but no ISO in `output/` | Should be impossible — the build now aborts on a missing or empty ISO. If you hit this, the script is older than the fix; `git pull`. Check for stray `output;C`-style directories, which indicate a build that ran under Git Bash with MSYS conversion active |
+| `Error: Opening answer file "C:/Program Files/Git/work/..."` | MSYS rewrote the container path. Run under WSL2/native Linux, or use a `build-iso.sh` that includes the `docker_noconv` opt-out |
 | Guest VMs not created | Check `/var/log/pve-firstboot.log`; ensure host has internet for GitHub fetches |
 | Desktop/LLM created but not running | Run `qm start <vmid>` manually; check serial console via `qm terminal <vmid>` |
 | Dev template not converted to template | Check provisioning gate in `/var/log/pve-firstboot.log`; manually: `qm guest exec 102 -- cloud-init clean` + `qm shutdown 102` + `qm template 102` |

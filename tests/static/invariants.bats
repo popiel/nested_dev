@@ -10,6 +10,7 @@ load '../lib/helpers'
         | grep -v 'provision/personalization.sh' \
         | grep -v 'tests/fixtures/' \
         | grep -v '.git/' \
+        | grep -v '/output/' \
         | grep -v 'popiel/nested_dev' || true)
     [ -z "$result" ]
 }
@@ -20,7 +21,8 @@ load '../lib/helpers'
         "$PROJECT_ROOT" 2>/dev/null \
         | grep -v 'provision/personalization.sh' \
         | grep -v 'tests/fixtures/' \
-        | grep -v '.git/' || true)
+        | grep -v '.git/' \
+        | grep -v '/output/' || true)
     [ -z "$result" ]
 }
 
