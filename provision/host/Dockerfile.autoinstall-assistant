@@ -1,0 +1,26 @@
+# Dockerfile.autoinstall-assistant
+# Builds a container with proxmox-auto-install-assistant + xorriso
+# for creating autoinstall ISOs from any host (WSL, macOS, etc.)
+#
+# Build:  docker build -t nested-dev-proxmox-assistant -f Dockerfile.autoinstall-assistant .
+# Usage:  handled by build-iso.sh (auto-detected)
+#
+# Pinned to Debian trixie (matches PVE 9.x base).
+FROM debian:trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        wget \
+        gnupg \
+        ca-certificates \
+        xorriso \
+    && wget -qO - https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/proxmox-release-trixie.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/proxmox-release-trixie.gpg] \
+        http://download.proxmox.com/debian/pve trixie pve-no-subscription" \
+        > /etc/apt/sources.list.d/pve-install-repo.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends proxmox-auto-install-assistant \
+    && rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["proxmox-auto-install-assistant"]

@@ -54,6 +54,10 @@ load '../lib/helpers'
     assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" '__ROOT_SSH_KEY__'
 }
 
+@test "answer-host.toml contains __ROOT_PASSWORD_HASH__" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" '__ROOT_PASSWORD_HASH__'
+}
+
 @test "frag/30 sources personalization.sh from correct path" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" '/root/provision/personalization.sh'
 }

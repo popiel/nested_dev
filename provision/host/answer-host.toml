@@ -8,7 +8,7 @@ country = "us"
 fqdn = "lychee-host.wolfskeep.com"
 timezone = "UTC"
 mailto = ""
-# SSH key only — password auth disabled
+root-password-hashed = "__ROOT_PASSWORD_HASH__"
 root-ssh-keys = ["__ROOT_SSH_KEY__"]
 
 [network]
@@ -26,7 +26,8 @@ ordering = "after-network"
 
 [late-commands]
 # Persist password hash for guest VM provisioning (§06)
-"persist-password-hash" = "sh -c 'cp /cdrom/password-hash /target/root/.password-hash && chmod 600 /target/root/.password-hash'"
+# Hash is injected at build time — single-quoted to prevent shell expansion
+"persist-password-hash" = "sh -c 'printf ''%s'' __ROOT_PASSWORD_HASH__ > /target/root/.password-hash && chmod 600 /target/root/.password-hash'"
 # Fetch full provisioner tree at pinned REF
 "fetch-provisioner" = "sh -c 'cd /target/root && wget -qO nested_dev.tar.gz https://codeload.github.com/popiel/nested_dev/tar.gz/refs/heads/__GITHUB_REF__ && tar -xzf nested_dev.tar.gz && mv nested_dev-__GITHUB_REF__/provision provision && rm -rf nested_dev.tar.gz nested_dev-__GITHUB_REF__ && chmod +x provision/host/provision-host.sh provision/host/frag/*.sh'"
 # Install systemd oneshot for first-boot provisioning
