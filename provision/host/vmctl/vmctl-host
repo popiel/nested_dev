@@ -44,7 +44,7 @@ case "$VERB" in
         [ -n "${1:-}" ] || die "usage: status <vmid>"
         VMID="$1"
         [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" -a "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range ($DEV_MIN-$DEV_MAX)"
+        ! { [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ]; } && die "VMID $VMID outside dev range ($DEV_MIN-$DEV_MAX)"
         qm status "$VMID" 2>/dev/null || die "VM $VMID does not exist"
         ;;
 
@@ -52,7 +52,7 @@ case "$VERB" in
         [ -n "${1:-}" ] || die "usage: start <vmid>"
         VMID="$1"
         [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" -a "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        ! { [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ]; } && die "VMID $VMID outside dev range"
         NAME=$(qm config "$VMID" 2>/dev/null | grep '^name:' | awk '{print $2}')
         [[ "$NAME" == dev-* ]] || die "VM $VMID name '$NAME' does not match dev-* pattern"
         STATUS=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
@@ -66,7 +66,7 @@ case "$VERB" in
         [ -n "${1:-}" ] || die "usage: shutdown <vmid>"
         VMID="$1"
         [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" -a "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        ! { [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ]; } && die "VMID $VMID outside dev range"
         qm shutdown "$VMID" --forceStop 0 2>/dev/null || qm stop "$VMID" 2>/dev/null
         log "SHUTDOWN $VMID"
         echo "VM $VMID shutting down"
@@ -76,7 +76,7 @@ case "$VERB" in
         [ -n "${1:-}" ] || die "usage: stop <vmid>"
         VMID="$1"
         [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" -a "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        ! { [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ]; } && die "VMID $VMID outside dev range"
         qm stop "$VMID" 2>/dev/null || true
         log "STOP $VMID (forced)"
         echo "VM $VMID stopped (forced)"
@@ -137,7 +137,7 @@ DNS_EOF
         [ -n "${1:-}" ] || die "usage: log <vmid>"
         VMID="$1"
         [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" -a "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
+        ! { [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ]; } && die "VMID $VMID outside dev range"
         # Guest agent required; fall back gracefully
         qm guest exec "$VMID" -- tail -n 50 /var/log/dev-firstboot.log 2>/dev/null \
             || qm guest exec "$VMID" -- cat /var/log/dev-firstboot.log 2>/dev/null \

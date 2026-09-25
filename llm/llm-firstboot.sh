@@ -152,7 +152,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     # Query each GPU's VRAM
     while IFS= read -r line; do
         vram=$(echo "$line" | tr -d ' MiB')
-        if [ -n "$vram" -a "$vram" -gt 0 ] 2>/dev/null; then
+        if [ -n "$vram" ] && [ "$vram" -gt 0 ] 2>/dev/null; then
             TOTAL_VRAM_MB=$((TOTAL_VRAM_MB + vram))
             GPU_COUNT=$((GPU_COUNT + 1))
             log "  GPU $((GPU_COUNT)): ${vram} MiB"
