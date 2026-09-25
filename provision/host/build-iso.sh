@@ -106,7 +106,7 @@ main() {
     mkdir -p "$ISO_DIR" "$WORK_DIR"
 
     # --- 1. Download PVE ISO ---
-    PVE_ISO_URL="https://download.proxmox.com/iso/proxmox-ve_9.2-1.iso"
+    PVE_ISO_URL="https://na.cdn.proxmox.com/iso/proxmox-ve_9.2-1.iso"
     PVE_ISO_NAME="proxmox-ve_9.2-1.iso"
     PVE_ISO_PATH="${ISO_DIR}/${PVE_ISO_NAME}"
     PVE_ISO_SHA256="4e88fe416df9b527624a175f24c9aa07c714d3332afb1ee3dbf3879573ef2c6c"
