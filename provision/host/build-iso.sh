@@ -14,6 +14,15 @@ die() { printf '[build-iso] ERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- Pure functions (testable via source-guard) ---
 
+download_iso() {
+    local url="$1" dest="$2"
+    if command -v wget >/dev/null 2>&1; then
+        wget --show-progress -O "$dest" "$url"
+    else
+        die "Missing: wget"
+    fi
+}
+
 sed_escape() {
     local val="$1"
     val="${val//\\/\\\\}"
@@ -105,7 +114,10 @@ main() {
     if [ ! -s "$PVE_ISO_PATH" ]; then
         rm -f "$PVE_ISO_PATH"
         log "Downloading PVE 9.2 ISO..."
-        wget -q --show-progress -O "$PVE_ISO_PATH" "$PVE_ISO_URL"
+        if ! download_iso "$PVE_ISO_URL" "$PVE_ISO_PATH"; then
+            rm -f "$PVE_ISO_PATH"
+            die "Download failed — check network connectivity and URL: ${PVE_ISO_URL}"
+        fi
         log "Downloaded: $(sha256sum "$PVE_ISO_PATH" | awk '{print $1}')"
     else
         log "PVE ISO already present: $PVE_ISO_PATH"
@@ -115,7 +127,10 @@ main() {
     if ! echo "${PVE_ISO_SHA256}  ${PVE_ISO_PATH}" | sha256sum -c - >/dev/null 2>&1; then
         log "SHA256 mismatch — re-downloading PVE ISO..."
         rm -f "$PVE_ISO_PATH"
-        wget -q --show-progress -O "$PVE_ISO_PATH" "$PVE_ISO_URL"
+        if ! download_iso "$PVE_ISO_URL" "$PVE_ISO_PATH"; then
+            rm -f "$PVE_ISO_PATH"
+            die "Re-download failed — check network connectivity"
+        fi
         echo "${PVE_ISO_SHA256}  ${PVE_ISO_PATH}" | sha256sum -c - \
             || die "ISO SHA256 mismatch after re-download"
         log "PVE ISO SHA256 verified (re-downloaded)"

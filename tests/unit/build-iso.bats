@@ -55,6 +55,10 @@ setup() {
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'run_prepare_iso()'
 }
 
+@test "download_iso function exists in build-iso" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'download_iso()'
+}
+
 @test "build-iso.sh has source-guard" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'BASH_SOURCE\[0\].*==.*\$0'
 }
