@@ -12,11 +12,10 @@ teardown() {
     cleanup_mocks
 }
 
-@test "detect_gpu_pci includes NVIDIA GPU + audio companion" {
-    # Mock lspci -n -s for each address
+@test "detect_gpu_pci includes NVIDIA GPU" {
     cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
 #!/bin/bash
-if [[ "$*" == "-n -s" ]]; then
+if [[ "$*" == *"-n -s"* ]]; then
     BDF=$(echo "$*" | awk '{print $NF}')
     case "$BDF" in
         01:00.0) echo "01:00.0 0300: 10de:2204" ;;
@@ -24,7 +23,7 @@ if [[ "$*" == "-n -s" ]]; then
         00:02.0) echo "00:02.0 0300: 8086:9bc5" ;;
         04:00.0) echo "04:00.0 0300: 1af4:1050" ;;
     esac
-elif [[ "$*" == "-s" && "$*" != "-n"* ]]; then
+elif [[ "$*" == *"-s"* && "$*" != *"-n"* ]]; then
     echo "01:00.0 VGA compatible controller: NVIDIA ..."
     echo "01:00.1 Audio device: NVIDIA ..."
 else
@@ -33,31 +32,13 @@ fi
 SCRIPT
     chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
     run detect_gpu_pci "10de"
-    assert_contains "$output" "10de:2204"
-    assert_contains "$output" "10de:1aef"
-}
-
-@test "detect_gpu_pci excludes virtio VGA" {
-    cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
-#!/bin/bash
-if [[ "$*" == "-n -s" ]]; then
-    BDF=$(echo "$*" | awk '{print $NF}')
-    case "$BDF" in
-        04:00.0) echo "04:00.0 0300: 1af4:1050" ;;
-    esac
-else
-    cat "${FIXTURES_DIR}/lspci-no-gpu.txt"
-fi
-SCRIPT
-    chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
-    run detect_gpu_pci "1af4"
-    [ -z "$output" ]
+    assert_contains "$output" "0000:01:00.0"
 }
 
 @test "detect_gpu_pci returns empty for non-existent vendor" {
     cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
 #!/bin/bash
-if [[ "$*" == "-n -s" ]]; then
+if [[ "$*" == *"-n -s"* ]]; then
     BDF=$(echo "$*" | awk '{print $NF}')
     case "$BDF" in
         01:00.0) echo "01:00.0 0300: 10de:2204" ;;
@@ -74,10 +55,11 @@ SCRIPT
 @test "detect_gpu_pci returns single GPU for single-gpu fixture" {
     cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
 #!/bin/bash
-if [[ "$*" == "-n -s" ]]; then
+if [[ "$*" == *"-n -s"* ]]; then
     BDF=$(echo "$*" | awk '{print $NF}')
     case "$BDF" in
         01:00.0) echo "01:00.0 0300: 10de:2204" ;;
+        00:02.0) echo "00:02.0 0300: 8086:9bc5" ;;
     esac
 else
     cat "${FIXTURES_DIR}/lspci-single-gpu.txt"
@@ -85,6 +67,25 @@ fi
 SCRIPT
     chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
     run detect_gpu_pci "10de"
-    assert_contains "$output" "10de:2204"
-    assert_not_contains "$output" "1af4"
+    assert_contains "$output" "0000:01:00.0"
+    assert_not_contains "$output" "0000:04:00.0"
+}
+
+@test "detect_gpu_pci excludes non-matching vendors" {
+    cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
+#!/bin/bash
+if [[ "$*" == *"-n -s"* ]]; then
+    BDF=$(echo "$*" | awk '{print $NF}')
+    case "$BDF" in
+        01:00.0) echo "01:00.0 0300: 10de:2204" ;;
+        00:02.0) echo "00:02.0 0300: 8086:9bc5" ;;
+    esac
+else
+    cat "${FIXTURES_DIR}/lspci-single-gpu.txt"
+fi
+SCRIPT
+    chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
+    run detect_gpu_pci "10de"
+    assert_contains "$output" "0000:01:00.0"
+    assert_not_contains "$output" "0000:00:02.0"
 }

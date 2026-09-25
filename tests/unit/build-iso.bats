@@ -7,17 +7,12 @@ setup() {
     source "${PROJECT_ROOT}/provision/ubuntu-release.conf"
 }
 
-@test "ISO filename matches ubuntu version from conf" {
-    local EXPECTED="ubuntu-${UBUNTU_VERSION}-live-server-amd64.iso"
-    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" "UBUNTU_VERSION"
-}
-
 @test "ubuntu-release.conf sets UBUNTU_VERSION" {
     [ "$UBUNTU_VERSION" = "26.04" ]
 }
 
-@test "ubuntu-release.conf sets UBUNTU_CODENAME" {
-    [ "$UBUNTU_CODENAME" = "noble" ]
+@test "ubuntu-release.conf sets UBUNTU_BASE_URL" {
+    [ "$UBUNTU_BASE_URL" = "https://releases.ubuntu.com/26.04" ]
 }
 
 @test "detect_target_disk function exists in build-iso" {

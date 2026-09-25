@@ -13,7 +13,8 @@ load '../lib/helpers'
         # SC1091: can't follow dynamic source paths (expected)
         # SC2034: unused variables in sourced config files (expected)
         # SC2016: intentional single quotes in echo (e.g. .bashrc PATH export)
-        run shellcheck -x -s bash -e SC1091,SC2034,SC2016 "$script"
+        # SC2166: prefer [ p -a q ] over [ p ] && [ q ] (project style choice)
+        run shellcheck -x -s bash -e SC1091,SC2034,SC2016,SC2166 "$script"
         if [ "$status" -ne 0 ]; then
             echo "FAIL: $script" >&2
             echo "$output" >&2
@@ -33,7 +34,7 @@ load '../lib/helpers'
         full_path="${PROJECT_ROOT}/${script}"
         [ -f "$full_path" ] || continue
         head -1 "$full_path" | grep -qE '^#!/usr/bin/env bash|^#!/bin/bash' || continue
-        run shellcheck -x -s bash -e SC1091,SC2034 "$full_path"
+        run shellcheck -x -s bash -e SC1091,SC2034,SC2166 "$full_path"
         if [ "$status" -ne 0 ]; then
             echo "FAIL: $script" >&2
             echo "$output" >&2

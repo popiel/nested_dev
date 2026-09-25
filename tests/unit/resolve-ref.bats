@@ -16,7 +16,10 @@ teardown() {
 @test "resolve_ref_to_sha returns SHA for branch" {
     cat > "${FIXTURES_DIR}/mock-bin/git" <<'SCRIPT'
 #!/bin/bash
-echo "abc123def456789012345678901234567890abcd  refs/heads/main"
+# Only return SHA for refs/heads/ queries
+if [[ "$*" == *"refs/heads/"* ]]; then
+    echo "abc123def456789012345678901234567890abcd  refs/heads/main"
+fi
 SCRIPT
     chmod +x "${FIXTURES_DIR}/mock-bin/git"
     run resolve_ref_to_sha "popiel/nested_dev" "main"
@@ -26,8 +29,10 @@ SCRIPT
 @test "resolve_ref_to_sha returns SHA for tag" {
     cat > "${FIXTURES_DIR}/mock-bin/git" <<'SCRIPT'
 #!/bin/bash
-echo ""
-echo "deadbeef1234567890abcdef1234567890abcdef  refs/tags/v1.0"
+# Only return SHA for refs/tags/ queries
+if [[ "$*" == *"refs/tags/"* ]]; then
+    echo "deadbeef1234567890abcdef1234567890abcdef  refs/tags/v1.0"
+fi
 SCRIPT
     chmod +x "${FIXTURES_DIR}/mock-bin/git"
     run resolve_ref_to_sha "popiel/nested_dev" "v1.0"
