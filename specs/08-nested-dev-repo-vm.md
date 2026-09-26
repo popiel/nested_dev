@@ -29,7 +29,7 @@ control (Spec 07), the generic dev VM toolchain (Spec 04 §3–§5.5).
 | Base image | `ubuntu:26.04` | Matches host OS; `xorriso` 2.x available in archive |
 | Run-as | Root inside container; ownership normalized after build | `build-iso.sh` asserts `id -u == 0`; ownership fix handles host uid mapping |
 | Repo location | `/work/nested_dev` (bind-mounted from `scsi1`) | Per-project volume; workspace persists across clones |
-| Keys location | `/work/nested_dev/secrets/` on the data volume (symlinked to `keys/` inside the repo) | `keys/password-hash` is gitignored; lives only on the data volume |
+| Keys location | `/work/nested_dev/secrets/` on the data volume (symlinked into `keys/`) | `keys/personalization-password-hash` and `keys/root-password-hash` are gitignored; they live only on the data volume |
 | Output location | `/work/nested_dev/output/` (data volume) | gitignored; build artifacts persist here |
 | Golden image rebuild | Operator-run `refresh-guests.sh` or `devctl` + manual; no automatic rebuild | REF changes require intentional action; documented procedure |
 | Tool image refresh | `dev-refresh-images` script (shared across all dev VMs) | Rebuilds with `--pull`; logs digests to `MANIFEST` |
@@ -189,11 +189,13 @@ case "$VERB" in
 
     keys-status)
         echo "[nested] Checking keys..."
-        if [ -f "${NESTED_DEV}/secrets/password-hash" ]; then
-            echo "  password-hash: present"
-        else
-            echo "  password-hash: MISSING (generate with: mkpasswd -m yescrypt > ${NESTED_DEV}/secrets/password-hash)"
-        fi
+        for hash in personalization-password-hash root-password-hash; do
+            if [ -f "${NESTED_DEV}/secrets/${hash}" ]; then
+                echo "  ${hash}: present"
+            else
+                echo "  ${hash}: MISSING (generate with: mkpasswd -m yescrypt > ${NESTED_DEV}/secrets/${hash})"
+            fi
+        done
         for key in host_os_ed25519.pub ubuntu-release-key.asc; do
             if [ -f "${NESTED_DEV}/keys/${key}" ]; then
                 echo "  ${key}: present"
@@ -294,18 +296,22 @@ fi
 mkdir -p "${SECRETS_DIR}"
 chmod 700 "${SECRETS_DIR}"
 
-# Ensure password hash exists (reminder only — operator must generate)
-if [ ! -f "${SECRETS_DIR}/password-hash" ]; then
-    log "WARNING: keys/password-hash not found."
-    log "  Generate on the host: mkpasswd -m yescrypt > ${SECRETS_DIR}/password-hash"
-    log "  Then copy to ${SECRETS_DIR}/password-hash on this VM."
-fi
+# Ensure both password hashes exist (reminder only — operator must generate)
+for hash in personalization-password-hash root-password-hash; do
+    if [ ! -f "${SECRETS_DIR}/${hash}" ]; then
+        log "WARNING: keys/${hash} not found."
+        log "  Generate on the host: mkpasswd -m yescrypt > ${SECRETS_DIR}/${hash}"
+        log "  Then copy to ${SECRETS_DIR}/${hash} on this VM."
+    fi
+done
 
 # Symlink secrets/ into keys/ for build-iso.sh compatibility
 if [ -d "${NESTED_DEV}/keys" ] && [ ! -L "${NESTED_DEV}/keys" ]; then
     # keys/ is a real directory with .pub and .asc — overlay with secrets
-    ln -sfn "${SECRETS_DIR}/password-hash" "${NESTED_DEV}/keys/password-hash"
-    log "Symlinked secrets/password-hash into keys/"
+    for hash in personalization-password-hash root-password-hash; do
+        ln -sfn "${SECRETS_DIR}/${hash}" "${NESTED_DEV}/keys/${hash}"
+    done
+    log "Symlinked secrets/{personalization,root}-password-hash into keys/"
 fi
 
 # --- 3. Data volume mount ---
@@ -425,8 +431,8 @@ scsi0 (OS disk, 40 GB):    Ubuntu Server 26.04 + Docker CE + toolchains
 scsi1 (data volume, 100 GB): workspace mounted at /work
   /work/nested_dev/           git checkout of popiel/nested_dev
   /work/nested_dev/output/    build artifacts (ISO, MANIFEST)
-  /work/nested_dev/secrets/   password-hash and other secrets (not in git)
-  /work/nested_dev/keys/      symlinked to secrets/ for build-iso.sh
+  /work/nested_dev/secrets/   both password hashes + other secrets (not in git)
+  /work/nested_dev/keys/      secrets overlaid for build-iso.sh
 ```
 
 Per-project scsi1 volumes are created at clone time by the operator or
@@ -455,9 +461,11 @@ This is an optional host configuration, not part of the dev VM provisioning.
 * `devctl add nested` creates VM 103 (`dev-nested`, stopped); `devctl start 103`
   boots it; first-boot completes (Docker CE, toolchains installed).
 * `devctl log 103` shows `/var/log/dev-firstboot.log` output.
-* Inside VM 103: `nested keys-status` reports key presence/absence.
+* Inside VM 103: `nested keys-status` reports both password hashes and the
+  public keys' presence/absence.
 * Inside VM 103: `nested build` produces `output/proxmox-ve_9.2-1_auto.iso` with
-  correct MANIFEST (requires `keys/password-hash`).
+  correct MANIFEST (requires `keys/personalization-password-hash` and
+  `keys/root-password-hash`).
 * Inside VM 103: `nested refresh` rebuilds `dev-nested-build` from upstream
   Ubuntu base; new digest logged.
 * Inside VM 103: `dev-refresh-images` rebuilds all five tool images (java, scala,

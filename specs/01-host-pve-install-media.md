@@ -48,19 +48,24 @@ layout, IOMMU assertions, and guest conventions.
 | File (repo path) | Description |
 |---|---|
 | Official `proxmox-ve_9.2-1.iso` (downloaded) | Unmodified; pin version + SHA256 in `provision/host/build-iso.sh` |
-| `provision/host/answer-host.toml` | Installer answer file (§4), 9.2 schema |
-| `provision/host/first-boot.sh` | First-boot bootstrap template (§4.1), embedded via `--on-first-boot`; carries the password hash |
+| `provision/host/answer-host.toml` | Installer answer file (§4), 9.2 schema; carries the **root** password hash only |
+| `provision/host/first-boot.sh` | First-boot bootstrap template (§4.1), embedded via `--on-first-boot`; carries the personalization password hash and creates the operator account |
 | `provision/host/provision-host.sh` | First-boot entry point (§5) |
 | `provision/host/frag/*.sh` | Fragments: GPU, memory, vmctl, guest creation, finalize |
 | `provision/host/vmctl/vmctl-host` | Restricted control stub for dev VMs (Spec 07) |
 | `provision/host/vmctl/sudoers` | vmctl sudoers drop-in (Spec 07) |
 | `provision/network/*.conf` | `vmbr0`/firewall/dnsmasq fragments applied by provisioner |
+| `keys/root-password-hash` | yescrypt hash for host `root` (gitignored; build input) |
+| `keys/personalization-password-hash` | yescrypt hash for the operator account and every guest (gitignored; build input) |
 | `output/` | Build products + `MANIFEST` (gitignored) |
 
 ## 4. Answer file — `answer-host.toml` (representative, PVE 9.2)
 
-Replace every `CHANGE_ME` before building. Prefer SSH-key-only root (omit
-`root-password` if key-only).
+Replace every `CHANGE_ME` before building. `build-iso.sh` renders this
+template, so the values arrive as `__PLACEHOLDER__` substitutions rather than
+hand edits. A root password is still required — `root-password` or
+`root-password-hashed`, never both — but it is the *root* password only; the
+operator account is created by the bootstrap (§4.3).
 
 ```toml
 [global]
@@ -69,7 +74,9 @@ country = "us"
 fqdn = "pve-host.CHANGE_ME"
 timezone = "UTC"
 mailto = "CHANGE_ME_admin@example.com"
-root-password = "CHANGE_ME_8plus_complex"
+# Hashed, not plaintext (§4.3): from keys/root-password-hash. The operator
+# account's password is a different hash and never appears in this file.
+root-password-hashed = "CHANGE_ME_mkpasswd_output"
 root-ssh-keys = ["CHANGE_ME_ssh_ed25519_admin"]
 
 [network]
@@ -133,22 +140,34 @@ prepare-iso /path/to/source.iso \
 ```
 
 `provision/host/first-boot.sh` is a template rendered by `build-iso.sh` with
-the same `__PLACEHOLDER__` set as the answer file, and performs the three
-jobs the removed `late-commands` carried, in order:
+the same `__PLACEHOLDER__` set as the answer file, and performs four jobs, in
+order:
 
-1. Persist the root password hash to `/root/.password-hash` (§06), mode 600.
-2. Fetch the `provision/` tree at the pinned `<REF>`.
-3. Install and enable the `pve-firstboot.service` oneshot unit, then run
+1. Persist the **personalization** password hash (`__PERSONALIZATION_PASSWORD_HASH__`,
+   from `keys/personalization-password-hash`) to
+   `/root/.personalization-password-hash` for frag/30, which injects it into
+   the guest NoCloud seeds. Mode 600.
+2. Create the personalization account — `${PERSONALIZATION_USERNAME}` with the
+   configured UID/GID, home, `/bin/bash`, `sudo` membership, the rendered
+   `__PERSONALIZATION_PASSWORD_HASH__` applied via `chpasswd -e`, and
+   `keys/host_os_ed25519.pub` as `~/.ssh/authorized_keys`. PVE's schema has no
+   non-root user field (§4.3), so this cannot be expressed in the answer file.
+3. Fetch the `provision/` tree at the pinned `<REF>`.
+4. Install and enable the `pve-firstboot.service` oneshot unit, then run
    the provisioner directly — the hook already executes *during* the first
    boot, so merely enabling the unit would defer provisioning to the second
    boot.
+
+Step 2 runs before step 3 on purpose: the account must exist even if the
+GitHub fetch fails, and the rendered identity is available at that point
+whereas `provision/personalization.sh` is not.
 
 **Why `from-iso` and not `from-url`:** the hash must never transit the
 network or a public repository. `from-iso` keeps it in the installer media,
 the same trust domain as `root-password-hashed` in the answer file. The
 rendered `output/build-work/first-boot.sh` contains the hash in plaintext and
-is therefore as sensitive as `keys/password-hash`; it is gitignored and must
-not be committed.
+is therefore as sensitive as `keys/personalization-password-hash`; it is
+gitignored and must not be committed.
 
 The `pve-firstboot.service` unit remains authoritative — it runs the full
 `frag/` tree at the pinned REF. `first-boot` is the bootstrap that installs
@@ -196,6 +215,33 @@ Names are hardware-specific. Before first boot, confirm them on the target:
 ```
 proxmox-auto-install-assistant device-info -t disk
 ```
+
+### 4.3 No non-root user in the answer file — the bootstrap creates it
+
+The only valid top-level sections are `global`, `network`, `disk-setup`,
+`post-installation-webhook` and `first-boot`, and `[global]`'s identity fields
+are `root-password` / `root-password-hashed` / `root-ssh-keys` and nothing
+else. There is no `identity:` / `users:` block and no `late-commands` to abuse:
+an answer file that carries one fails `validate-answer` outright.
+
+So an unattended install can produce a host with exactly one account, `root`.
+The operator account defined by Spec 05 (`${PERSONALIZATION_USERNAME}`, uid
+1401) is therefore created by the `first-boot` bootstrap (§4.1 step 2), which
+is the schema-supported post-install hook. The same split applies to the
+passwords:
+
+| Credential | Source | Destination |
+|---|---|---|
+| `root` | `keys/root-password-hash` → `root-password-hashed` | `/etc/shadow` on the host, written by the installer |
+| `${PERSONALIZATION_USERNAME}` | `keys/personalization-password-hash` → `__PERSONALIZATION_PASSWORD_HASH__` in the bootstrap | Host account (`chpasswd -e`) and every guest seed via `/root/.personalization-password-hash` |
+
+Keeping the two hashes in separate files makes the separation structural: a
+leak of the login password — the one shared with three VMs — can no longer
+hand out the host's most privileged account.
+
+Note that a Linux user with `sudo` is still not a PVE realm user. Web UI
+access for the operator would need `pve realm add <user>@pam` on the live host;
+that is out of scope for the install media.
 
 ## 5. First-boot provisioner — `provision-host.sh` requirements
 
@@ -245,9 +291,11 @@ Host hard-capped at 2 GB; guests use QEMU ballooning (`balloon: 1`,
 ### 5.3 `frag/30-create-guests.sh` — guest definitions (NoCloud seeds)
 
 NoCloud seeds (Spec 06): host fetches user-data templates from GitHub, injects
-password hash (+ vmctl private key for desktop), builds seed ISOs, and creates
-VMs with official Ubuntu ISO + NoCloud seed attached as cdrom. No golden qcow2
-files.
+the personalization login hash read from `/root/.personalization-password-hash`
+(+ vmctl private key for desktop), builds seed ISOs, and creates VMs with
+official Ubuntu ISO + NoCloud seed attached as cdrom. No golden qcow2 files.
+The root hash is never involved: guest `root` is explicitly locked in the
+seed templates (Spec 05 §5.4).
 
 New fragment: `frag/25-desktop-control.sh` (Spec 07) runs before frag/30 to
 create the `vmctl` user, generate the control keypair, install sudoers, and
@@ -377,6 +425,21 @@ PXE via `extract-dir` + HTTP/iPXE serving the same answer;
    (Spec 03); `qm status 102` shows template; `devctl add test` from desktop
    creates vm 103 stopped; `devctl start 103` boots it (Spec 07).
 7. `/var/log/pve-firstboot.log` clean; unit disabled.
+8. **Accounts** (Spec 05 §4.1):
+   - `getent passwd ${PERSONALIZATION_USERNAME}` shows uid 1401, gid 1401,
+     home `/home/popiel`, shell `/bin/bash`.
+   - `id ${PERSONALIZATION_USERNAME}` lists `sudo`.
+   - `sudo -n -u ${PERSONALIZATION_USERNAME} sudo -n true` succeeds from a
+     non-root shell (passwordless sudo for the operator key).
+   - `ssh ${PERSONALIZATION_USERNAME}@<host-ip>` works with the operator key
+     only; `sudo -n true` over that session works.
+   - `getent shadow root` and `getent shadow ${PERSONALIZATION_USERNAME}` have
+     *different* hashes, matching `keys/root-password-hash` and
+     `keys/personalization-password-hash` respectively.
+   - `/root/.personalization-password-hash` exists, mode 600, and
+     `/root/.password-hash` does not exist.
+   - In each guest, `passwd -S root` reports `L` and the only unlocked login
+     is the personalization account.
 
 ## 8. Known risks / mitigation
 
@@ -387,5 +450,7 @@ PXE via `extract-dir` + HTTP/iPXE serving the same answer;
 | dGPU audio function omitted | Always pass audio pair; verify group membership |
 | Answer schema drift (8.x vs 9.x) | Pinned 9.2 ISO + `verify` in CI; this spec's field names are 9.2-only |
 | Host loses console when iGPU passed | Expected headless; IPMI/serial required |
-| GitHub unreachable at install/first boot | `--answer-file` vendored copy / mirrored `--fetch-from`; small logged fetches with retry |
+| GitHub unreachable at install/first boot | `--answer-file` vendored copy / mirrored `--fetch-from`; small logged fetches with retry. Note the account is created *before* the fetch, so a failed fetch still leaves a usable operator login |
 | REF drift between ISO and guests | Single REF for host + all goldens; recorded in MANIFEST |
+| One hash reused for root and the operator account | Separate gitignored files, separate placeholders, static invariants test (§4.3) |
+| Operator assumes a `sudo` user can log into the PVE web UI | Documented non-goal; `pve realm add <user>@pam` is a manual post-install step |

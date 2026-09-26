@@ -82,21 +82,39 @@ The first dev VM (`dev-nested` for working on this repo) is created via
 `devctl add nested` from the desktop after provisioning completes
 ([Spec 08](specs/08-nested-dev-repo-vm.md)).
 
-### 3. Generate a password hash
+### 3. Generate password hashes
 
-All three guest VMs share the same login password. Generate a yescrypt hash
-and store it locally (never committed):
+Two distinct credentials, in two files, so neither can be mistaken for the
+other. Generate yescrypt hashes and store them locally (never committed):
 
 ```bash
-mkpasswd -m yescrypt > keys/password-hash
-chmod 600 keys/password-hash
+# Login password for the personalization account — host and all three guests
+mkpasswd -m yescrypt > keys/personalization-password-hash
+chmod 600 keys/personalization-password-hash
+
+# Separate console/break-glass password for PVE root on the host only
+mkpasswd -m yescrypt > keys/root-password-hash
+chmod 600 keys/root-password-hash
 ```
 
-The hash is embedded in the host ISO at build time via the
-`root-password-hashed` answer field. The host persists it to
-`/root/.password-hash` during PVE install, then injects it into
-guest user-data at VM creation time (Spec 06). The hash never reaches
-GitHub.
+Neither hash reaches GitHub; both are read at build time and embedded in the
+host ISO only.
+
+**`keys/root-password-hash`** is substituted into the answer file's
+`root-password-hashed` field, so the installer writes it straight to the host
+root account. It goes nowhere else — not into the guests, not onto disk
+anywhere the provisioner can read it.
+
+**`keys/personalization-password-hash`** travels in the first-boot bootstrap
+(`--on-first-boot`, `source = "from-iso"`), which does two things with it:
+creates the `${PERSONALIZATION_USERNAME}` account on the host — sudo group,
+login password, plus the operator SSH key — and persists it to
+`/root/.personalization-password-hash` for `frag/30` to inject into guest
+user-data at VM creation time (Spec 06).
+
+The host is the only place a personal password is ever set for root: guest
+`root` is explicitly locked (`passwd -l root` in each seed), and the
+personalization account is the only login on the host and in every guest.
 
 ### 4. Verify the SSH key
 
@@ -179,7 +197,9 @@ Output: `output/proxmox-ve_9.2-1_auto.iso`
 
 This ISO contains:
 - PVE 9.2 autoinstall answer file (personalized with your SSH key)
-- Password hash (via `root-password-hashed`, embedded for guest provisioning)
+- Root password hash (via `root-password-hashed`; host root only)
+- First-boot bootstrap (embedded via `--on-first-boot`, carrying the
+  personalization password hash and the account-creation block)
 - First-boot provisioner (fetched from GitHub at install time)
 - UEFI + BIOS boot (handled by `proxmox-auto-install-assistant prepare-iso`)
 
@@ -219,7 +239,13 @@ WSL2 and native Linux work without any of this. Use them if you have them.
    ```
 2. Boot the USB on the target machine (UEFI or legacy BIOS).
 3. PVE autoinstall runs unattended. On first boot, the host:
-   - Persists the password hash to `/root/.password-hash`
+   - Installs `root` with the hash from `keys/root-password-hash`
+   - Creates the `${PERSONALIZATION_USERNAME}` account (UID/GID from
+     `provision/personalization.sh`) with the login password from
+     `keys/personalization-password-hash`, `sudo` membership, and the
+     operator SSH key — PVE's schema has no non-root user field, so this is
+     the only place it can happen
+   - Persists that login hash to `/root/.personalization-password-hash`
    - Fetches the provisioner from GitHub, and preserves
      `keys/host_os_ed25519.pub` into `/root/provision/keys/` so it can be
      injected into the guest seeds
@@ -228,7 +254,7 @@ WSL2 and native Linux work without any of this. Use them if you have them.
      keypair (private half → desktop, public half → host and all guests)
      (Spec 07)
    - Fetches user-data templates from GitHub
-   - Injects the password hash, both public keys, and the desktop's two
+   - Injects the login hash, both public keys, and the desktop's two
      private keys into the templates
    - Shreds the staged private key copies once the seeds are built
    - Builds NoCloud seed ISOs (Spec 06)
@@ -239,8 +265,13 @@ WSL2 and native Linux work without any of this. Use them if you have them.
 ### Step 3 — Verify
 
 ```bash
-# SSH to host
+# SSH to host (operator key works for both accounts)
 ssh -p 2222 root@<lan-ip>
+ssh <you>@<lan-ip>
+
+# Accounts: personalization user has sudo; root has its own password.
+# Neither guest account has a root password at all.
+id <you> && sudo -n true && echo "sudo ok"
 
 # Check guest VMs
 qm status 100   # desktop (running)
@@ -300,7 +331,9 @@ output/
 |---|---|
 | `Missing: wget` | `sudo apt-get install wget` |
 | `No proxmox-auto-install-assistant found` | See [Getting `proxmox-auto-install-assistant`](#getting-proxmox-auto-install-assistant) above |
-| `Missing: keys/password-hash` | Run `mkpasswd -m yescrypt > keys/password-hash` |
+| `Missing: keys/personalization-password-hash` | Run `mkpasswd -m yescrypt > keys/personalization-password-hash` |
+| `Missing: keys/root-password-hash` | Run `mkpasswd -m yescrypt > keys/root-password-hash` — required by the answer file's `root-password-hashed` |
+| Host has only a `root` account after install | The first-boot bootstrap creates the personalization account; check `/var/log/pve-firstboot-bootstrap.log`. On an already-installed host, re-run that step or the block in `provision/host/first-boot.sh` §2 by hand |
 | ISO download fails or 0-byte file | Check internet; delete `output/iso/proxmox-ve_9.2-1.iso` and re-run |
 | ISO SHA256 mismatch after re-download | Verify file wasn't truncated; re-run from a fresh `output/iso/` directory |
 | Docker image build fails | Ensure Docker is running; check `docker build` output for dependency errors |
@@ -313,4 +346,5 @@ output/
 | Dev template exists but can't start | Expected — it's a PVE template. Use `devctl add <project>` to clone it |
 | Dev VM not created by devctl | Check `/var/log/nested-dev-vmctl.log` on host; verify `devctl list` shows template 102 |
 | Guest first-boot stuck | Check `/var/log/desktop-firstboot.log` (or llm/dev variant); ensure host MASQUERADE is working |
-| PVE validation error on answer file | Ensure `keys/password-hash` exists; the answer requires exactly one of `root-password` or `root-password-hashed` |
+| PVE validation error on answer file | Ensure `keys/root-password-hash` exists; the answer requires exactly one of `root-password` or `root-password-hashed` |
+| `Guest VMs not created` after a rename | `frag/30` aborts if `/root/.personalization-password-hash` is missing on the host — check the bootstrap log and re-run `systemctl start pve-firstboot` |

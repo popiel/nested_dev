@@ -77,6 +77,9 @@ bats tests/unit/frag10-iommu.bats
 echo "  frag25-vmctl..."
 bats tests/unit/frag25-vmctl.bats
 
+echo "  first-boot-user..."
+bats tests/unit/first-boot-user.bats
+
 echo "  template..."
 bats tests/unit/template.bats
 

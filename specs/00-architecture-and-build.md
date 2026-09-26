@@ -82,7 +82,7 @@ console/management is via SSH, Proxmox web UI, or serial console.
 | VM IDs | `100=desktop`, `101=llm`, `102+=dev-<project>`, `200–249` reserved | `specs-ds4` convention wins; `specs-mimo` (`100=llm`, `200=desktop`, `9001/9002` templates) is superseded |
 | Host storage | `ext4` root + `local-lvm` thin for guest disks + 4–8 GB swap (file or partition) | `specs-mimo` simplicity wins; ZFS `rpool` allowed as documented variant in Spec 01, not default |
 | Memory model (32 GB host) | Host hard-capped 2 GB; Desktop 8 GB / 4 cores; LLM 16 GB / 6 cores; each Dev 8 GB / 4 cores; QEMU balloon + ZRAM (zstd, 50%) + 4 GB disk swap; 64 GB+ tier: LLM 24 GB / 8 cores | 32 GB is the baseline; 16 GB was the original small-host profile (retained as scale-down path in scripts) |
-| Guest media build | `autoinstall` (Subiquity) ISO per guest → host-mediated NoCloud seed at VM creation (Spec 06) | Host fetches user-data from GitHub, injects password hash (+ vmctl key for desktop), builds seed ISO, boots VM with NoCloud seed. No golden qcow2 files. |
+| Guest media build | `autoinstall` (Subiquity) ISO per guest → host-mediated NoCloud seed at VM creation (Spec 06) | Host fetches user-data from GitHub, injects the personalization login hash (+ vmctl key for desktop), builds seed ISO, boots VM with NoCloud seed. No golden qcow2 files. |
 | GPU driver delivery | Golden images are **GPU-agnostic**; driver + CUDA + serving stack installed on **first boot from official upstreams** | `specs-ds4` wins; `specs-mimo` baked `nvidia-driver-590-server` into FAI image — rejected (ties image to driver/GPU, needs GPU builder) |
 | Desktop session | i3-gaps + dmenu + xrdp + lightdm (default, 32 GB friendly); GNOME + `gnome-remote-desktop` optional profile | i3 is lightweight tiling WM; lightdm for local console on passed-through iGPU; GNOME retained for HW-encode use cases |
 | LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
@@ -95,9 +95,9 @@ console/management is via SSH, Proxmox web UI, or serial console.
 
 | Artifact | Produced from | Consumed by |
 |---|---|---|
-| `pve_auto.iso` | Official PVE 9.2 ISO + `answer-host.toml` + `keys/password-hash` | Host installer |
+| `pve_auto.iso` | Official PVE 9.2 ISO + `answer-host.toml` (with `keys/root-password-hash`) + `first-boot.sh` bootstrap (with `keys/personalization-password-hash`) | Host installer |
 | `provision-host.sh` (+ `frag/*.sh`) | `provision/host/` in GitHub at `<REF>` | Host first boot (systemd oneshot) |
-| Guest VMs | Ubuntu official ISO + NoCloud seed assembled by host from GitHub-fetched user-data + local password hash (Spec 06) | VMs 100/101/102+ |
+| Guest VMs | Ubuntu official ISO + NoCloud seed assembled by host from GitHub-fetched user-data + the host's persisted personalization hash (Spec 06) | VMs 100/101/102+ |
 
 ## 5. Repository layout (`popiel/nested_dev`, this repo)
 

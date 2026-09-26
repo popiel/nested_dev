@@ -623,7 +623,12 @@ during seed assembly (same `sed` pass as password hash). The placeholder
 | | Desktop: `~/.ssh/pvehost_vmctl` (injected via seed) | No |
 | vmctl public key | Host: `/home/vmctl/.ssh/authorized_keys` | No (host only) |
 | Host root SSH key | Host ISO → `keys/host_os_ed25519.pub` embedded | Pub key: yes |
-| Password hash | Host ISO → `/root/.password-hash` | No |
+| Login password hash | Host ISO → `/root/.personalization-password-hash` → guest seeds | No |
+| Root password hash | Host ISO → `/etc/shadow` only; no file the provisioner can read | No |
+
+`vmctl` holds no password: it is key-only with a `ForceCommand` shell and
+passwordless sudo limited to `vmctl-host`. It cannot read either hash — the
+root hash is never written to a file at all.
 
 **vmctl is constrained to:**
 - Verbs: `list`, `status`, `start`, `shutdown`, `stop`, `add`, `log`

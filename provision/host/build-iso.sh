@@ -99,7 +99,8 @@ Auto ISO: ${auto_name}
 Auto ISO SHA256: ${auto_sha}
 Target disk: ${disks}
 SSH key: ${ssh_key_file}
-Password hash: embedded in answer (root-password-hashed) and first-boot bootstrap
+Root password hash: keys/root-password-hash -> answer (root-password-hashed)
+Personalization password hash: keys/personalization-password-hash -> first-boot bootstrap (host account) and guest seeds
 EOF
 }
 
@@ -212,24 +213,54 @@ run_assistant_checked() {
 # Used for both the answer file and the first-boot bootstrap, so the two
 # cannot drift apart on escaping or placeholder names.
 # Argument order matches the historical generate_answer_file contract, with
-# the destination last.
+# the destination last. The two hashes are separate arguments because they
+# come from separate files and are used by different systems: the root hash is
+# only ever written to /etc/shadow by the installer, while the personalization
+# hash becomes a loginable account on the host and in every guest.
 render_template() {
-    local template="$1" disks="$2" ssh_key="$3" ref="$4" password_hash="$5" output="$6"
-    local escaped_hash
+    local template="$1" disks="$2" ssh_key="$3" ref="$4" \
+          root_password_hash="$5" personalization_password_hash="$6" output="$7"
     # Fall back to the literal placeholder when personalization was not sourced,
     # so the caller's unsubstituted-placeholder check fails loudly rather than
     # silently rendering an invalid empty value.
     local email="${PERSONALIZATION_EMAIL:-__PERSONALIZATION_EMAIL__}"
-    escaped_hash=$(sed_escape "$password_hash")
+    local username="${PERSONALIZATION_USERNAME:-__PERSONALIZATION_USERNAME__}"
+    local fullname="${PERSONALIZATION_FULLNAME:-__PERSONALIZATION_FULLNAME__}"
+    local uid="${PERSONALIZATION_UID:-__PERSONALIZATION_UID__}"
+    local gid="${PERSONALIZATION_GID:-__PERSONALIZATION_GID__}"
+    local home="${PERSONALIZATION_HOME:-__PERSONALIZATION_HOME__}"
+    # sed replaces & with the whole match and treats \ in the replacement as an
+    # escape, so every value below goes through sed_escape — the two hashes most
+    # of all, since a yescrypt/descrypt hash is full of '$' and an unescaped one
+    # expands to nothing and silently yields an install with no working
+    # credentials.
+    local e_root_hash e_personal_hash e_ssh_key e_email e_username e_fullname
+    local e_uid e_gid e_home
+    e_root_hash=$(sed_escape "$root_password_hash")
+    e_personal_hash=$(sed_escape "$personalization_password_hash")
+    e_ssh_key=$(sed_escape "$ssh_key")
+    e_email=$(sed_escape "$email")
+    e_username=$(sed_escape "$username")
+    e_fullname=$(sed_escape "$fullname")
+    e_uid=$(sed_escape "$uid")
+    e_gid=$(sed_escape "$gid")
+    e_home=$(sed_escape "$home")
     # $2 is the array already normalized by validate_target_disks(), so it is
     # either well-formed TOML or the call already died. No escaping is needed:
     # bare device names cannot contain '|' or '&'.
     sed \
-        -e "s|__ROOT_SSH_KEY__|${ssh_key}|g" \
+        -e "s|__ROOT_SSH_KEY__|${e_ssh_key}|g" \
         -e "s|__TARGET_DISKS__|${disks}|g" \
         -e "s|__GITHUB_REF__|${ref}|g" \
-        -e "s|__ROOT_PASSWORD_HASH__|${escaped_hash}|g" \
-        -e "s|__PERSONALIZATION_EMAIL__|${email}|g" \
+        -e "s|__ROOT_PASSWORD_HASH__|${e_root_hash}|g" \
+        -e "s|__PERSONALIZATION_PASSWORD_HASH__|${e_personal_hash}|g" \
+        -e "s|__PERSONALIZATION_EMAIL__|${e_email}|g" \
+        -e "s|__PERSONALIZATION_USERNAME__|${e_username}|g" \
+        -e "s|__PERSONALIZATION_FULLNAME__|${e_fullname}|g" \
+        -e "s|__PERSONALIZATION_UID__|${e_uid}|g" \
+        -e "s|__PERSONALIZATION_GID__|${e_gid}|g" \
+        -e "s|__PERSONALIZATION_HOME__|${e_home}|g" \
+        -e "s|__ADMIN_PUBKEY__|${e_ssh_key}|g" \
         "$template" > "$output"
 }
 
@@ -237,12 +268,14 @@ generate_answer_file() {
     render_template "$@"
 }
 
-# The first-boot bootstrap is embedded in the ISO and carries the root password
-# hash, so it is rendered into the (gitignored) work dir and must be readable
-# and executable before prepare-iso reads it.
+# The first-boot bootstrap is embedded in the ISO and carries the
+# personalization password hash, so it is rendered into the (gitignored) work
+# dir and must be readable and executable before prepare-iso reads it.
 generate_first_boot_script() {
-    local template="$1" disks="$2" ssh_key="$3" ref="$4" password_hash="$5" output="$6"
-    render_template "$template" "$disks" "$ssh_key" "$ref" "$password_hash" "$output"
+    local template="$1" disks="$2" ssh_key="$3" ref="$4" \
+          root_password_hash="$5" personalization_password_hash="$6" output="$7"
+    render_template "$template" "$disks" "$ssh_key" "$ref" \
+        "$root_password_hash" "$personalization_password_hash" "$output"
     chmod 700 "$output"
 }
 
@@ -285,10 +318,20 @@ main() {
         command -v "$cmd" >/dev/null 2>&1 || die "Missing: $cmd"
     done
 
-    # Password hash (not committed — read at build time only)
-    PASSWORD_HASH_FILE="${REPO_ROOT}/keys/password-hash"
-    [ -f "$PASSWORD_HASH_FILE" ] || die "Missing: ${PASSWORD_HASH_FILE} (generate with mkpasswd)"
-    PASSWORD_HASH=$(tr -d '\n' < "$PASSWORD_HASH_FILE")
+    # Password hashes (not committed — read at build time only). Two distinct
+    # credentials, deliberately kept in separate files so neither can be
+    # substituted for the other by accident:
+    #   root-password-hash         -> PVE answer (root on the host only)
+    #   personalization-password-hash -> the login password for the
+    #                                  personalization account on the host and
+    #                                  in every guest
+    ROOT_PASSWORD_HASH_FILE="${REPO_ROOT}/keys/root-password-hash"
+    [ -f "$ROOT_PASSWORD_HASH_FILE" ] || die "Missing: ${ROOT_PASSWORD_HASH_FILE} (generate with mkpasswd -m yescrypt)"
+    ROOT_PASSWORD_HASH=$(tr -d '\n' < "$ROOT_PASSWORD_HASH_FILE")
+
+    PERSONALIZATION_PASSWORD_HASH_FILE="${REPO_ROOT}/keys/personalization-password-hash"
+    [ -f "$PERSONALIZATION_PASSWORD_HASH_FILE" ] || die "Missing: ${PERSONALIZATION_PASSWORD_HASH_FILE} (generate with mkpasswd -m yescrypt)"
+    PERSONALIZATION_PASSWORD_HASH=$(tr -d '\n' < "$PERSONALIZATION_PASSWORD_HASH_FILE")
 
     mkdir -p "$ISO_DIR" "$WORK_DIR"
 
@@ -351,14 +394,14 @@ main() {
     [ -f "$FIRST_BOOT_TEMPLATE" ] || die "First-boot template not found: ${FIRST_BOOT_TEMPLATE}"
 
     generate_answer_file "$ANSWER_TEMPLATE" "$DISK_LIST" "$SSH_KEY" "$REF" \
-        "$PASSWORD_HASH" "$ANSWER_WORK"
+        "$ROOT_PASSWORD_HASH" "$PERSONALIZATION_PASSWORD_HASH" "$ANSWER_WORK"
     log "Answer file generated: ${ANSWER_WORK}"
 
-    # The first-boot bootstrap carries the password hash, so it is rendered with
-    # the same escaping and kept in the gitignored work dir. It replaces the
-    # [late-commands] section the answer file used to carry.
+    # The first-boot bootstrap carries the personalization password hash, so it
+    # is rendered with the same escaping and kept in the gitignored work dir. It
+    # replaces the [late-commands] section the answer file used to carry.
     generate_first_boot_script "$FIRST_BOOT_TEMPLATE" "$DISK_LIST" "$SSH_KEY" "$REF" \
-        "$PASSWORD_HASH" "$FIRST_BOOT_WORK"
+        "$ROOT_PASSWORD_HASH" "$PERSONALIZATION_PASSWORD_HASH" "$FIRST_BOOT_WORK"
     log "First-boot bootstrap generated: ${FIRST_BOOT_WORK}"
     for rendered in "$FIRST_BOOT_WORK" "$ANSWER_WORK"; do
         if grep -q '__[A-Z_][A-Z_]*__' "$rendered"; then

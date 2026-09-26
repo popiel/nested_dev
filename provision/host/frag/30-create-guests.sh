@@ -147,11 +147,15 @@ main() {
         log "64 GB+ host detected: LLM gets 24 GB"
     fi
 
-    # --- Read password hash ---
-    PASSWORD_HASH_FILE="/root/.password-hash"
-    [ -f "$PASSWORD_HASH_FILE" ] || die "Password hash not found: ${PASSWORD_HASH_FILE}"
-    PASS_HASH="$(cat "$PASSWORD_HASH_FILE")"
-    log "Password hash loaded"
+    # --- Read personalization password hash ---
+    # This is the LOGIN password for the personalization account in every
+    # guest. It is not the host root password, which never leaves the host and
+    # is not persisted anywhere the provisioner can read.
+    PERSONALIZATION_HASH_FILE="/root/.personalization-password-hash"
+    [ -f "$PERSONALIZATION_HASH_FILE" ] \
+        || die "Personalization password hash not found: ${PERSONALIZATION_HASH_FILE}"
+    PERSONALIZATION_HASH="$(cat "$PERSONALIZATION_HASH_FILE")"
+    log "Personalization password hash loaded"
 
     # --- Read admin public key (build machine operator key) ---
     # Preserved into the provision tree by first-boot.sh. Injected as an
@@ -206,7 +210,7 @@ main() {
             log "ERROR: PERSONALIZATION_USERNAME or PERSONALIZATION_FULLNAME not set — check /root/provision/personalization.sh"
             exit 1
         fi
-        sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
+        sed -e "s|CHANGE_ME_HASHED|${PERSONALIZATION_HASH}|g" \
             -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
             -e "s|__GUEST_ID_PRIV_B64__|${GUEST_ID_KEY_B64}|g" \
             -e "s|__ADMIN_PUBKEY__|${ADMIN_PUBKEY}|g" \

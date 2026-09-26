@@ -36,7 +36,7 @@ a retained profile.
 | Audio | **PulseAudio + pavucontrol** |
 | SSH | `openssh-client` (desktop → dev/LLM VMs) + `openssh-server` (LAN → desktop via host DNAT) |
 | X11 forwarding | `xauth` + `sshd_config` `X11Forwarding yes` (desktop hosts X displays for dev VM apps) |
-| Account | `popiel` (§05), SSH-key-only, autologin off |
+| Account | `popiel` (§05), SSH-key-only, autologin off; guest `root` has no password |
 | Disk | **40 GB** virtio system |
 | Identity | NO machine-specific data (§6 cleanup) |
 | Hostname | `lychee` (matches dnsmasq static DNS entry) |
@@ -54,7 +54,8 @@ a retained profile.
 
 Guest VMs are created by the host at first boot (Spec 06). The host
 fetches `desktop/user-data/user-data` from GitHub at the pinned `<REF>`,
-injects the password hash from `/root/.password-hash`, and boots the VM
+injects the personalization login hash from `/root/.personalization-password-hash`,
+and boots the VM
 with a NoCloud seed containing the assembled user-data.
 
 ## 4. `user-data` (representative, 26.04)
@@ -71,9 +72,10 @@ autoinstall:
   keyboard: {layout: "us"}
   identity:
     hostname: lychee
-    username: ${PERSONALIZATION_USERNAME}   # §05 via personalization.sh
-    password: "CHANGE_ME_HASHED"   # prefer ssh-only
-    realname: "${PERSONALIZATION_FULLNAME}"   # §05
+    # Placeholders substituted by frag/30 (Spec 05 §5.2) at VM creation time
+    username: __PERSONALIZATION_USERNAME__
+    password: "CHANGE_ME_HASHED"   # the login hash; SSH is the intended path
+    realname: "__PERSONALIZATION_FULLNAME__"
   ssh:
     install-server: true
     allow-pw: false

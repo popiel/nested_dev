@@ -32,7 +32,7 @@ load '../lib/helpers'
     local out="${BATS_TMPDIR}/rendered-answer.toml"
     PERSONALIZATION_EMAIL="someone@example.com"
     generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        '"nvme0n1"' "ssh-ed25519 AAAA" "main" 'HASH' "$out"
+        '"nvme0n1"' "ssh-ed25519 AAAA" "main" 'HASH' 'PERSONAL_HASH' "$out"
     run python3 -c "import tomllib; tomllib.load(open(r'$(win_path "$out")','rb'))"
     [ "$status" -eq 0 ]
 }

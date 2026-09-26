@@ -61,12 +61,17 @@ case "$VERB" in
 
     keys-status)
         echo "[nested] Checking keys..."
-        if [ -f "${NESTED_DEV}/secrets/password-hash" ]; then
-            echo "  password-hash: present"
-        else
-            echo "  password-hash: MISSING"
-            echo "    Generate: mkpasswd -m yescrypt > ${NESTED_DEV}/secrets/password-hash"
-        fi
+        # Both password hashes are required: build-iso.sh reads the root one for
+        # the answer file and the personalization one for the first-boot
+        # bootstrap and the guest seeds.
+        for secret in personalization-password-hash root-password-hash; do
+            if [ -f "${NESTED_DEV}/secrets/${secret}" ]; then
+                echo "  ${secret}: present"
+            else
+                echo "  ${secret}: MISSING"
+                echo "    Generate: mkpasswd -m yescrypt > ${NESTED_DEV}/secrets/${secret}"
+            fi
+        done
         for key in host_os_ed25519.pub ubuntu-release-key.asc; do
             if [ -f "${NESTED_DEV}/keys/${key}" ]; then
                 echo "  ${key}: present"

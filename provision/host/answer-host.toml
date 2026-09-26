@@ -10,6 +10,10 @@ country = "us"
 fqdn = "lychee-host.wolfskeep.com"
 timezone = "UTC"
 mailto = "__PERSONALIZATION_EMAIL__"
+# The host root account only, from keys/root-password-hash. The login password
+# for the personalization account is a different hash
+# (keys/personalization-password-hash) and reaches the host through the
+# first-boot bootstrap, never through this file.
 root-password-hashed = "__ROOT_PASSWORD_HASH__"
 root-ssh-keys = ["__ROOT_SSH_KEY__"]
 
@@ -27,10 +31,11 @@ disk-list = [__TARGET_DISKS__]
 
 [first-boot]
 # The executable is embedded into the ISO at build time by
-# `prepare-iso --on-first-boot` (rendered from provision/host/first-boot.sh) and
-# carries the root password hash, so it must come from the ISO and never from a
-# URL. It persists the hash, fetches the provision/ tree at the pinned REF, and
-# installs pve-firstboot.service.
+# `prepare-iso --on-first-boot` (rendered from provision/host/first-boot.sh).
+# It carries the personalization login hash, so it must come from the ISO and
+# never from a URL. It creates the operator account — the schema has no
+# non-root user field — then persists the hash, fetches the provision/ tree at
+# the pinned REF, and installs pve-firstboot.service.
 source = "from-iso"
 # Valid values: before-network, network-online, fully-up. The bootstrap fetches
 # from GitHub, so it must not run before networking is usable.

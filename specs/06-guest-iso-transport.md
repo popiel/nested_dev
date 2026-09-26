@@ -19,9 +19,11 @@ The build scripts produce custom autoinstall ISOs, but:
    (user-data + meta-data) attached as cloud-init drives. The host
    assembles these from GitHub-fetched templates.
 
-2. **Password hash stays on the host.** The host ISO carries the hash
-   (baked in at build time). The host substitutes it into user-data
-   templates at VM creation time. GitHub only ever has the placeholder.
+2. **The login password hash stays on the host.** The installer ISO
+   carries the hash, rendered into the first-boot bootstrap (Spec 01 §4.1);
+   the bootstrap creates the host account and persists the hash to the host
+   disk, and the host substitutes it into user-data templates at VM creation
+   time. GitHub only ever has the placeholder.
 
 3. **Guests fetch first-boot scripts from GitHub.** The host's FORWARD
    chain does not restrict VM outbound; MASQUERADE provides internet.
@@ -30,39 +32,52 @@ The build scripts produce custom autoinstall ISOs, but:
 **No custom guest ISOs. No golden qcow2. No virt-sysprep. No file
 transport. No password hash on GitHub.**
 
-## 3. How the password hash and vmctl key flow
+## 3. How the login password hash and vmctl key flow
 
 ```
-keys/password-hash
-       |
-       v
+keys/personalization-password-hash
+        |
+        v
 provision/host/build-iso.sh
-  reads hash, copies to ISO root
-  answer-host.toml late-commands:
-    writes /root/.password-hash on host
-       |
-       v
-Host disk: /root/.password-hash
-       |
-       v
+  reads the hash, renders it into the first-boot bootstrap
+  (from-iso, not from-url) and into answer-host.toml as
+  __ROOT_PASSWORD_HASH__ from keys/root-password-hash
+        |
+        v
+first-boot.sh (on the installer media, runs on first boot)
+  creates the host account with the login hash (chpasswd -e)
+  writes /root/.personalization-password-hash on the host
+        |
+        v
+Host disk: /root/.personalization-password-hash   (mode 600)
+        |
+        v
 frag/25-desktop-control.sh
   generates vmctl keypair at /root/.nested-dev/vmctl/
   stages private key for frag/30
-       |
-       v
+        |
+        v
 frag/30-create-guests.sh
-  reads /root/.password-hash
+  reads /root/.personalization-password-hash
   reads /root/.nested-dev/vmctl-priv-staged
   fetches user-data template from GitHub (CHANGE_ME_HASHED + __VMCTL_PRIV_B64__)
   sed-replaces placeholders with real values
   writes result as NoCloud seed for each guest
   (desktop seed includes vmctl private key via late-commands)
-       |
-       v
-Guest autoinstall reads NoCloud seed -> real password + vmctl key configured
+        |
+        v
+Guest autoinstall reads NoCloud seed
+  -> personalization account gets the login password
+  -> passwd -l root: guest root has no password
 ```
 
-GitHub never sees the hash or the vmctl key. The host is the only place
+The root hash goes a separate, shorter path: `build-iso.sh` substitutes it
+into `answer-host.toml`'s `root-password-hashed`, the installer writes it to
+`/etc/shadow`, and nothing else on the host ever reads it. `frag/30` has no
+access to it, so a compromise of the guest-provisioning path cannot reach
+the host's most privileged credential.
+
+GitHub never sees either hash or the vmctl key. The host is the only place
 they exist at runtime.
 
 ## 4. How autoinstall user-data reaches the VM
@@ -74,7 +89,7 @@ automatically if attached as a cloud-init drive.
 The flow:
 1. Host fetches user-data **templates** from GitHub (`main` branch,
    placeholders intact)
-2. Host reads password hash from `/root/.password-hash`
+2. Host reads the login hash from `/root/.personalization-password-hash`
 3. Host substitutes `CHANGE_ME_HASHED` -> real hash in each template
 4. Host writes result as NoCloud seed + `meta-data`
 5. `qm create` attaches seed as `-ide2`
@@ -83,20 +98,27 @@ The flow:
 
 ## 5. Host-side changes
 
-### 5.1 Host ISO: embed password hash
+### 5.1 Host ISO: carry the login hash in the first-boot bootstrap
 
-The host `build-iso.sh` already reads `keys/password-hash`. Add a
-`late-command` to the answer file that persists it on the host disk:
+PVE 9.2's answer file has no `late-commands` section — the schema is
+`global` / `network` / `disk-setup` / `post-installation-webhook` /
+`first-boot`, and an answer file containing `[late-commands]` fails
+`validate-answer`. So there is no "persist the hash" command to add, and no
+reason to stage the hash as a loose file on the ISO root.
 
-```toml
-[late-commands]
-"persist-password-hash" = "sh -c 'cat /cdrom/password-hash > /target/root/.password-hash && chmod 600 /target/root/.password-hash'"
-```
+The hash rides the installer ISO inside the `first-boot` bootstrap instead,
+which `prepare-iso` embeds with `--on-first-boot` and `source = "from-iso"`
+(Spec 01 §4.1). `build-iso.sh` renders it as
+`__PERSONALIZATION_PASSWORD_HASH__`; the bootstrap applies it to the host
+account with `chpasswd -e` and writes it to
+`/root/.personalization-password-hash`, mode 600, for frag/30 below.
 
-The host `build-iso.sh` copies `keys/password-hash` to the ISO root
-alongside the answer file.
+`from-url` is rejected for the same reason the answer file's
+`root-password-hashed` is the only root credential: the hash must not transit
+the network. `from-iso` keeps it in the same trust domain as the media itself.
 
-After install, the hash lives at `/root/.password-hash` on the host.
+The root password is a *different* file (`keys/root-password-hash`) and never
+enters this bootstrap, so frag/30 cannot read it even by accident.
 
 ### 5.2 `frag/25-desktop-control.sh` — vmctl keypair (runs before frag/30)
 
@@ -106,7 +128,7 @@ embed in the desktop seed. Full implementation in Spec 07 §3.1.
 
 ### 5.3 `frag/30-create-guests.sh` — NoCloud seeds, guest creation
 
-Runs after frag/25. Reads password hash + staged vmctl private key.
+Runs after frag/25. Reads the personalization hash + staged vmctl private key.
 Fetches user-data templates from GitHub, injects placeholders, builds
 NoCloud seed ISOs (`genisoimage`), creates VMs with Ubuntu ISO + seed.
 
@@ -115,14 +137,13 @@ NoCloud seed ISOs (`genisoimage`), creates VMs with Ubuntu ISO + seed.
 GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
 GITHUB_REF="${PERSONALIZATION_REF:-main}"
 BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_REF}"
-PASSWORD_HASH_FILE="/root/.password-hash"
+PERSONALIZATION_HASH_FILE="/root/.personalization-password-hash"
 VMCTL_KEY_FILE="/root/.nested-dev/vmctl-priv-staged"
 
-# --- Read password hash ---
-if [ ! -f "$PASSWORD_HASH_FILE" ]; then
-    die "Password hash not found: ${PASSWORD_HASH_FILE}"
-fi
-PASS_HASH="$(cat "$PASSWORD_HASH_FILE")"
+# --- Read the login hash (absent = the bootstrap never ran) ---
+[ -f "$PERSONALIZATION_HASH_FILE" ] \
+    || die "Personalization password hash not found: ${PERSONALIZATION_HASH_FILE}"
+PERSONALIZATION_HASH="$(cat "$PERSONALIZATION_HASH_FILE")"
 
 # --- Read vmctl private key (base64 for desktop injection) ---
 VMCTL_KEY_B64=""
@@ -145,7 +166,7 @@ for guest in desktop llm dev; do
     fi
 
     # Substitute password hash + vmctl key (desktop only)
-    sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
+    sed -e "s|CHANGE_ME_HASHED|${PERSONALIZATION_HASH}|g" \
         -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
         "${SEED_DIR}/${guest}-template" > "$SEED_FILE"
 
@@ -260,16 +281,23 @@ delegates to `vmctl-host` on the host. All clones are created **stopped**.
 Workstation                         Host (PVE)
 -----------                         ----------
 1. build-iso.sh (host only)
-   reads keys/password-hash
-   bakes into answer-host.toml
-   copies hash to ISO root
+   reads keys/personalization-password-hash
+   reads keys/root-password-hash
+   bakes root hash into answer-host.toml
+   bakes login hash into first-boot.sh
+   (--on-first-boot, from-iso)
    -> proxmox-ve_9.2-1_auto.iso
 
 2. USB host ISO to host         -->  3. Boot USB, PVE autoinstall
                                       answer-host.toml baked in
-                                      late-commands:
+                                      installer writes root hash
+                                        to /etc/shadow
+                                      first-boot bootstrap (from-iso):
+                                        create personalization account
+                                        (chpasswd -e + sudo + admin key)
+                                        write
+                                          /root/.personalization-password-hash
                                         fetch provisioner from GitHub
-                                        write /root/.password-hash
 
                                     4. First boot -> provision-host.sh
                                       10-gpu-passthrough.sh
@@ -279,11 +307,12 @@ Workstation                         Host (PVE)
                                         generate control keypair
                                         install sudoers + vmctl-host
                                       30-create-guests.sh:
-                                        read /root/.password-hash
+                                        read
+                                          /root/.personalization-password-hash
                                         read vmctl private key
                                         fetch user-data templates
                                           from GitHub (placeholders)
-                                        substitute hash + vmctl key
+                                        substitute login hash + vmctl key
                                         build NoCloud seed ISOs
                                         qm create + start (100/101)
                                         qm create + start 102
@@ -325,8 +354,9 @@ Desktop                             Host (PVE)
 | Artifact | Source | Transport |
 |---|---|---|
 | Host installer ISO | Built locally, USB | Manual (one-time) |
-| Password hash | Embedded in host ISO | USB (same as host) |
-| Host provisioner | GitHub (`<REF>`) | Network (late-commands) |
+| Login password hash | Embedded in host ISO (first-boot bootstrap, `from-iso`) | USB (same as host) |
+| Root password hash | Embedded in host ISO (answer file, `root-password-hashed`) | USB (same as host) |
+| Host provisioner | GitHub (`<REF>`) | Network (first-boot bootstrap) |
 | Guest user-data templates | GitHub (`<REF>`) | Network (frag/30) |
 | Guest first-boot scripts | GitHub (`<REF>`) | Network (guest first-boot) |
 | NVIDIA/CUDA/Docker/Ollama | Official upstream repos | Network (guest first-boot) |
@@ -336,11 +366,18 @@ Desktop                             Host (PVE)
 
 | Secret | Where it lives | On GitHub? |
 |---|---|---|
-| Password hash | Host ISO -> `/root/.password-hash` | No |
+| Login password hash | Host ISO (bootstrap) -> `/root/.personalization-password-hash` -> guest seeds | No |
+| Root password hash | Host ISO (answer file) -> `/etc/shadow` on the host, nowhere else | No |
 | SSH private key | User's workstation only | No |
-| SSH public key | Host ISO (baked in answer file) | No |
-| `keys/password-hash` | Build workstation (gitignored) | No |
+| SSH public key | Host ISO (baked in answer file + bootstrap) | No |
+| `keys/personalization-password-hash` | Build workstation (gitignored) | No |
+| `keys/root-password-hash` | Build workstation (gitignored) | No |
 | `keys/host_os_ed25519.pub` | Repo (committed) | Yes (public key) |
+
+The two hashes have disjoint destinations: the login hash reaches the host
+account and three guests, the root hash reaches only `/etc/shadow` on the
+host. Nothing the provisioner runs can read the root hash, so compromising
+`frag/30` or a guest seed does not yield the host's root account.
 
 ## 9. Open questions
 
@@ -353,12 +390,14 @@ Desktop                             Host (PVE)
 
 | File | Change |
 |---|---|
-| `provision/host/build-iso.sh` | Copy `keys/password-hash` to ISO root |
-| `provision/host/answer-host.toml` | Add `persist-password-hash` late-command |
+| `provision/host/build-iso.sh` | Read both hash files; render them into their respective placeholders |
+| `provision/host/answer-host.toml` | `root-password-hashed = "__ROOT_PASSWORD_HASH__"` (root only) |
+| `provision/host/first-boot.sh` | Create the personalization account from `__PERSONALIZATION_PASSWORD_HASH__`; persist it to `/root/.personalization-password-hash` |
 | `provision/host/frag/25-desktop-control.sh` | **New**: vmctl user, keypair, sudoers, staging |
-| `provision/host/frag/30-create-guests.sh` | Rewrite: NoCloud seeds, inject hash + vmctl key, create VMs, provisioning gate for 102 |
+| `provision/host/frag/30-create-guests.sh` | Rewrite: NoCloud seeds, inject login hash + vmctl key, create VMs, provisioning gate for 102 |
 | `provision/host/frag/90-finalize.sh` | Add INPUT rule for desktop→host SSH (port 22) |
 | `provision/host/vmctl/vmctl-host` | **New**: restricted control stub (Spec 07) |
 | `provision/host/vmctl/sudoers` | **New**: vmctl sudoers drop-in (Spec 07) |
 | `desktop/user-data/user-data` | Add `__VMCTL_PRIV_B64__` late-command placeholder |
+| `{desktop,llm,dev}/user-data/user-data` | `passwd -l root` so no guest has a root password |
 | `specs/06-guest-iso-transport.md` | This file |

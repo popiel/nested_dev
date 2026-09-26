@@ -30,7 +30,7 @@ discipline with mimo's Docker + Container Toolkit serving model.
 | Serving baseline | **Ollama container** (binds localhost + Desktop-VM peer); optional `vLLM` / `llama.cpp` profiles as containers |
 | Data volume | Separate `scsi1` disk from host provisioner, mounted at `/data/models`; `/opt/models` kept as symlink for mimo compat |
 | OS disk | **80 GB** virtio (mimo size retained; models live on data volume, not OS disk) |
-| Account | `popiel` (§05), SSH-key-only |
+| Account | `popiel` (§05), SSH-key-only; guest `root` has no password |
 | Identity | No machine-specific data in image |
 | GPU config | Dual GTX 1080 (8 GB each, 16 GB total) via VFIO; single GPU fallback documented |
 | Model policy | No auto-pull; first-boot prints VRAM-based recommendations only |
@@ -85,7 +85,8 @@ automatically.
 
 Guest VMs are created by the host at first boot (Spec 06). The host
 fetches `llm/user-data/user-data` from GitHub at the pinned `<REF>`,
-injects the password hash from `/root/.password-hash`, and boots the VM
+injects the personalization login hash from `/root/.personalization-password-hash`,
+and boots the VM
 with a NoCloud seed containing the assembled user-data.
 
 ## 4. `user-data` (representative, 26.04)
@@ -100,9 +101,10 @@ autoinstall:
   keyboard: {layout: "us"}
   identity:
     hostname: llm-vm
-    username: ${PERSONALIZATION_USERNAME}   # §05 via personalization.sh
-    password: "CHANGE_ME_HASHED"   # prefer ssh-only (allow-pw false)
-    realname: "${PERSONALIZATION_FULLNAME}"   # §05
+    # Placeholders substituted by frag/30 (Spec 05 §5.2) at VM creation time
+    username: __PERSONALIZATION_USERNAME__
+    password: "CHANGE_ME_HASHED"   # the login hash; allow-pw false below
+    realname: "__PERSONALIZATION_FULLNAME__"
   ssh:
     install-server: true
     allow-pw: false

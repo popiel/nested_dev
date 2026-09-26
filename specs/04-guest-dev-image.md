@@ -41,7 +41,7 @@ desktop access (Spec 02), host wiring (Spec 01 §5.3).
 | Build caches | `~/.sbt`, `~/.ivy2`, `~/.cache/coursier` mounted into containers for incremental builds |
 | Wrapper scripts | `/home/${PERSONALIZATION_USERNAME}/.local/bin/` (§05) in PATH via `.bashrc`; one script per tool |
 | Network | Egress-deny default; allowlist only (Ubuntu archive + pinned upstreams + LLM-VM API peer); ingress SSH only |
-| Account | `popiel` (§05), SSH-key-only; `docker` group membership |
+| Account | `popiel` (§05), SSH-key-only; `docker` group membership; guest `root` has no password |
 | OS disk | **40 GB** virtio thin (project data beyond that → per-project `scsi1` volume) |
 | Fleet | Golden `dev-golden.qcow2` cloned per project: `102=dev-<alpha>`, `103=dev-<beta>`, …; `200–249` remain reserved future |
 | Identity | No machine-specific data in golden image |
@@ -59,7 +59,8 @@ desktop access (Spec 02), host wiring (Spec 01 §5.3).
 
 Guest VMs are created by the host at first boot (Spec 06). The host
 fetches `dev/user-data/user-data` from GitHub at the pinned `<REF>`,
-injects the password hash from `/root/.password-hash`, and boots the VM
+injects the personalization login hash from `/root/.personalization-password-hash`,
+and boots the VM
 with a NoCloud seed containing the assembled user-data.
 
 ### Container images (Dockerfiles in `dev/docker/`, built lazily by wrapper scripts)
@@ -96,9 +97,10 @@ autoinstall:
   keyboard: {layout: "us"}
   identity:
     hostname: dev-template
-    username: ${PERSONALIZATION_USERNAME}   # §05 via personalization.sh
+    # Placeholders substituted by frag/30 (Spec 05 §5.2) at VM creation time
+    username: __PERSONALIZATION_USERNAME__
     password: "CHANGE_ME_HASHED"
-    realname: "${PERSONALIZATION_FULLNAME}"   # §05
+    realname: "__PERSONALIZATION_FULLNAME__"
   ssh:
     install-server: true
     allow-pw: false

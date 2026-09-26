@@ -286,13 +286,28 @@ SCRIPT
 # These are behavioural, not just existence checks. A parameter-order slip in
 # render_template once wrote the answer file to a path named after the SSH key,
 # leaving a stale template to be validated and built with.
+#
+# render_template takes two separate hashes (root, then personalization) before
+# the destination, because they come from two different files and go to two
+# different systems. setup_personalization() is sourced by every rendering test
+# so the identity placeholders have something to substitute; without it they
+# survive into the output and trip the build's own placeholder guard.
+
+setup_personalization() {
+    PERSONALIZATION_EMAIL="someone@example.com"
+    PERSONALIZATION_USERNAME="testuser"
+    PERSONALIZATION_FULLNAME="Test User"
+    PERSONALIZATION_UID="1401"
+    PERSONALIZATION_GID="1401"
+    PERSONALIZATION_HOME="/home/testuser"
+}
 
 @test "render_template writes to the destination argument" {
     local out="${BATS_TMPDIR}/rendered.toml"
     local hash='$y$j9T$abc$def'
-    PERSONALIZATION_EMAIL="someone@example.com"
+    setup_personalization
     run generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        "nvme0n1" "ssh-ed25519 AAAA" "v1.2" "$hash" "$out"
+        "nvme0n1" "ssh-ed25519 AAAA" "v1.2" "$hash" 'PERSONAL_HASH' "$out"
     [ "$status" -eq 0 ]
     [ -f "$out" ]
     run cat "$out"
@@ -304,9 +319,9 @@ SCRIPT
 
 @test "render_template substitutes every placeholder and leaves none behind" {
     local out="${BATS_TMPDIR}/rendered2.toml"
-    PERSONALIZATION_EMAIL="someone@example.com"
+    setup_personalization
     generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        "sda" "KEY" "main" 'HASH' "$out"
+        "sda" "KEY" "main" 'HASH' 'PERSONAL_HASH' "$out"
     run grep -o '__[A-Z_][A-Z_]*__' "$out"
     [ -z "$output" ]
 }
@@ -315,22 +330,109 @@ SCRIPT
     # An unescaped $y$j9T$... would expand to nothing and silently blank the
     # root password, producing an install with no working credentials.
     local out="${BATS_TMPDIR}/rendered3.toml"
-    PERSONALIZATION_EMAIL="someone@example.com"
+    setup_personalization
     local hash='$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW'
     generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        "sda" "KEY" "main" "$hash" "$out"
+        "sda" "KEY" "main" "$hash" 'PERSONAL_HASH' "$out"
     run cat "$out"
     assert_contains "$output" '$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW'
 }
 
 @test "render_template warns-by-placeholder when personalization is not sourced" {
+    # The answer file carries only the email (plus the already-passed root
+    # hash, key and ref); the rest of the identity rides the bootstrap, because
+    # PVE's schema has no non-root user field.
     local out="${BATS_TMPDIR}/rendered4.toml"
     unset PERSONALIZATION_EMAIL
+    unset PERSONALIZATION_USERNAME
     generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        "sda" "KEY" "main" 'HASH' "$out"
+        "sda" "KEY" "main" 'HASH' 'PERSONAL_HASH' "$out"
     # The placeholder survives, which is what the build's guard detects.
     run cat "$out"
     assert_contains "$output" '__PERSONALIZATION_EMAIL__'
+    assert_not_contains "$output" '__PERSONALIZATION_USERNAME__'
+}
+
+@test "the bootstrap is where an unsourced identity shows up as a placeholder" {
+    # The account name, UID, GID, home and shell have no answer-file field to
+    # live in, so the bootstrap is the only template that can show a
+    # surviving __PERSONALIZATION_*__ placeholder. Without this the host would
+    # be created with the literal string "popiel" as a username.
+    local boot="${BATS_TMPDIR}/rendered4-firstboot.sh"
+    unset PERSONALIZATION_EMAIL
+    unset PERSONALIZATION_USERNAME
+    unset PERSONALIZATION_UID
+    unset PERSONALIZATION_GID
+    unset PERSONALIZATION_HOME
+    generate_first_boot_script "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '"sda"' "KEY" "main" 'HASH' 'PERSONAL_HASH' "$boot"
+    run cat "$boot"
+    assert_contains "$output" '__PERSONALIZATION_USERNAME__'
+    assert_contains "$output" '__PERSONALIZATION_UID__'
+    assert_contains "$output" '__PERSONALIZATION_GID__'
+    assert_contains "$output" '__PERSONALIZATION_HOME__'
+}
+
+# --- Two hashes, two destinations ---
+# keys/root-password-hash is the host root credential and must never appear in
+# the first-boot bootstrap; keys/personalization-password-hash is the login
+# password and must never become the host's root password. Swapping the two
+# positionals in render_template would compile, validate and install, and hand
+# out a host whose root password is the account's login password (or worse).
+
+@test "the answer file receives the root hash and the bootstrap the login hash" {
+    local answer="${BATS_TMPDIR}/split-answer.toml"
+    local boot="${BATS_TMPDIR}/split-firstboot.sh"
+    setup_personalization
+    local root_hash='$y$j9T$ROOTONLY'
+    local personal_hash='$y$j9T$PERSONALONLY'
+    generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
+        '"sda"' "KEY" "main" "$root_hash" "$personal_hash" "$answer"
+    generate_first_boot_script "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '"sda"' "KEY" "main" "$root_hash" "$personal_hash" "$boot"
+    run cat "$answer"
+    assert_contains "$output" '$y$j9T$ROOTONLY'
+    assert_not_contains "$output" '$y$j9T$PERSONALONLY'
+    run cat "$boot"
+    assert_contains "$output" '$y$j9T$PERSONALONLY'
+    assert_not_contains "$output" '$y$j9T$ROOTONLY'
+}
+
+@test "render_template escapes the personalization hash too" {
+    # Same trap as the root hash: an unescaped yescrypt string expands to
+    # nothing, which would leave the host account without a working password.
+    local boot="${BATS_TMPDIR}/escaped-personal.sh"
+    setup_personalization
+    local personal_hash='$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW'
+    generate_first_boot_script "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '"sda"' "KEY" "main" 'ROOTHASH' "$personal_hash" "$boot"
+    run cat "$boot"
+    assert_contains "$output" '$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW'
+}
+
+@test "render_template substitutes the personalization identity" {
+    # The bootstrap creates the host account from these, and the first-boot
+    # hook runs before provision/personalization.sh exists on the host.
+    local boot="${BATS_TMPDIR}/identity.sh"
+    setup_personalization
+    generate_first_boot_script "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '"sda"' "KEY" "main" 'ROOTHASH' 'PERSONALHASH' "$boot"
+    run cat "$boot"
+    assert_contains "$output" 'testuser'
+    assert_contains "$output" 'Test User'
+    assert_contains "$output" '1401'
+    assert_contains "$output" '/home/testuser'
+}
+
+@test "render_template injects the operator key for the account's authorized_keys" {
+    local boot="${BATS_TMPDIR}/pubkey.sh"
+    setup_personalization
+    generate_first_boot_script "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '"sda"' "ssh-ed25519 AAAAsomenoise" "main" 'ROOTHASH' 'PERSONALHASH' "$boot"
+    run cat "$boot"
+    assert_contains "$output" 'ssh-ed25519 AAAAsomenoise'
+    run grep -c '__ADMIN_PUBKEY__' "$boot"
+    [ "$output" = "0" ]
 }
 
 # --- Target disk preference ---
@@ -418,9 +520,9 @@ SCRIPT
 
 @test "render_template emits disk-list as a verbatim TOML array" {
     local out="${BATS_TMPDIR}/disks.toml"
-    PERSONALIZATION_EMAIL="someone@example.com"
+    setup_personalization
     generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        '"nvme0n1"' "KEY" "main" 'HASH' "$out"
+        '"nvme0n1"' "KEY" "main" 'HASH' 'PERSONAL_HASH' "$out"
     run grep -E '^disk-list' "$out"
     [ "$output" = 'disk-list = ["nvme0n1"]' ]
 }
@@ -428,9 +530,9 @@ SCRIPT
 @test "answer-host.toml renders to valid TOML with a one-element disk-list" {
     # The template is only valid TOML once rendered, so assert the rendered form.
     local out="${BATS_TMPDIR}/disks-valid.toml"
-    PERSONALIZATION_EMAIL="someone@example.com"
+    setup_personalization
     generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        '"nvme0n1"' "KEY" "main" 'HASH' "$out"
+        '"nvme0n1"' "KEY" "main" 'HASH' 'PERSONAL_HASH' "$out"
     run python3 -c "import tomllib,sys; d=tomllib.load(open(r'$(win_path "$out")','rb')); sys.exit(0 if d['disk-setup']['disk-list']==['nvme0n1'] else 1)"
     [ "$status" -eq 0 ]
 }
@@ -438,9 +540,9 @@ SCRIPT
 @test "generate_first_boot_script renders the bootstrap and marks it executable" {
     local out="${BATS_TMPDIR}/first-boot.sh"
     rm -f "$out"
-    PERSONALIZATION_EMAIL="someone@example.com"
+    setup_personalization
     run generate_first_boot_script "${PROJECT_ROOT}/provision/host/first-boot.sh" \
-        "sda" "KEY" "main" 'HASH' "$out"
+        "sda" "KEY" "main" 'HASH' 'PERSONAL_HASH' "$out"
     [ "$status" -eq 0 ]
     [ -x "$out" ]
     run cat "$out"

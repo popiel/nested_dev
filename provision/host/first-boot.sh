@@ -9,15 +9,21 @@
 # first-boot).
 #
 # Responsibilities, in order:
-#   1. Persist the root password hash to /root/.password-hash for frag/30,
-#      which injects it into the guest NoCloud seeds.
-#   2. Fetch the provision/ tree at the pinned REF.
-#   3. Install the pve-firstboot.service oneshot unit.
+#   1. Persist the personalization password hash to
+#      /root/.personalization-password-hash for frag/30, which injects it into
+#      the guest NoCloud seeds.
+#   2. Create the personalization account on the host. PVE's autoinstall schema
+#      has no non-root user field (only root-password / root-password-hashed in
+#      [global]), so this is the only place it can be created.
+#   3. Fetch the provision/ tree at the pinned REF.
+#   4. Install the pve-firstboot.service oneshot unit.
 #
-# SECURITY: this rendered file contains the root password hash in plaintext and
-# is therefore as sensitive as keys/password-hash itself. It is written to
-# output/build-work/ (gitignored) and embedded in the ISO. It is never pushed to
-# GitHub — the hash reaches the booted host through the installer media only.
+# SECURITY: this rendered file contains the personalization password hash in
+# plaintext and is therefore as sensitive as keys/personalization-password-hash
+# itself. It is written to output/build-work/ (gitignored) and embedded in the
+# ISO. It is never pushed to GitHub — the hash reaches the booted host through
+# the installer media only. The *root* password hash is not in this file at all:
+# it travels separately, in the answer file's `root-password-hashed`.
 #
 # REF: __GITHUB_REF__ (baked at build time)
 
@@ -26,23 +32,83 @@ set -eu
 REF="__GITHUB_REF__"
 REPO="popiel/nested_dev"
 PROVISION_DIR="/root/provision"
-HASH_FILE="/root/.password-hash"
+HASH_FILE="/root/.personalization-password-hash"
 UNIT="/etc/systemd/system/pve-firstboot.service"
 WANTS_DIR="/etc/systemd/system/multi-user.target.wants"
 LOG="/var/log/pve-firstboot-bootstrap.log"
 
+# Personalization identity (§05), substituted at build time. Deliberately
+# rendered rather than read from provision/personalization.sh, which does not
+# exist yet at this point: the account has to exist even if the GitHub fetch
+# below fails.
+USER_NAME="__PERSONALIZATION_USERNAME__"
+USER_FULLNAME="__PERSONALIZATION_FULLNAME__"
+USER_UID="__PERSONALIZATION_UID__"
+USER_GID="__PERSONALIZATION_GID__"
+USER_HOME="__PERSONALIZATION_HOME__"
+USER_SHELL="/bin/bash"
+# The build machine's operator key, the same one the answer file trusts for
+# root, so the account is reachable without typing a password.
+ADMIN_PUBKEY="__ADMIN_PUBKEY__"
+
 log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
 die() { log "FATAL: $*"; exit 1; }
 
-# --- 1. Persist the root password hash -------------------------------
-# The hash is substituted here at build time. It is the same value the answer
-# file handed to the installer as `root-password-hashed`.
-log "persisting root password hash"
+# --- 1. Persist the personalization password hash ---------------------
+# The hash is substituted here at build time. frag/30 reads this file and
+# substitutes it for the CHANGE_ME_HASHED placeholder in each guest's
+# user-data, so it is the same login password the host account below is given.
+log "persisting personalization password hash"
 umask 077
-printf '%s' '__ROOT_PASSWORD_HASH__' > "$HASH_FILE"
+printf '%s' '__PERSONALIZATION_PASSWORD_HASH__' > "$HASH_FILE"
 chmod 600 "$HASH_FILE"
 
-# --- 2. Fetch the provision/ tree at the pinned REF -------------------
+# --- 2. Create the personalization account ----------------------------
+# PVE's answer schema cannot create a non-root user, and the installer's
+# root-only credential is the wrong thing to hand an operator, so the account
+# is built here. Idempotent: a re-run reconciles the account in place.
+#
+# The reconcile path rewrites the passwd/group entries but does not move an
+# existing home directory between paths (usermod -m refuses when the target is
+# a non-empty directory). The chown -R below re-owns whatever is at USER_HOME,
+# so a UID change leaves no orphaned files; a *path* change on a pre-existing
+# account would leave the old contents behind, which only happens when
+# PERSONALIZATION_HOME is edited after an install.
+log "creating personalization account ${USER_NAME}"
+if getent group "$USER_GID" >/dev/null 2>&1; then
+    if [ "$(getent group "$USER_GID" | cut -d: -f1)" != "$USER_NAME" ]; then
+        die "GID ${USER_GID} is already held by '$(getent group "$USER_GID" | cut -d: -f1)', expected the ${USER_NAME} group"
+    fi
+elif getent group "$USER_NAME" >/dev/null 2>&1; then
+    groupmod -g "$USER_GID" "$USER_NAME"
+else
+    groupadd -g "$USER_GID" "$USER_NAME"
+fi
+if getent passwd "$USER_NAME" >/dev/null 2>&1; then
+    log "account exists — reconciling identity attributes"
+    usermod -u "$USER_UID" -g "$USER_GID" -d "$USER_HOME" -s "$USER_SHELL" \
+        -c "$USER_FULLNAME" "$USER_NAME"
+else
+    if getent passwd "$USER_UID" >/dev/null 2>&1; then
+        die "UID ${USER_UID} is already held by '$(getent passwd "$USER_UID" | cut -d: -f1)'; refusing to create a second identity"
+    fi
+    useradd -u "$USER_UID" -g "$USER_GID" -d "$USER_HOME" -s "$USER_SHELL" \
+        -c "$USER_FULLNAME" "$USER_NAME"
+    log "account created (uid=${USER_UID} gid=${USER_GID} home=${USER_HOME})"
+fi
+# Apply the hash verbatim: chpasswd -e takes an already-encrypted password, so
+# the same yescrypt string the guests receive is what the host account gets.
+printf '%s:%s\n' "$USER_NAME" '__PERSONALIZATION_PASSWORD_HASH__' | chpasswd -e
+# Administrative access on the host, and password-less SSH with the operator key.
+usermod -aG sudo "$USER_NAME"
+mkdir -p "${USER_HOME}/.ssh"
+chmod 700 "${USER_HOME}/.ssh"
+printf '%s\n' "$ADMIN_PUBKEY" > "${USER_HOME}/.ssh/authorized_keys"
+chmod 600 "${USER_HOME}/.ssh/authorized_keys"
+chown -R "${USER_NAME}:${USER_NAME}" "$USER_HOME"
+log "personalization account ready: password set, sudo group, operator key installed"
+
+# --- 3. Fetch the provision/ tree at the pinned REF -------------------
 log "fetching provisioner tree at ${REF}"
 mkdir -p "$PROVISION_DIR"
 TMP="/root/.nested_dev.tar.gz"
@@ -73,7 +139,7 @@ rm -rf "/root/nested_dev-${REF}"
 chmod +x "${PROVISION_DIR}/host/provision-host.sh"
 chmod +x "${PROVISION_DIR}/host"/frag/*.sh 2>/dev/null || true
 
-# --- 3. Install the pve-firstboot unit --------------------------------
+# --- 4. Install the pve-firstboot unit --------------------------------
 log "installing pve-firstboot.service"
 cat > "$UNIT" <<UNIT
 [Unit]

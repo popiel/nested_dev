@@ -95,6 +95,60 @@ load '../lib/helpers'
     assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" '__ROOT_PASSWORD_HASH__'
 }
 
+@test "first-boot.sh contains __PERSONALIZATION_PASSWORD_HASH__" {
+    # The login hash reaches the host only through the bootstrap; without this
+    # placeholder the account would be created with no working password.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/first-boot.sh" '__PERSONALIZATION_PASSWORD_HASH__'
+}
+
+@test "first-boot.sh carries no root password hash" {
+    # The bootstrap persists its hash to disk, so root's credential must not
+    # ride along in it — that is the whole point of the two-file split.
+    assert_file_not_contains "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '__ROOT_PASSWORD_HASH__'
+}
+
+@test "no committed host template carries a real password hash" {
+    # Both hashes are gitignored secrets read at build time. A hash in a
+    # template would be published to GitHub and shipped in every built ISO.
+    for f in provision/host/first-boot.sh provision/host/answer-host.toml \
+             provision/host/build-iso.sh; do
+        run grep -E '\$[0-9yab]\$' "${PROJECT_ROOT}/${f}"
+        [ -z "$output" ]
+    done
+}
+
+@test "neither password hash is tracked by git" {
+    for f in keys/personalization-password-hash keys/root-password-hash; do
+        run git -C "$PROJECT_ROOT" ls-files --error-unmatch "$f"
+        [ "$status" -ne 0 ]
+    done
+}
+
+@test "the stale password-hash names are referenced nowhere in the source tree" {
+    # Both files were renamed: keys/password-hash ->
+    # keys/personalization-password-hash, and /root/.password-hash ->
+    # /root/.personalization-password-hash. A leftover reference in the source
+    # tree reads as a missing file at build time, or worse as a second,
+    # differently-named secret.
+    #
+    # Scoped to the source tree and the operator docs: this test and
+    # tests/unit/first-boot-user.bats necessarily name the old paths in their
+    # negative assertions, and specs/09 quotes them in documenting the rename.
+    local result
+    for dir in provision desktop llm dev; do
+        result=$(grep -rn 'keys/password-hash\|/root/\.password-hash' \
+            --exclude='*.swp' "${PROJECT_ROOT}/${dir}" 2>/dev/null || true)
+        [ -z "$result" ]
+    done
+    for doc in BUILDING.md README.md; do
+        [ ! -f "${PROJECT_ROOT}/${doc}" ] && continue
+        result=$(grep -n 'keys/password-hash\|/root/\.password-hash' \
+            "${PROJECT_ROOT}/${doc}" 2>/dev/null || true)
+        [ -z "$result" ]
+    done
+}
+
 @test "frag/30 sources personalization.sh from correct path" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" '/root/provision/personalization.sh'
 }

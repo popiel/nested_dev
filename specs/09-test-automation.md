@@ -65,7 +65,7 @@ tests/
   static/
     lint.bats               # shellcheck all scripts; hadolint Dockerfiles (guarded)
     configs.bats            # YAML, TOML, dnsmasq, iptables parse validation
-    invariants.bats         # identity, placeholder, decision-table invariants
+    invariants.bats         # identity, placeholder, credential-split, decision-table invariants
   unit/
     personalization.bats    # sourcing, var values, fail-fast on missing
     resolve-ref.bats        # resolve_ref_to_sha: branch, tag, SHA, empty
@@ -73,6 +73,7 @@ tests/
     frag10-iommu.bats       # vendor matching, R4 abort, audio companion detection
     template.bats           # sed substitution: placeholder injection, no leftovers
     build-iso.bats          # ISO filename/URL construction from ubuntu-release.conf
+    first-boot-user.bats    # host account creation, credential split, guest root lock
 ```
 
 ## 4. Source-guard refactor
@@ -246,6 +247,49 @@ device in the group (filename = BDF address). For R4 abort test, the
 
 @test "answer-host.toml contains __ROOT_SSH_KEY__" {
   grep -q '__ROOT_SSH_KEY__' provision/host/answer-host.toml
+}
+
+# --- Credential split (Spec 05 §5) ---
+# These are the tests that would catch the two hashes being swapped, merged
+# back into one file, or renamed out from under first-boot.sh / frag/30. The
+# failure mode they prevent is silent and late: nothing breaks at build time,
+# the host just ends up with a root password where the operator expected a
+# login password (or the reverse) after a reinstall.
+
+@test "answer-host.toml contains __ROOT_PASSWORD_HASH__" {
+  grep -q '__ROOT_PASSWORD_HASH__' provision/host/answer-host.toml
+}
+
+@test "first-boot.sh contains __PERSONALIZATION_PASSWORD_HASH__" {
+  grep -q '__PERSONALIZATION_PASSWORD_HASH__' provision/host/first-boot.sh
+}
+
+@test "first-boot.sh carries no root password hash" {
+  ! grep -q '__ROOT_PASSWORD_HASH__' provision/host/first-boot.sh
+}
+
+@test "no committed host template carries a real password hash" {
+  # CHANGE_ME_HASHED and the __PLACEHOLDER__ names are not hashes; a real one
+  # starting $6$/$y$/$5$ in a committed file means a leak.
+  for f in provision/host/answer-host.toml provision/host/first-boot.sh; do
+    ! grep -qE '\$(6|y|5)\$[A-Za-z0-9./]+' "$f"
+  done
+}
+
+@test "neither password hash is tracked by git" {
+  for f in keys/root-password-hash keys/personalization-password-hash; do
+    ! git ls-files --error-unmatch "$f" 2>/dev/null
+  done
+}
+
+@test "the stale password-hash names are referenced nowhere in the source tree" {
+  # Scoped to the source tree and operator docs: this file and
+  # first-boot-user.bats necessarily name the old paths in negative
+  # assertions, and this spec quotes them in documenting the rename.
+  for dir in provision desktop llm dev; do
+    run grep -rn 'keys/password-hash\|/root/\.password-hash' "$dir"
+    [ -z "$output" ]
+  done
 }
 
 @test "frag/30 sources personalization.sh from correct path" {
@@ -486,7 +530,24 @@ Tests sed substitution of placeholders in user-data templates.
 
 ### 7.6 `tests/unit/build-iso.bats`
 
-Tests ISO filename and URL construction from `ubuntu-release.conf`.
+Sources `build-iso.sh` through the source-guard and tests `render_template`,
+`generate_answer_file`, `generate_first_boot_script`,
+`validate_target_disks` and the MANIFEST writer.
+
+ISO filename and URL construction comes from `ubuntu-release.conf`. Template
+rendering is covered in three groups:
+
+| Group | Asserts |
+|---|---|
+| Disk validation | quoted/unquoted/bracketed lists normalize; `/dev/` paths, partition names, empty and multi-disk lists are rejected at build time, so a bad `PERSONALIZATION_TARGET_DISKS` fails before the 1.7 GB ISO step |
+| Escaping | a yescrypt hash survives `sed` (unescaped `$y$…` expands to nothing and silently produces an install with no working credentials); the same for the login hash, the email and the SSH key |
+| Two hashes, two destinations | the answer file receives only `__ROOT_PASSWORD_HASH__` and the bootstrap only `__PERSONALIZATION_PASSWORD_HASH__` — swapping the two positionals would compile, validate, install, and hand out a host whose root password is the login password |
+| Un-sourced identity | an unset `PERSONALIZATION_*` leaves its `__PLACEHOLDER__` in the output so the build's guard fires. The answer file can only show the email; the username, UID, GID and home show up in the bootstrap, since PVE's schema has no non-root user field for them |
+
+Carrier assertions pin `source = "from-iso"` (never `from-url`), the absence
+of any `late-commands` section, and that the bootstrap reaches
+`prepare-iso --on-first-boot` in both the `pve-auto-install-assistant` and
+`proxmox-auto-install-assistant` call sites.
 
 ```
 @test "ISO filename matches ubuntu version from conf" {
@@ -497,6 +558,26 @@ Tests ISO filename and URL construction from `ubuntu-release.conf`.
     run grep -c "UBUNTU_VERSION" provision/host/build-iso.sh
 }
 ```
+
+### 7.7 `tests/unit/first-boot-user.bats`
+
+Covers the host-side account creation and the credential split (Spec 05 §4.1,
+§5). `first-boot.sh` is a boot-time script on a machine the test suite cannot
+reach, so these are source assertions on the rendered shape of the script —
+the same style as `frag10-iommu.bats` (§7.4). Each test states the failure it
+prevents.
+
+| Test group | Asserts |
+|---|---|
+| Hash split (D4) | `build-iso.sh` reads `keys/root-password-hash` and `keys/personalization-password-hash`; each missing file produces its own named error; the answer file takes the root hash while the bootstrap takes the login hash; the bootstrap applies only the login hash to the account and never creates or re-credentials `root` |
+| Identity | `useradd` uses the configured UID, GID, home and `/bin/bash`; the GECOS field carries `${PERSONALIZATION_FULLNAME}`, not the username |
+| Idempotency | Re-running the block is a no-op; it refuses to proceed if the UID or GID already belongs to a *different* account rather than silently creating a second identity for one operator |
+| Privileges | `usermod -aG sudo`; `authorized_keys` holds the operator public key |
+| Modes | `~/.ssh` 700, `authorized_keys` 600, home `chown`ed to the account |
+| Ordering | Account creation precedes the provision-tree fetch, so a failed fetch still leaves a usable operator login |
+| Rename (D5) | The persisted path is `/root/.personalization-password-hash` and `/root/.password-hash` is gone; `frag/30` reads exactly the same path; the file is 600 |
+| Guest root | Every seed runs `passwd -l root`, and no seed does anything else to root |
+| Dev tooling | `dev/tools/nested keys-status` reports on both hashes |
 
 ## 8. Runner
 
@@ -576,7 +657,7 @@ jobs:
 
 ### Pre-commit fast-path
 
-Add to `.githooks/pre-commit` (existing, after password-hash guard):
+Add to `.githooks/pre-commit` (existing, after the user-data hash guard):
 
 ```bash
 # Run fast static checks (skip if tests/run.sh not present)
@@ -625,6 +706,15 @@ bats --filter "branch" tests/unit/resolve-ref.bats
 14. Decision-table values (40/80/40 GB, 8192/16384/8192 MB, 4/6/4 cores,
     500 GB data) present in `frag/30-create-guests.sh`.
 15. GitHub Actions workflow runs `tests/run.sh` on push and PR.
+16. `keys/root-password-hash` and `keys/personalization-password-hash` are
+    both required by `build-iso.sh`, neither is git-tracked, and no committed
+    template contains a real hash.
+17. `answer-host.toml` carries only `__ROOT_PASSWORD_HASH__`; `first-boot.sh`
+    carries only `__PERSONALIZATION_PASSWORD_HASH__` — never each other's.
+18. The host account is created with the configured UID/GID/home/shell, `sudo`
+    membership, the operator key, and the login hash, and is never given the
+    root hash.
+19. All three guest seeds run `passwd -l root`.
 
 ## 12. Traceability
 
@@ -641,3 +731,10 @@ bats --filter "branch" tests/unit/resolve-ref.bats
 | REF resolution (branch/tag/SHA) | Spec 00 §5 | `resolve-ref.bats` |
 | shellcheck compliance | Repo convention | `lint.bats` |
 | Config file validity | Specs 01, 02, 03, 04 | `configs.bats` |
+| Two separate hash files, neither tracked | Spec 05 §5, Spec 01 §4.3 | `invariants.bats`, `first-boot-user.bats` |
+| Root hash reaches only the answer file | Spec 01 §4.3 | `first-boot-user.bats` |
+| Host account identity, sudo, key, modes | Spec 05 §4.1 | `first-boot-user.bats` |
+| Account created before the provision fetch | Spec 01 §4.1 | `first-boot-user.bats` |
+| `/root/.personalization-password-hash` rename, agreed by both sides | Spec 05 §5.2 | `first-boot-user.bats` |
+| Guest root locked | Spec 05 §5.4 | `first-boot-user.bats` |
+| Dev VM reports on both hashes | Spec 08 | `first-boot-user.bats` |
