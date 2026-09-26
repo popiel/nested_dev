@@ -53,6 +53,19 @@ fi
 tar -xzf "$TMP" -C /root
 rm -f "$TMP"
 [ -d "/root/nested_dev-${REF}/provision" ] || die "archive did not contain provision/"
+
+# frag/30 injects the build machine's admin public key into every guest seed,
+# but keys/ is not part of the provision tree. Preserve the pubkey out of the
+# tarball before the extract is deleted below. Read from the archive rather
+# than from the host's /root/.ssh/authorized_keys so that a key added to the
+# host by hand does not silently propagate to every guest.
+ADMIN_PUBKEY_SRC="/root/nested_dev-${REF}/keys/host_os_ed25519.pub"
+[ -f "$ADMIN_PUBKEY_SRC" ] || die "archive did not contain keys/host_os_ed25519.pub"
+mkdir -p "${PROVISION_DIR}/keys"
+cp "$ADMIN_PUBKEY_SRC" "${PROVISION_DIR}/keys/host_os_ed25519.pub"
+chmod 644 "${PROVISION_DIR}/keys/host_os_ed25519.pub"
+log "admin public key preserved at ${PROVISION_DIR}/keys/host_os_ed25519.pub"
+
 rm -rf "${PROVISION_DIR:?}.old"
 [ -d "$PROVISION_DIR" ] && mv "$PROVISION_DIR" "${PROVISION_DIR}.old"
 mv "/root/nested_dev-${REF}/provision" "$PROVISION_DIR"

@@ -220,11 +220,17 @@ WSL2 and native Linux work without any of this. Use them if you have them.
 2. Boot the USB on the target machine (UEFI or legacy BIOS).
 3. PVE autoinstall runs unattended. On first boot, the host:
    - Persists the password hash to `/root/.password-hash`
-   - Fetches the provisioner from GitHub
+   - Fetches the provisioner from GitHub, and preserves
+     `keys/host_os_ed25519.pub` into `/root/provision/keys/` so it can be
+     injected into the guest seeds
    - Configures networking, GPU passthrough, dnsmasq, iptables
-   - Creates `vmctl` user + control keypair (Spec 07)
+   - Creates the `vmctl` user + control keypair, and the guest identity
+     keypair (private half → desktop, public half → host and all guests)
+     (Spec 07)
    - Fetches user-data templates from GitHub
-   - Injects password hash + vmctl key into templates
+   - Injects the password hash, both public keys, and the desktop's two
+     private keys into the templates
+   - Shreds the staged private key copies once the seeds are built
    - Builds NoCloud seed ISOs (Spec 06)
    - Creates and starts Desktop (100) + LLM (101)
    - Creates dev-template (102), provisions it, converts to PVE template

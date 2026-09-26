@@ -291,13 +291,24 @@ else
     log "WARNING: devctl source not found at ${DEVCTL_SRC}"
 fi
 
-# SSH config for pvehost (vmctl user)
+# SSH config
+#   pvehost  — restricted vmctl credential (ForceCommand), dev-fleet control only
+#   pveadmin — the desktop's own guest-identity key, unrestricted root on the host
+#              (frag/25 pins this key to the desktop's address in the host's
+#              authorized_keys, so it is only honoured when it arrives from here)
 mkdir -p "${DESKUSER_HOME}/.ssh"
+chmod 700 "${DESKUSER_HOME}/.ssh"
 cat > "${DESKUSER_HOME}/.ssh/config" <<'SSH_CONFIG_EOF'
 Host pvehost
     HostName 192.168.100.1
     User vmctl
     IdentityFile ~/.ssh/pvehost_vmctl
+    StrictHostKeyChecking accept-new
+    IdentitiesOnly yes
+Host pveadmin
+    HostName 192.168.100.1
+    User root
+    IdentityFile ~/.ssh/nested-dev-id
     StrictHostKeyChecking accept-new
     IdentitiesOnly yes
 SSH_CONFIG_EOF
@@ -316,13 +327,30 @@ if ! grep -q '.local/bin' "$BASHRC" 2>/dev/null; then
     log "Added ~/.local/bin to PATH in .bashrc"
 fi
 
-# Fix permissions on vmctl key if it was injected via seed
-VMCTL_KEY="${DESKUSER_HOME}/.ssh/pvehost_vmctl"
-if [ -f "$VMCTL_KEY" ]; then
-    chmod 600 "$VMCTL_KEY"
-    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "$VMCTL_KEY"
-    log "vmctl key permissions set"
+# --- Verify and permission the seed-injected private keys ---
+# Both keys arrive from the NoCloud seed's late-commands. If either is missing
+# the desktop's outbound SSH is silently broken, so fail loudly here instead of
+# leaving the operator to discover it as a bare "Permission denied (publickey)".
+for key in pvehost_vmctl nested-dev-id; do
+    KEY_PATH="${DESKUSER_HOME}/.ssh/${key}"
+    if [ ! -s "$KEY_PATH" ]; then
+        die "Missing or empty private key ${key} at ${KEY_PATH} — seed injection failed, desktop SSH will not work"
+    fi
+    if ! grep -q "BEGIN OPENSSH PRIVATE KEY" "$KEY_PATH"; then
+        die "Private key ${key} at ${KEY_PATH} is not a valid OpenSSH private key"
+    fi
+    chmod 600 "$KEY_PATH"
+    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "$KEY_PATH"
+    log "Private key ${key} verified (mode 600)"
+done
+
+# Confirm the cloud-init-injected authorized keys landed, so the desktop can be
+# reached with the operator key and can in turn reach the other guests.
+AUTHORIZED_KEYS="${DESKUSER_HOME}/.ssh/authorized_keys"
+if [ ! -s "$AUTHORIZED_KEYS" ]; then
+    die "No authorized_keys at ${AUTHORIZED_KEYS} — cloud-init ssh_authorized_keys injection failed"
 fi
+log "authorized_keys present with $(grep -c '^ssh-' "$AUTHORIZED_KEYS") key(s)"
 
 # --- 10. Firewall ---
 log "Configuring firewall..."

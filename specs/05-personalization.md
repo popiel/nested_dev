@@ -133,8 +133,25 @@ git config core.hooksPath .githooks
 | File | Purpose | Committed? |
 |---|---|---|
 | `keys/password-hash` | yescrypt hash of login password | No (gitignored) |
+| `keys/host_os_ed25519.pub` | Operator public key from the build machine, trusted on the host and on every guest | Yes (public key only) |
 | `*/user-data/user-data` | Contains `CHANGE_ME_HASHED` placeholder | Yes |
 | `.githooks/pre-commit` | Blocks real hashes in user-data | Yes |
+
+### 5.5 Install-time generated credentials
+
+Two keypairs are generated on the host at first boot rather than committed,
+because the private halves must never exist in the repo (Spec 07):
+
+| Keypair | Private half | Public half trusted by |
+|---|---|---|
+| vmctl control | desktop `~/.ssh/pvehost_vmctl` | host `vmctl` account (`ForceCommand`-restricted) |
+| guest identity | desktop `~/.ssh/nested-dev-id` | host root (pinned to the desktop address) + all guests |
+
+`keys/host_os_ed25519.pub` is the exception: it is a public key, so it is
+committed, and `first-boot.sh` copies it out of the fetched repo tarball into
+`/root/provision/keys/` because `keys/` is not part of the provision tree.
+`frag/30` then injects it into every guest seed as
+`ssh_authorized_keys`, so the operator key works on the host and all guests.
 
 ## 6. Git identity (dev VM only)
 
@@ -214,6 +231,7 @@ All three specs' `Decisions` tables include an `Account` row that says
   returns only the shared config file and references to it.
 * `keys/password-hash` exists and is gitignored; `user-data` files contain
   only `CHANGE_ME_HASHED`.
+* `keys/host_os_ed25519.pub` is git-tracked; `keys/password-hash` is not.
 * `.githooks/pre-commit` is present and executable.
 * `PERSONALIZATION_REPO` and `PERSONALIZATION_REF` are defined in
   `provision/personalization.sh`; no hardcoded refs in any build script.

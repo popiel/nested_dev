@@ -24,12 +24,28 @@ else
 fi
 
 # --- vmctl user ---
+# The login shell MUST be a real shell. sshd_config(5) states that ForceCommand
+# "is invoked by using the user's login shell with the -c option", so with
+# /usr/sbin/nologin sshd would run
+#   /usr/sbin/nologin -c "/usr/local/sbin/vmctl-host <verb>"
+# and nologin would print "This account is currently not available" and exit 1
+# without ever running vmctl-host. Restriction comes from the forced command in
+# authorized_keys, not from the shell; the account password stays locked
+# (useradd -r), so this remains key-only.
+VMCTL_SHELL="/bin/bash"
 if ! id vmctl >/dev/null 2>&1; then
-    useradd -r -m -s /usr/sbin/nologin -d /home/vmctl vmctl 2>/dev/null \
-        || useradd -r -M -s /usr/sbin/nologin vmctl  # fallback if -d fails
-    log "vmctl user created"
+    useradd -r -m -s "$VMCTL_SHELL" -d /home/vmctl vmctl 2>/dev/null \
+        || useradd -r -M -s "$VMCTL_SHELL" vmctl  # fallback if -d fails
+    log "vmctl user created (shell=${VMCTL_SHELL})"
 else
-    log "vmctl user already exists"
+    # Correct the shell if an earlier run created it with nologin.
+    current_shell=$(getent passwd vmctl | cut -d: -f7)
+    if [ "$current_shell" != "$VMCTL_SHELL" ]; then
+        usermod -s "$VMCTL_SHELL" vmctl
+        log "vmctl shell corrected: ${current_shell} -> ${VMCTL_SHELL}"
+    else
+        log "vmctl user already exists (shell=${VMCTL_SHELL})"
+    fi
 fi
 
 # --- Generate control keypair ---
@@ -85,6 +101,54 @@ STAGED_KEY="/root/.nested-dev/vmctl-priv-staged"
 cp "${VMCTL_KEY_DIR}/vmctl_ed25519" "$STAGED_KEY"
 chmod 600 "$STAGED_KEY"
 log "Private key staged for desktop seed injection"
+
+# --- Guest identity keypair ---
+# Generated on the host at install time. The PRIVATE half is the desktop
+# guest's identity and is seeded to the desktop only; the PUBLIC half is
+# trusted by the host OS and by every guest, so the desktop can administer the
+# whole deployment. Distinct from vmctl, which is a restricted forced-command
+# credential with no shell access.
+GUEST_ID_KEY_DIR="/root/.nested-dev/guest-id"
+DESKTOP_IP="192.168.100.100"
+mkdir -p "$GUEST_ID_KEY_DIR"
+if [ ! -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" ]; then
+    ssh-keygen -t ed25519 -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" -N "" \
+        -C "guest-id@$(hostname -s)" 2>/dev/null
+    chmod 600 "${GUEST_ID_KEY_DIR}/guest_id_ed25519"
+    chmod 644 "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub"
+    log "Guest identity keypair generated"
+else
+    log "Guest identity keypair already exists"
+fi
+
+# Trust the guest identity key on the host. Pinned to the desktop's static
+# address (issued as a dnsmasq dhcp-host lease for MAC 52:54:00:00:01:00 in
+# provision/network/dnsmasq.conf and frag/90-finalize.sh) so that a leaked copy
+# of the key is only usable from the desktop VM. The forwarding options match
+# the vmctl entry. tests/unit/frag25-vmctl.bats asserts this stays in sync with
+# dnsmasq.conf — if the desktop address ever changes, update both or host
+# access from the desktop silently breaks while the key is still present.
+GUEST_ID_PUB=$(cat "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub")
+ROOT_AUTH_KEYS="/root/.ssh/authorized_keys"
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+touch "$ROOT_AUTH_KEYS"
+chmod 600 "$ROOT_AUTH_KEYS"
+# grep on the key body only, so re-running does not append a duplicate entry.
+if grep -qF "$GUEST_ID_PUB" "$ROOT_AUTH_KEYS"; then
+    log "Guest identity key already trusted on host"
+else
+    printf 'from="%s",no-agent-forwarding,no-port-forwarding,no-X11-forwarding %s\n' \
+        "$DESKTOP_IP" "$GUEST_ID_PUB" >> "$ROOT_AUTH_KEYS"
+    log "Guest identity key trusted on host (pinned to ${DESKTOP_IP})"
+fi
+
+# Stage the guest identity private half for frag/30 (desktop seed injection).
+# Re-staged on every run; frag/30 shreds it once the seeds are built.
+GUEST_ID_STAGED="/root/.nested-dev/guest-id-priv-staged"
+cp "${GUEST_ID_KEY_DIR}/guest_id_ed25519" "$GUEST_ID_STAGED"
+chmod 600 "$GUEST_ID_STAGED"
+log "Guest identity private key staged for desktop seed injection"
 
 # --- dnsmasq dev drop-in (empty header; vmctl-host appends entries) ---
 if [ ! -f /etc/dnsmasq.d/zz-dev.conf ]; then

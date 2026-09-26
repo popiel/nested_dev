@@ -241,8 +241,8 @@ generate_answer_file() {
 # hash, so it is rendered into the (gitignored) work dir and must be readable
 # and executable before prepare-iso reads it.
 generate_first_boot_script() {
-    local template="$1" disk_short="$2" ssh_key="$3" ref="$4" password_hash="$5" output="$6"
-    render_template "$template" "$disk_short" "$ssh_key" "$ref" "$password_hash" "$output"
+    local template="$1" disks="$2" ssh_key="$3" ref="$4" password_hash="$5" output="$6"
+    render_template "$template" "$disks" "$ssh_key" "$ref" "$password_hash" "$output"
     chmod 700 "$output"
 }
 

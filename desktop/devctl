@@ -1,16 +1,40 @@
 #!/usr/bin/env bash
 # devctl — desktop-side dev VM control wrapper
-# Delegates to vmctl@pvehost via restricted SSH.
+# Fleet control (list/start/stop/add/log) delegates to vmctl@pvehost, which is a
+# restricted forced-command credential with no shell access.
+# `devctl ssh` opens a real shell inside a guest using the desktop's own
+# guest-identity key (~/.ssh/nested-dev-id), not the admin key.
+# `devctl host` runs a command on the PVE host as root via the same identity key.
 # Installed to ~/.local/bin/devctl by desktop-firstboot.sh.
 set -euo pipefail
 
-PVEHOST="pvehost"  # ~/.ssh/config alias → 192.168.100.1
+PVEHOST="pvehost"    # ~/.ssh/config alias → 192.168.100.1 via vmctl@host
+PVEADMIN="pveadmin"  # ~/.ssh/config alias → 192.168.100.1 via root@host
 SSH_OPTS="-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+# Guest identity key, seeded by frag/30 and chmod 600 by desktop-firstboot.sh.
+# Same key the guests trust in their authorized_keys.
+GUEST_ID_KEY="${HOME}/.ssh/nested-dev-id"
+
+# All guests share the desktop's username, so take it from the environment
+# rather than hardcoding it (devctl is not templated through personalization.sh).
+GUEST_USER="${USER:-}"
+if [ -z "$GUEST_USER" ]; then
+    echo "devctl: USER is not set — run as the desktop user" >&2
+    exit 1
+fi
+
+require_guest_id_key() {
+    if [ ! -s "$GUEST_ID_KEY" ]; then
+        echo "devctl: missing guest identity key ${GUEST_ID_KEY}" >&2
+        echo "        run 'devctl firstboot-log' or check /var/log/desktop-firstboot.log" >&2
+        exit 1
+    fi
+}
 
 usage() {
     echo "Usage: devctl <command> [args]" >&2
     echo "" >&2
-    echo "Commands:" >&2
+    echo "Fleet control (restricted, via vmctl):" >&2
     echo "  list                          List dev VMs" >&2
     echo "  status <name|vmid>            VM status" >&2
     echo "  start <name|vmid>             Start a dev VM" >&2
@@ -18,7 +42,10 @@ usage() {
     echo "  kill <name|vmid>              Force stop" >&2
     echo "  add <project-name>            Create new dev VM from template" >&2
     echo "  log <name|vmid>               Tail first-boot log" >&2
+    echo "" >&2
+    echo "Shell access (full privileges, via guest identity key):" >&2
     echo "  ssh <name|vmid> [cmd...]      SSH to dev VM directly" >&2
+    echo "  host [cmd...]                 Run a command on the PVE host as root" >&2
     exit 1
 }
 
@@ -86,7 +113,17 @@ case "$1" in
         VMID=$(resolve "$2")
         [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
         shift
-        ssh $SSH_OPTS popiel@192.168.100.${VMID} "$@"
+        require_guest_id_key
+        # Guests set allow-pw: false, so the guest identity key is the only way in.
+        ssh $SSH_OPTS -i "$GUEST_ID_KEY" -o IdentitiesOnly=yes \
+            "${GUEST_USER}@192.168.100.${VMID}" "$@"
+        ;;
+    host)
+        # Full root on the PVE host. The host pins this key to the desktop's
+        # address, so the desktop can reach root but a leaked copy cannot.
+        shift || true
+        require_guest_id_key
+        ssh $SSH_OPTS -i "$GUEST_ID_KEY" -o IdentitiesOnly=yes "${PVEADMIN}" "$@"
         ;;
     *)
         usage

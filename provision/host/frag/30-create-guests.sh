@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # frag/30-create-guests.sh — Create Desktop (100), LLM (101), Dev Template (102)
 # NoCloud seeds: fetches user-data templates from GitHub, injects password hash
-# (+ vmctl private key for desktop), builds seed ISOs, creates VMs with official
+# (+ vmctl and guest-identity private keys for desktop, + admin and guest-identity
+# public keys for every guest), builds seed ISOs, creates VMs with official
 # Ubuntu ISO + NoCloud seed. Desktop and LLM are started immediately.
+# Staged private keys are shredded once every seed is built.
 # Dev template (102) is provisioned once then converted to PVE template.
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
@@ -151,15 +153,32 @@ main() {
     PASS_HASH="$(cat "$PASSWORD_HASH_FILE")"
     log "Password hash loaded"
 
+    # --- Read admin public key (build machine operator key) ---
+    # Preserved into the provision tree by first-boot.sh. Injected as an
+    # authorized key on the host (already, via the PVE answer root-ssh-keys)
+    # and on every guest, so the operator key works everywhere.
+    ADMIN_PUBKEY_FILE="/root/provision/keys/host_os_ed25519.pub"
+    [ -f "$ADMIN_PUBKEY_FILE" ] || die "Admin public key not found: ${ADMIN_PUBKEY_FILE}"
+    ADMIN_PUBKEY="$(cat "$ADMIN_PUBKEY_FILE")"
+    log "Admin public key loaded for guest injection"
+
+    # --- Read guest identity public key (desktop's install-time identity) ---
+    GUEST_ID_PUBKEY_FILE="/root/.nested-dev/guest-id/guest_id_ed25519.pub"
+    [ -f "$GUEST_ID_PUBKEY_FILE" ] || die "Guest identity public key not found: ${GUEST_ID_PUBKEY_FILE}"
+    GUEST_ID_PUBKEY="$(cat "$GUEST_ID_PUBKEY_FILE")"
+    log "Guest identity public key loaded for guest injection"
+
     # --- Read vmctl private key (base64 for desktop injection) ---
     VMCTL_KEY_FILE="/root/.nested-dev/vmctl-priv-staged"
-    VMCTL_KEY_B64=""
-    if [ -f "$VMCTL_KEY_FILE" ]; then
-        VMCTL_KEY_B64=$(base64 -w0 "$VMCTL_KEY_FILE" 2>/dev/null || base64 "$VMCTL_KEY_FILE" 2>/dev/null)
-        log "vmctl private key loaded for desktop seed injection"
-    else
-        log "WARNING: vmctl private key not found at ${VMCTL_KEY_FILE} — desktop control may not work"
-    fi
+    [ -f "$VMCTL_KEY_FILE" ] || die "vmctl private key not staged at ${VMCTL_KEY_FILE} (frag/25 did not run?)"
+    VMCTL_KEY_B64=$(base64 -w0 "$VMCTL_KEY_FILE" 2>/dev/null || base64 "$VMCTL_KEY_FILE" 2>/dev/null)
+    log "vmctl private key loaded for desktop seed injection"
+
+    # --- Read guest identity private key (base64 for desktop injection) ---
+    GUEST_ID_KEY_FILE="/root/.nested-dev/guest-id-priv-staged"
+    [ -f "$GUEST_ID_KEY_FILE" ] || die "Guest identity private key not staged at ${GUEST_ID_KEY_FILE} (frag/25 did not run?)"
+    GUEST_ID_KEY_B64=$(base64 -w0 "$GUEST_ID_KEY_FILE" 2>/dev/null || base64 "$GUEST_ID_KEY_FILE" 2>/dev/null)
+    log "Guest identity private key loaded for desktop seed injection"
 
     # --- Create NoCloud seed directory ---
     SEED_DIR="/var/lib/vz/template/cidata"
@@ -189,10 +208,19 @@ main() {
         fi
         sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
             -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
+            -e "s|__GUEST_ID_PRIV_B64__|${GUEST_ID_KEY_B64}|g" \
+            -e "s|__ADMIN_PUBKEY__|${ADMIN_PUBKEY}|g" \
+            -e "s|__GUEST_ID_PUBKEY__|${GUEST_ID_PUBKEY}|g" \
             -e "s|__PERSONALIZATION_USERNAME__|${PERSONALIZATION_USERNAME}|g" \
             -e "s|__PERSONALIZATION_FULLNAME__|${PERSONALIZATION_FULLNAME}|g" \
             -e "s|__GITHUB_REF__|${DEFAULT_REF}|g" \
             "${SEED_DIR}/${guest}-template" > "$SEED_FILE"
+
+        # A surviving placeholder means a substitution silently failed and the
+        # guest would boot without the key. Fail here rather than at runtime.
+        if grep -q '__[A-Z_]*__' "$SEED_FILE"; then
+            die "Unsubstituted placeholders left in ${guest} seed: $(grep -o '__[A-Z_]*__' "$SEED_FILE" | sort -u | tr '\n' ' ')"
+        fi
 
         echo "instance-id: ${guest}-$(date +%s)" > "${SEED_DIR}/${guest}-meta-data"
 
@@ -200,6 +228,19 @@ main() {
             "$SEED_FILE" "${SEED_DIR}/${guest}-meta-data" 2>/dev/null
 
         log "NoCloud seed prepared: ${guest}"
+    done
+
+    # --- Destroy the staged private halves ---
+    # Every seed now carries both private keys, so the staging copies have
+    # served their purpose. The canonical copies under /root/.nested-dev/ are
+    # kept (600, root-only) so a re-provision stays idempotent; frag/25
+    # re-stages on every run.
+    for staged in "$VMCTL_KEY_FILE" "$GUEST_ID_KEY_FILE"; do
+        if shred -u "$staged" 2>/dev/null || rm -f "$staged"; then
+            log "Staged private key shredded: ${staged}"
+        else
+            die "Failed to remove staged private key: ${staged}"
+        fi
     done
 
     # --- Download Ubuntu ISOs if not present ---

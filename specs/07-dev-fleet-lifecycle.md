@@ -35,7 +35,12 @@ convention from Spec 04 §5.3.
 | Decision | Default | Rationale |
 |---|---|---|
 | Control channel | Restricted SSH (`vmctl` user, `ForceCommand`, sudoers whitelist) | Matches repo's SSH-centric model; no new services on the host |
-| Credential bootstrap | Host generates keypair (frag/25), private half injected into desktop seed via `late-commands` (base64 placeholder) | Consistent with password-hash injection precedent; nothing on GitHub |
+| `vmctl` login shell | Real shell (`/bin/bash`), not `nologin` | `sshd_config(5)` runs `ForceCommand` via the user's login shell, so `nologin` makes every forced command fail with "This account is currently not available". Restriction comes from `ForceCommand`, not the shell; the password stays locked (`useradd -r`), so the account is key-only |
+| Credential bootstrap | Host generates keypairs (frag/25), private halves injected into desktop seed via `late-commands` (base64 placeholders) | Consistent with password-hash injection precedent; nothing secret on GitHub |
+| Admin key distribution | `keys/host_os_ed25519.pub` preserved out of the repo tarball by `first-boot.sh` into `/root/provision/keys/`, then injected into every guest seed | Reads the authoritative file rather than the host's `authorized_keys`, so a key added to the host by hand does not silently propagate to every guest |
+| Guest identity key | One keypair generated at install time; private half on the desktop only, public half trusted by the host and all guests | Gives the desktop a single credential for the whole deployment, distinct from the restricted `vmctl` credential |
+| Host trust pin | Guest identity key trusted with `from="192.168.100.100"` plus `no-*-forwarding` | Limits a leaked copy of the key to the desktop VM. Couples host access to the desktop's static lease — if that address changes, the pin must change too or host access breaks while the key is still present |
+| Staged private keys | `shred -u` after all seeds are built | Narrowest exposure for the staging copies. Canonical copies under `/root/.nested-dev/` are kept (600, root-only) so re-provisioning stays idempotent |
 | Clone source | PVE template VM 102 (created at host first boot, then converted to template) | `qm template` prevents accidental start; `qm clone` from template is the standard PVE pattern |
 | Per-project creation | `devctl add <name>` → `vmctl-host add` (host-side) | On-demand, no pre-registration; desktop remains unaware of future projects |
 | IP allocation | `192.168.100.<vmid>` for VMIDs 103–249 | Deterministic, matches existing dnsmasq convention for 100/101/102 |
@@ -44,12 +49,32 @@ convention from Spec 04 §5.3.
 | Provisioning gate | `qm guest cmd` ping + log tail with bounded timeout before template conversion | Ensures 102 is provisioned before lockdown |
 | Template refresh | `refresh-guests.sh` (operator-run on host) | Avoids host-side automation; operator controls REF bump + rebuild |
 
+### 2.1 Credential matrix
+
+| Principal | Host `/root/.ssh/authorized_keys` | Desktop `~/.ssh` | LLM / dev `~/.ssh/authorized_keys` |
+|---|---|---|---|
+| `host_os_ed25519.pub` (operator) | via PVE answer `root-ssh-keys` | `authorized_keys` | `authorized_keys` |
+| Guest identity public key | `from="192.168.100.100"` pin | — | `authorized_keys` |
+| Guest identity private key | — | `nested-dev-id` | — |
+| `vmctl` public key | — | — | — |
+| `vmctl` private key | — | `pvehost_vmctl` | — |
+
+All guests set `allow-pw: false`, so `ssh_authorized_keys` is mandatory rather than
+optional — without it a guest has no working SSH authentication method at all.
+The password hash is still set (console and xrdp) but is not usable for SSH.
+
+The two desktop credentials serve different purposes and are not
+interchangeable: `pvehost_vmctl` is `ForceCommand`-restricted to the
+`vmctl-host` verb allowlist, while `nested-dev-id` opens a full shell on the
+host (`devctl host`) and on guests (`devctl ssh <vmid>`).
+
 ## 3. Host-side components
 
 ### 3.1 `frag/25-desktop-control.sh` — vmctl user + keys + inventory
 
 Runs between frag/20 (memory) and frag/30 (guest creation) in the host first-boot
-provisioner. Creates the vmctl account and control keypair.
+provisioner. Creates the vmctl account and its control keypair, plus the guest
+identity keypair and the host trust entry for it.
 
 ```bash
 #!/usr/bin/env bash
@@ -70,11 +95,21 @@ EOF
 log "Inventory created at /etc/nested-dev/inventory"
 
 # --- vmctl user ---
+# NOTE: the shell must be a real one. sshd_config(5) invokes ForceCommand as
+# "<login shell> -c '<forced command>'", so nologin would make every devctl
+# command fail. Restriction comes from the forced command, not the shell.
+VMCTL_SHELL="/bin/bash"
 if ! id vmctl >/dev/null 2>&1; then
-    useradd -r -m -s /usr/sbin/nologin -d /home/vmctl vmctl
-    log "vmctl user created"
+    useradd -r -m -s "$VMCTL_SHELL" -d /home/vmctl vmctl
+    log "vmctl user created (shell=${VMCTL_SHELL})"
 else
-    log "vmctl user already exists"
+    current_shell=$(getent passwd vmctl | cut -d: -f7)
+    if [ "$current_shell" != "$VMCTL_SHELL" ]; then
+        usermod -s "$VMCTL_SHELL" vmctl
+        log "vmctl shell corrected: ${current_shell} -> ${VMCTL_SHELL}"
+    else
+        log "vmctl user already exists (shell=${VMCTL_SHELL})"
+    fi
 fi
 
 # --- Generate control keypair ---
@@ -115,6 +150,32 @@ log "vmctl-host installed"
 cp "${VMCTL_KEY_DIR}/vmctl_ed25519" /root/.nested-dev/vmctl-priv-staged
 chmod 600 /root/.nested-dev/vmctl-priv-staged
 log "Private key staged for desktop seed injection"
+
+# --- Guest identity keypair (private half → desktop only) ---
+GUEST_ID_KEY_DIR="/root/.nested-dev/guest-id"
+DESKTOP_IP="192.168.100.100"
+mkdir -p "$GUEST_ID_KEY_DIR"
+if [ ! -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" ]; then
+    ssh-keygen -t ed25519 -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" -N "" \
+        -C "guest-id@$(hostname -s)"
+    chmod 600 "${GUEST_ID_KEY_DIR}/guest_id_ed25519"
+    chmod 644 "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub"
+fi
+
+# Trust it on the host, pinned to the desktop's static address so a leaked copy
+# is only usable from the desktop VM. grep -qF on the key body keeps re-runs
+# from appending a duplicate entry.
+GUEST_ID_PUB=$(cat "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub")
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+if ! grep -qF "$GUEST_ID_PUB" /root/.ssh/authorized_keys; then
+    printf 'from="%s",no-agent-forwarding,no-port-forwarding,no-X11-forwarding %s\n' \
+        "$DESKTOP_IP" "$GUEST_ID_PUB" >> /root/.ssh/authorized_keys
+fi
+
+# Staged unconditionally on every run; frag/30 shreds it once seeds are built.
+cp "${GUEST_ID_KEY_DIR}/guest_id_ed25519" /root/.nested-dev/guest-id-priv-staged
+chmod 600 /root/.nested-dev/guest-id-priv-staged
 
 log "=== desktop-control setup complete ==="
 ```
@@ -291,16 +352,37 @@ vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host
 ```bash
 #!/usr/bin/env bash
 # devctl — desktop-side dev VM control wrapper
-# Delegates to vmctl@pvehost via restricted SSH
+# Fleet control (list/start/stop/add/log) delegates to vmctl@pvehost, which is a
+# restricted forced-command credential with no shell access.
+# `devctl ssh` opens a real shell inside a guest using the desktop's own
+# guest-identity key (~/.ssh/nested-dev-id), not the admin key.
+# `devctl host` runs a command on the PVE host as root via the same identity key.
 set -euo pipefail
 
-PVEHOST="pvehost"  # ~/.ssh/config alias → 192.168.100.1
+PVEHOST="pvehost"    # ~/.ssh/config alias → 192.168.100.1 via vmctl@host
+PVEADMIN="pveadmin"  # ~/.ssh/config alias → 192.168.100.1 via root@host
 SSH_OPTS="-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+GUEST_ID_KEY="${HOME}/.ssh/nested-dev-id"
+
+# All guests share the desktop's username, so take it from the environment
+# rather than hardcoding it (devctl is not templated through personalization.sh).
+GUEST_USER="${USER:-}"
+if [ -z "$GUEST_USER" ]; then
+    echo "devctl: USER is not set — run as the desktop user" >&2
+    exit 1
+fi
+
+require_guest_id_key() {
+    if [ ! -s "$GUEST_ID_KEY" ]; then
+        echo "devctl: missing guest identity key ${GUEST_ID_KEY}" >&2
+        exit 1
+    fi
+}
 
 usage() {
     echo "Usage: devctl <command> [args]" >&2
     echo "" >&2
-    echo "Commands:" >&2
+    echo "Fleet control (restricted, via vmctl):" >&2
     echo "  list                          List dev VMs" >&2
     echo "  status <name|vmid>            VM status" >&2
     echo "  start <name|vmid>             Start a dev VM" >&2
@@ -308,7 +390,10 @@ usage() {
     echo "  kill <name|vmid>              Force stop" >&2
     echo "  add <project-name>            Create new dev VM from template" >&2
     echo "  log <name|vmid>               Tail first-boot log" >&2
+    echo "" >&2
+    echo "Shell access (full privileges, via guest identity key):" >&2
     echo "  ssh <name|vmid> [cmd...]      SSH to dev VM directly" >&2
+    echo "  host [cmd...]                 Run a command on the PVE host as root" >&2
     exit 1
 }
 
@@ -376,7 +461,17 @@ case "$1" in
         VMID=$(resolve "$2")
         [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
         shift
-        ssh $SSH_OPTS popiel@192.168.100.${VMID} "$@"
+        require_guest_id_key
+        # Guests set allow-pw: false, so the guest identity key is the only way in.
+        ssh $SSH_OPTS -i "$GUEST_ID_KEY" -o IdentitiesOnly=yes \
+            "${GUEST_USER}@192.168.100.${VMID}" "$@"
+        ;;
+    host)
+        # Full root on the PVE host. The host pins this key to the desktop's
+        # address, so the desktop can reach root but a leaked copy cannot.
+        shift || true
+        require_guest_id_key
+        ssh $SSH_OPTS -i "$GUEST_ID_KEY" -o IdentitiesOnly=yes "${PVEADMIN}" "$@"
         ;;
     *)
         usage
@@ -386,6 +481,8 @@ esac
 
 ### 4.2 `~/.ssh/config` (installed by desktop-firstboot.sh)
 
+Two aliases, two different privilege levels:
+
 ```
 Host pvehost
     HostName 192.168.100.1
@@ -393,13 +490,34 @@ Host pvehost
     IdentityFile ~/.ssh/pvehost_vmctl
     StrictHostKeyChecking accept-new
     IdentitiesOnly yes
+Host pveadmin
+    HostName 192.168.100.1
+    User root
+    IdentityFile ~/.ssh/nested-dev-id
+    StrictHostKeyChecking accept-new
+    IdentitiesOnly yes
 ```
 
-### 4.3 `~/.ssh/pvehost_vmctl` (private key, injected via desktop user-data seed)
+### 4.3 Desktop private keys (injected via desktop user-data seed)
 
-Base64-encoded at host build time; decoded and installed by desktop-firstboot.sh or
-by `late-commands` in the desktop's NoCloud seed user-data (placeholder
-`__VMCTL_PRIV_B64__` in the committed template; real value substituted by host).
+Both keys are generated on the host at install time, base64-encoded by
+`frag/30`, and decoded into the desktop's `~/.ssh` by `late-commands`:
+
+| Key | Placeholder | Written to |
+|---|---|---|
+| vmctl control | `__VMCTL_PRIV_B64__` | `~/.ssh/pvehost_vmctl` |
+| guest identity | `__GUEST_ID_PRIV_B64__` | `~/.ssh/nested-dev-id` |
+
+`late-commands` runs in cloud-init's **init** stage, which is *before* the
+cloud_config stage where `cc_ssh` creates `~/.ssh` and writes
+`authorized_keys`. So the seed must `mkdir -p ~/.ssh` before redirecting into
+it, otherwise the write fails with "No such file or directory". The committed
+templates do this, and `desktop-firstboot.sh` independently hard-fails if either
+key is missing or is not a valid OpenSSH private key.
+
+`frag/30` shreds both staged private copies once every seed is built. The
+canonical copies under `/root/.nested-dev/` are kept at mode 600 so a
+re-provision stays idempotent.
 
 ## 5. Firewall addition
 

@@ -74,6 +74,9 @@ bats tests/unit/gpu-detect.bats
 echo "  frag10-iommu..."
 bats tests/unit/frag10-iommu.bats
 
+echo "  frag25-vmctl..."
+bats tests/unit/frag25-vmctl.bats
+
 echo "  template..."
 bats tests/unit/template.bats
 
