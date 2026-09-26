@@ -86,7 +86,7 @@ sha256_of() {
 # manifest entry can never be written from a failed build.
 write_manifest() {
     local manifest="$1" ref="$2" ref_sha="$3" pve_name="$4" pve_sha="$5" \
-          auto_name="$6" auto_sha="$7" disk="$8" ssh_key_file="$9"
+          auto_name="$6" auto_sha="$7" disks="$8" ssh_key_file="$9"
 
     cat >> "$manifest" <<EOF
 
@@ -97,35 +97,94 @@ PVE ISO: ${pve_name}
 PVE ISO SHA256: ${pve_sha}
 Auto ISO: ${auto_name}
 Auto ISO SHA256: ${auto_sha}
-Target disk: ${disk}
+Target disk: ${disks}
 SSH key: ${ssh_key_file}
 Password hash: embedded in answer (root-password-hashed) and first-boot bootstrap
 EOF
 }
 
-detect_target_disk() {
-    local target=""
-    for disk in /dev/nvme?n?; do
-        [ -b "$disk" ] && target="$disk" && break
+# Validate PERSONALIZATION_TARGET_DISKS and echo it back as a comma-separated
+# list of quoted device names, e.g. '"nvme0n1", "sda"'.
+#
+# The answer file is built on one machine and installed on another, so the
+# target disk must be configured explicitly. Probing /dev here (as a
+# build-machine auto-detect did) can only ever report the *builder's* disks,
+# which is never what the target has.
+#
+# The value is returned unbracketed because the answer template already carries
+# the brackets around the placeholder; that also keeps the committed template
+# valid TOML. Rejecting bad shapes here turns a silent mis-install into a
+# build-time failure, well before the 1.7 GB ISO step.
+validate_target_disks() {
+    local disks="$1"
+    [ -n "$disks" ] || die "PERSONALIZATION_TARGET_DISKS is unset.
+  Set it in provision/personalization.sh to a list of bare device names,
+  most-preferred first, e.g. \"nvme0n1\", \"sda\".
+  List only OS-eligible disks - never a data/spinning disk."
+
+    # Tolerate a caller that already wrapped the list in brackets.
+    local body="$disks"
+    case "$body" in
+        \[*\]) body="${body#\[}"; body="${body%]}" ;;
+    esac
+    [ -n "${body//[[:space:]]/}" ] || die "PERSONALIZATION_TARGET_DISKS is empty: ${disks}"
+
+    local entry trimmed normalized=""
+    local oldifs="$IFS"
+    IFS=','
+    # shellcheck disable=SC2086 # deliberate word splitting on commas
+    set -- $body
+    IFS="$oldifs"
+    [ "$#" -gt 0 ] || die "PERSONALIZATION_TARGET_DISKS is empty: ${disks}"
+
+    for entry in "$@"; do
+        # Tolerate surrounding whitespace so hand-edited values still work.
+        trimmed="${entry#"${entry%%[![:space:]]*}"}"
+        trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+        [ -n "$trimmed" ] || die "PERSONALIZATION_TARGET_DISKS has an empty entry: ${disks}"
+        case "$trimmed" in
+            \"*\") ;;
+            *) die "PERSONALIZATION_TARGET_DISKS entry must be quoted: ${trimmed} (in ${disks})" ;;
+        esac
+        trimmed="${trimmed#\"}"
+        trimmed="${trimmed%\"}"
+        # The answer file takes bare kernel names, not /dev paths.
+        case "$trimmed" in
+            /dev/*) die "PERSONALIZATION_TARGET_DISKS entry must be a bare device name, not a path: ${trimmed}
+  PVE resolves these against /dev itself." ;;
+        esac
+        # Reject partitions: the installer partitions a whole device, and a
+        # partition name is a silent mis-target rather than an obvious error.
+        case "$trimmed" in
+            *[0-9]p[0-9]*|sd[a-z][0-9]*|vd[a-z][0-9]*)
+                die "PERSONALIZATION_TARGET_DISKS entry looks like a partition, not a disk: ${trimmed}
+  Use the whole-disk name (e.g. nvme0n1, not nvme0n1p1)." ;;
+        esac
+        case "$trimmed" in
+            nvme[0-9]n[0-9]*|sd[a-z]*|vd[a-z]*|xvd[a-z]*) ;;
+            *) die "PERSONALIZATION_TARGET_DISKS entry is not a recognised block device: ${trimmed}
+  Expected names like nvme0n1, sda, vda." ;;
+        esac
+        if [ -n "$normalized" ]; then
+            normalized="${normalized}, "
+        fi
+        normalized="${normalized}\"${trimmed}\""
     done
-    if [ -z "$target" ]; then
-        for disk in /dev/sd?; do
-            if [ -f "/sys/block/$(basename "$disk")/queue/rotational" ]; then
-                local rota
-                rota=$(cat "/sys/block/$(basename "$disk")/queue/rotational")
-                if [ "$rota" -eq 0 ]; then
-                    target="$disk"
-                    break
-                fi
-            fi
-        done
-    fi
-    if [ -z "$target" ]; then
-        for disk in /dev/sd?; do
-            [ -b "$disk" ] && target="$disk" && break
-        done
-    fi
-    echo "$target"
+
+    # PVE's schema allows exactly one disk for ext4/xfs, so an ordered
+    # preference list cannot be expressed here at all: validate-answer fails
+    # with "make sure to define only one disk for ext4 and xfs". Catch it at
+    # build time with an actionable message instead of an opaque schema error
+    # after a 1.7 GB ISO build. Multi-disk lists are only valid for ZFS/RAID,
+    # where every disk joins one pool.
+    local count="$#"
+    [ "$count" -eq 1 ] || die "PERSONALIZATION_TARGET_DISKS lists ${count} disks, but disk-setup.filesystem is ext4.
+  PVE allows exactly one disk for ext4/xfs, so there is no ordered preference
+  to express. Pin the single install target instead - e.g. \"nvme0n1\" to prefer
+  the NVMe, or \"sda\" for the SATA SSD. Because nothing else is listed, the
+  installer cannot fall back to and wipe a data disk."
+
+    printf '%s\n' "$normalized"
 }
 
 # proxmox-auto-install-assistant exits 0 even when it reports a hard failure
@@ -155,16 +214,19 @@ run_assistant_checked() {
 # Argument order matches the historical generate_answer_file contract, with
 # the destination last.
 render_template() {
-    local template="$1" disk_short="$2" ssh_key="$3" ref="$4" password_hash="$5" output="$6"
+    local template="$1" disks="$2" ssh_key="$3" ref="$4" password_hash="$5" output="$6"
     local escaped_hash
     # Fall back to the literal placeholder when personalization was not sourced,
     # so the caller's unsubstituted-placeholder check fails loudly rather than
     # silently rendering an invalid empty value.
     local email="${PERSONALIZATION_EMAIL:-__PERSONALIZATION_EMAIL__}"
     escaped_hash=$(sed_escape "$password_hash")
+    # $2 is the array already normalized by validate_target_disks(), so it is
+    # either well-formed TOML or the call already died. No escaping is needed:
+    # bare device names cannot contain '|' or '&'.
     sed \
         -e "s|__ROOT_SSH_KEY__|${ssh_key}|g" \
-        -e "s|__AUTO_DETECT_DISK__|${disk_short}|g" \
+        -e "s|__TARGET_DISKS__|${disks}|g" \
         -e "s|__GITHUB_REF__|${ref}|g" \
         -e "s|__ROOT_PASSWORD_HASH__|${escaped_hash}|g" \
         -e "s|__PERSONALIZATION_EMAIL__|${email}|g" \
@@ -271,15 +333,13 @@ main() {
     SSH_KEY=$(tr -d '\n' < "$SSH_KEY_FILE")
     log "SSH key loaded from ${SSH_KEY_FILE}"
 
-    # --- 3. Auto-detect target disk ---
-    TARGET_DISK=$(detect_target_disk)
-    if [ -n "$TARGET_DISK" ]; then
-        DISK_SHORT=$(basename "$TARGET_DISK")
-        log "Target disk: ${TARGET_DISK} (${DISK_SHORT})"
-    else
-        DISK_SHORT="sda"
-        log "WARNING: No disk detected, defaulting to ${DISK_SHORT}"
-    fi
+    # --- 3. Resolve target disk preference ---
+    # Explicitly configured, not detected: this ISO is built on one machine and
+    # installed on another, so /dev here describes the builder, not the target.
+    DISK_LIST=$(validate_target_disks "${PERSONALIZATION_TARGET_DISKS:-}")
+    DISKS="[${DISK_LIST}]"
+    log "Target disk: ${DISKS}"
+    log "  (pinned explicitly; nothing else is listed, so no data disk can be selected)"
 
     # --- 4. Render build-time templates ---
     ANSWER_TEMPLATE="${SCRIPT_DIR}/answer-host.toml"
@@ -290,14 +350,14 @@ main() {
     [ -f "$ANSWER_TEMPLATE" ] || die "Answer template not found: ${ANSWER_TEMPLATE}"
     [ -f "$FIRST_BOOT_TEMPLATE" ] || die "First-boot template not found: ${FIRST_BOOT_TEMPLATE}"
 
-    generate_answer_file "$ANSWER_TEMPLATE" "$DISK_SHORT" "$SSH_KEY" "$REF" \
+    generate_answer_file "$ANSWER_TEMPLATE" "$DISK_LIST" "$SSH_KEY" "$REF" \
         "$PASSWORD_HASH" "$ANSWER_WORK"
     log "Answer file generated: ${ANSWER_WORK}"
 
     # The first-boot bootstrap carries the password hash, so it is rendered with
     # the same escaping and kept in the gitignored work dir. It replaces the
     # [late-commands] section the answer file used to carry.
-    generate_first_boot_script "$FIRST_BOOT_TEMPLATE" "$DISK_SHORT" "$SSH_KEY" "$REF" \
+    generate_first_boot_script "$FIRST_BOOT_TEMPLATE" "$DISK_LIST" "$SSH_KEY" "$REF" \
         "$PASSWORD_HASH" "$FIRST_BOOT_WORK"
     log "First-boot bootstrap generated: ${FIRST_BOOT_WORK}"
     for rendered in "$FIRST_BOOT_WORK" "$ANSWER_WORK"; do
@@ -385,7 +445,7 @@ main() {
     write_manifest "$MANIFEST" "$REF" "$REF_SHA" \
         "$PVE_ISO_NAME" "$PVE_ISO_SHA256_VERIFIED" \
         "$(basename "$AUTO_ISO")" "$AUTO_ISO_SHA256" \
-        "$DISK_SHORT" "$SSH_KEY_FILE"
+        "$DISKS" "$SSH_KEY_FILE"
 
     log "Manifest updated: ${MANIFEST}"
     log "=== Build complete ==="

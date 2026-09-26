@@ -23,6 +23,28 @@ PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
 PERSONALIZATION_REPO="popiel/nested_dev"
 PERSONALIZATION_REF="main"
 
+# Target disk for the PVE autoinstall answer file: a single quoted bare kernel
+# device name (no /dev/ prefix).
+#
+#   "nvme0n1"   -> install PVE on the NVMe.
+#
+# This is a PINNED choice, not an ordered preference. The answer file is built
+# on one machine and installed on another, so the target cannot be detected
+# here, and PVE's schema rejects more than one disk for ext4/xfs
+# ("make sure to define only one disk for ext4 and xfs") — validate-answer
+# fails, so there is no fallback list to express a preference with. Multi-disk
+# entries are only meaningful for ZFS/RAID, where every listed disk joins one
+# pool, which is not the same thing as "prefer the fast disk".
+#
+# The upside is fail-safe: because the disk is named explicitly and nothing
+# else is listed, the installer cannot fall back to and wipe a data/spinning
+# disk. If the named disk is absent the install stops.
+#
+# To install on the SATA SSD instead, change this to "sda" and rebuild.
+# Names are hardware-specific - re-check on the target before first boot with
+#   proxmox-auto-install-assistant device-info -t disk
+PERSONALIZATION_TARGET_DISKS='"nvme0n1"'
+
 # Resolve PERSONALIZATION_REF to a full commit SHA for build manifests.
 # Accepts a branch, a tag, or an already-full 40-hex SHA (passed through).
 # Prints an empty string when the ref cannot be resolved (offline build, or

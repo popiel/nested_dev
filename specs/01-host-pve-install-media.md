@@ -84,7 +84,7 @@ source = "from-dhcp"
 
 [disk-setup]
 filesystem = "ext4"
-disk-list = ["CHANGE_ME_sda"]
+disk-list = __TARGET_DISKS__
 # ZFS variant (documented alternative, not default):
 # filesystem = "zfs"
 # [disk-setup.zfs]
@@ -108,7 +108,7 @@ Notes:
 * `first-boot.ordering` is one of `before-network`, `network-online`,
   `fully-up`.
 * `disks`/disk-list: restrict to the OS disk pattern if the server has
-  separate OS vs data disks; never blindly wipe data disks.
+  separate OS vs data disks; never blindly wipe data disks. See §4.2.
 
 ### 4.1 No `late-commands` — bootstrap via `--on-first-boot`
 
@@ -153,6 +153,49 @@ not be committed.
 The `pve-firstboot.service` unit remains authoritative — it runs the full
 `frag/` tree at the pinned REF. `first-boot` is the bootstrap that installs
 it. Both reference the same `<REF>`.
+
+### 4.2 `disk-list` is a pinned target, configured explicitly
+
+`disk-list` is **not** auto-detectable. The answer file is rendered on the build
+machine and consumed on the target, so any probe of `/dev` during the build can
+only report the *builder's* disks. An earlier revision did exactly that and
+baked `disk-list = ["sda"]` — the build box's disk — into an ISO meant for
+different hardware. `build-iso.sh` therefore has no target-disk detection; the
+disk is declared in `provision/personalization.sh`:
+
+```sh
+PERSONALIZATION_TARGET_DISKS='"nvme0n1"'
+```
+
+**It is a single pinned disk, not an ordered preference.** PVE's schema allows
+exactly one disk for ext4/xfs — `validate-answer` fails with *"make sure to
+define only one disk for ext4 and xfs"* — so there is no list order to encode
+"prefer NVMe, else SSD". Multi-disk `disk-list` is only meaningful for ZFS/RAID,
+where every listed disk joins one pool; that is a storage-design choice, not a
+fallback mechanism. This host runs ext4, so the target is pinned.
+
+The pinning is the fail-safe. Because only the intended disk is named, the
+installer has no other candidate and cannot fall back to and wipe a data or
+spinning disk. If the named disk is absent the install stops. To install on the
+SATA SSD instead, change the value to `"sda"` and rebuild.
+
+`filter` (UDEV `ID_SERIAL`/`ID_MODEL`/`DEVNAME` properties) was considered and
+rejected: `filter-match` is `any`/`all`, a flat boolean with no ordering, so it
+cannot express a preference either; a non-matching filter does not fail cleanly
+(the installer can hang at disk selection); and matching every non-rotational
+disk would put a data SSD in scope. `disk-list` and `filter` are mutually
+exclusive in the schema.
+
+`build-iso.sh` runs `validate_target_disks()` and rejects `/dev/` paths,
+partition names (`nvme0n1p1`, `sda1`), unquoted entries, empty lists, and more
+than one disk, at build time — so a bad value fails before the 1.7 GB ISO step
+rather than as an opaque schema error or at install time.
+
+Names are hardware-specific. Before first boot, confirm them on the target:
+
+```
+proxmox-auto-install-assistant device-info -t disk
+```
 
 ## 5. First-boot provisioner — `provision-host.sh` requirements
 

@@ -21,9 +21,19 @@ load '../lib/helpers'
     [ "$status" -eq 0 ]
 }
 
-@test "answer-host.toml parses as TOML" {
+@test "rendered answer-host.toml parses as TOML" {
     require_command python3
-    run python3 -c "import tomllib; tomllib.load(open(r'${PROJECT_ROOT_WIN}/provision/host/answer-host.toml','rb'))"
+    # The template itself is not valid TOML: the disk-list placeholder is an
+    # array contents placeholder, so the array is only well-formed once
+    # build-iso.sh substitutes PERSONALIZATION_TARGET_DISKS into it. Parse the
+    # rendered file, which is what actually ships (build-iso.sh additionally
+    # runs the assistant's own validate-answer on it during every build).
+    source "${PROJECT_ROOT}/provision/host/build-iso.sh"
+    local out="${BATS_TMPDIR}/rendered-answer.toml"
+    PERSONALIZATION_EMAIL="someone@example.com"
+    generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
+        '"nvme0n1"' "ssh-ed25519 AAAA" "main" 'HASH' "$out"
+    run python3 -c "import tomllib; tomllib.load(open(r'$(win_path "$out")','rb'))"
     [ "$status" -eq 0 ]
 }
 

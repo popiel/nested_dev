@@ -26,6 +26,41 @@ load '../lib/helpers'
     [ -z "$result" ]
 }
 
+@test "no hardcoded target disk outside personalization.sh" {
+    # The answer file is built on one machine and installed on another, so a
+    # literal device name in live config means someone hardcoded a guess about
+    # the target hardware. The one legitimate home for it is
+    # PERSONALIZATION_TARGET_DISKS, which the user edits deliberately.
+    # Comment lines are excluded: they carry format examples, not selections.
+    local result
+    result=$(grep -rnE '"(nvme[0-9]+n[0-9]+|sd[a-z]+|vd[a-z]+)"' \
+        --include='*.sh' --include='*.toml' "$PROJECT_ROOT" 2>/dev/null \
+        | grep -v 'provision/personalization.sh' \
+        | grep -v 'tests/' \
+        | grep -v '.git/' \
+        | grep -v '/output/' \
+        | grep -vE ':[[:space:]]*#' || true)
+    [ -z "$result" ]
+}
+
+@test "answer-host.toml carries no literal disk-list fallback" {
+    # A literal here would be used verbatim by the installer and could point the
+    # install at the wrong physical disk. -F and exact comparison throughout,
+    # because a bare '[' is not a valid regex and grep's error status would make
+    # a plain `grep -q` pass vacuously.
+    local answer="${PROJECT_ROOT}/provision/host/answer-host.toml"
+
+    # Exactly one disk-list key, so no second/override line can sneak in.
+    run grep -c -F 'disk-list' "$answer"
+    [ "$output" = "1" ]
+
+    # ...and that line is the placeholder the build substitutes, with the array
+    # contents (not a quoted string) so a multi-entry list renders correctly.
+    run grep -x -F 'disk-list = [__TARGET_DISKS__]' "$answer"
+    [ "$status" -eq 0 ]
+    [ "$output" = 'disk-list = [__TARGET_DISKS__]' ]
+}
+
 @test "frag/30 contains OS disk sizes from decision table" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'local-lvm:40,size=40G'
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'local-lvm:80,size=80G'

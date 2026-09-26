@@ -51,8 +51,19 @@ teardown() {
     assert_contains "$output" '\$6Y5z'
 }
 
-@test "detect_target_disk function exists in build-iso" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'detect_target_disk()'
+@test "build-iso no longer auto-detects a target disk from the build machine" {
+    # The ISO is built on one machine and installed on another. A /dev probe
+    # here only ever sees the *builder's* disks, and that name then gets baked
+    # into the answer file as if it were the target's.
+    assert_not_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'detect_target_disk'
+    assert_not_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" '/dev/sd?'
+    assert_not_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" '/sys/block'
+}
+
+@test "target disk preference comes from personalization, not a hardcoded default" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'validate_target_disks()'
+    assert_file_contains "${PROJECT_ROOT}/provision/personalization.sh" 'PERSONALIZATION_TARGET_DISKS='
+    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/answer-host.toml" 'disk-list = [__TARGET_DISKS__]'
 }
 
 @test "generate_answer_file function exists in build-iso" {
@@ -166,12 +177,12 @@ SCRIPT
     : > "$m"
     write_manifest "$m" "main" "abc123def456789012345678901234567890abcd" \
         "proxmox-ve_9.2-1.iso" "deadbeef" "proxmox-ve_9.2-1_auto.iso" \
-        "cafebabe" "nvme0n1" "/keys/host_os_ed25519.pub"
+        "cafebabe"         '["nvme0n1"]' "/keys/host_os_ed25519.pub"
     run cat "$m"
     assert_contains "$output" "REF: main"
     assert_contains "$output" "REF SHA: abc123def456789012345678901234567890abcd"
     assert_contains "$output" "Auto ISO SHA256: cafebabe"
-    assert_contains "$output" "Target disk: nvme0n1"
+    assert_contains "$output" "Target disk: [\"nvme0n1\"]"
     assert_not_contains "$output" "unknown"
 }
 
@@ -320,6 +331,108 @@ SCRIPT
     # The placeholder survives, which is what the build's guard detects.
     run cat "$out"
     assert_contains "$output" '__PERSONALIZATION_EMAIL__'
+}
+
+# --- Target disk preference ---
+# The installer partitions the first disk-list entry that is present, so the
+# list is a preference order AND a safety boundary: anything omitted can never
+# be selected or wiped. These lock both properties down.
+
+@test "validate_target_disks normalizes a list of quoted device names" {
+    run validate_target_disks '"nvme0n1"'
+    [ "$status" -eq 0 ]
+    [ "$output" = '"nvme0n1"' ]
+}
+
+@test "validate_target_disks tolerates hand-edited whitespace" {
+    run validate_target_disks ' "nvme0n1" '
+    [ "$status" -eq 0 ]
+    [ "$output" = '"nvme0n1"' ]
+}
+
+@test "validate_target_disks is idempotent when already bracketed" {
+    run validate_target_disks '["nvme0n1"]'
+    [ "$status" -eq 0 ]
+    [ "$output" = '"nvme0n1"' ]
+}
+
+@test "validate_target_disks rejects more than one disk for ext4" {
+    # PVE's schema allows exactly one disk for ext4/xfs; validate-answer fails
+    # with "make sure to define only one disk for ext4 and xfs". Catch it here
+    # so an ordered preference list is an actionable build error, not a schema
+    # failure discovered after a 1.7 GB ISO build.
+    run validate_target_disks '"nvme0n1", "sda"'
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "lists 2 disks"
+    assert_contains "$output" "ext4"
+    assert_contains "$output" "Pin the single install target"
+}
+
+@test "validate_target_disks rejects an unset preference" {
+    run validate_target_disks ''
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "PERSONALIZATION_TARGET_DISKS is unset"
+}
+
+@test "validate_target_disks rejects an empty list" {
+    run validate_target_disks '[]'
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "is empty"
+}
+
+@test "validate_target_disks rejects a /dev path" {
+    # PVE resolves these against /dev itself; a path silently never matches.
+    run validate_target_disks '"/dev/nvme0n1"'
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "bare device name"
+}
+
+@test "validate_target_disks rejects partition names" {
+    # A partition is a silent mis-target rather than an obvious error.
+    run validate_target_disks '"nvme0n1p1"'
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "looks like a partition"
+    run validate_target_disks '"sda1"'
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "looks like a partition"
+}
+
+@test "validate_target_disks rejects an unquoted entry" {
+    run validate_target_disks 'nvme0n1'
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "must be quoted"
+}
+
+@test "validate_target_disks rejects an empty entry" {
+    run validate_target_disks '"nvme0n1", '
+    [ "$status" -ne 0 ]
+    assert_contains "$output" "empty entry"
+}
+
+@test "validate_target_disks never appends an unlisted disk" {
+    # Guards the fail-safe: the build must not widen the list to a fallback.
+    run validate_target_disks '"nvme0n1"'
+    [ "$status" -eq 0 ]
+    [ "$output" = '"nvme0n1"' ]
+}
+
+@test "render_template emits disk-list as a verbatim TOML array" {
+    local out="${BATS_TMPDIR}/disks.toml"
+    PERSONALIZATION_EMAIL="someone@example.com"
+    generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
+        '"nvme0n1"' "KEY" "main" 'HASH' "$out"
+    run grep -E '^disk-list' "$out"
+    [ "$output" = 'disk-list = ["nvme0n1"]' ]
+}
+
+@test "answer-host.toml renders to valid TOML with a one-element disk-list" {
+    # The template is only valid TOML once rendered, so assert the rendered form.
+    local out="${BATS_TMPDIR}/disks-valid.toml"
+    PERSONALIZATION_EMAIL="someone@example.com"
+    generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
+        '"nvme0n1"' "KEY" "main" 'HASH' "$out"
+    run python3 -c "import tomllib,sys; d=tomllib.load(open(r'$(win_path "$out")','rb')); sys.exit(0 if d['disk-setup']['disk-list']==['nvme0n1'] else 1)"
+    [ "$status" -eq 0 ]
 }
 
 @test "generate_first_boot_script renders the bootstrap and marks it executable" {

@@ -18,8 +18,12 @@ source = "from-dhcp"
 
 [disk-setup]
 filesystem = "ext4"
-# Auto-detect: prefer NVMe/SSD; fallback to SATA
-disk-list = ["__AUTO_DETECT_DISK__"]
+# Rendered from PERSONALIZATION_TARGET_DISKS in provision/personalization.sh,
+# which supplies the array contents (a single quoted device name) without the
+# brackets. PVE allows exactly one disk for ext4/xfs, so this is a pinned
+# target, not an ordered preference. Only that disk is named, so the installer
+# cannot fall back to and wipe a data/spinning disk.
+disk-list = [__TARGET_DISKS__]
 
 [first-boot]
 # The executable is embedded into the ISO at build time by
