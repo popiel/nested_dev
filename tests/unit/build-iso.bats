@@ -63,23 +63,29 @@ teardown() {
 @test "target disk preference comes from personalization, not a hardcoded default" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'validate_target_disks()'
     assert_file_contains "${PROJECT_ROOT}/provision/personalization.sh" 'PERSONALIZATION_TARGET_DISKS='
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/answer-host.toml" 'disk-list = [__TARGET_DISKS__]'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" 'disk-list = [__TARGET_DISKS__]'
 }
 
-@test "generate_answer_file function exists in build-iso" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'generate_answer_file()'
-}
-
-@test "run_prepare_iso function exists in build-iso" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'run_prepare_iso()'
-}
-
-@test "download_iso function exists in build-iso" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'download_iso()'
-}
-
-@test "build-iso.sh has source-guard" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'BASH_SOURCE\[0\].*==.*\$0'
+@test "no function in build-iso.sh is defined but never called" {
+    # Replaces three "function exists" greps. Existence proves nothing; this
+    # catches the failure those tests missed in both directions — a call to a
+    # function that was renamed away, and a helper left behind after its last
+    # caller was deleted.
+    local script="${PROJECT_ROOT}/provision/host/build-iso.sh"
+    local fn orphans=()
+    while read -r fn; do
+        [ -n "$fn" ] || continue
+        # Definition plus every call site; a name used only once is never called.
+        local uses
+        uses=$(grep -cE "(^|[^[:alnum:]_])${fn}([^[:alnum:]_]|$)" "$script" || true)
+        if [ "$uses" -le 1 ]; then
+            orphans+=("$fn")
+        fi
+    done < <(grep -oE '^[[:alnum:]_]+\(\)' "$script" | sed 's/()$//')
+    if [ "${#orphans[@]}" -ne 0 ]; then
+        printf 'defined but never called: %s\n' "${orphans[*]}" >&2
+        return 1
+    fi
 }
 
 # --- Git Bash (MSYS) path handling ---
@@ -132,11 +138,11 @@ SCRIPT
 }
 
 @test "docker bind mounts are built from host_path, not raw MSYS paths" {
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '-v "$(host_path "$ISO_DIR"):/iso:ro"'
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '-v "$(host_path "$WORK_DIR"):/work"'
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '-v "$(host_path "$OUTPUT_DIR"):/output"'
 }
 
@@ -303,27 +309,40 @@ setup_personalization() {
 }
 
 @test "render_template writes to the destination argument" {
+    # Regression: the renderer once appended to $OUT instead of honouring the
+    # destination it was handed, so every caller's output went missing. The
+    # substituted values themselves are covered by the two tests below.
     local out="${BATS_TMPDIR}/rendered.toml"
-    local hash='$y$j9T$abc$def'
     setup_personalization
     run generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
-        "nvme0n1" "ssh-ed25519 AAAA" "v1.2" "$hash" 'PERSONAL_HASH' "$out"
+        "nvme0n1" "ssh-ed25519 AAAA" "v1.2" '$y$j9T$abc$def' 'PERSONAL_HASH' "$out"
     [ "$status" -eq 0 ]
     [ -f "$out" ]
-    run cat "$out"
-    assert_contains "$output" 'nvme0n1'
-    assert_contains "$output" 'ssh-ed25519 AAAA'
-    assert_contains "$output" 'v1.2'
-    assert_contains "$output" 'someone@example.com'
 }
 
 @test "render_template substitutes every placeholder and leaves none behind" {
+    # Runs over the answer file and the host bootstrap together. The bootstrap
+    # was previously untested for leftovers: the old tests/unit/template.bats
+    # re-implemented the sed pipeline inline instead of calling this function,
+    # so it proved sed works, not that the shipped bootstrap is complete. An
+    # unsubstituted token here reaches a headless host with no console to
+    # report it.
     local out="${BATS_TMPDIR}/rendered2.toml"
+    local boot="${BATS_TMPDIR}/rendered2-first-boot.sh"
     setup_personalization
     generate_answer_file "${PROJECT_ROOT}/provision/host/answer-host.toml" \
         "sda" "KEY" "main" 'HASH' 'PERSONAL_HASH' "$out"
-    run grep -o '__[A-Z_][A-Z_]*__' "$out"
-    [ -z "$output" ]
+    generate_first_boot_script "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '"sda"' "ssh-ed25519 AAAAsomenoise" "main" 'ROOTHASH' 'PERSONALHASH' "$boot"
+    local rendered
+    for rendered in "$out" "$boot"; do
+        run grep -o '__[A-Z_][A-Z_]*__' "$rendered"
+        if [ -n "$output" ]; then
+            echo "unsubstituted placeholders left in ${rendered}:" >&2
+            echo "$output" >&2
+            return 1
+        fi
+    done
 }
 
 @test "render_template escapes a yescrypt hash so sed survives it" {
@@ -441,9 +460,15 @@ setup_personalization() {
 # be selected or wiped. These lock both properties down.
 
 @test "validate_target_disks normalizes a list of quoted device names" {
+    # Also the fail-safe guard: the build must not widen the list to a fallback,
+    # so the output must be exactly the one entry that was asked for and no
+    # other device name.
     run validate_target_disks '"nvme0n1"'
     [ "$status" -eq 0 ]
     [ "$output" = '"nvme0n1"' ]
+    local tokens
+    tokens=$(printf '%s\n' "$output" | grep -oE '"[^"]+"' | wc -l)
+    [ "$tokens" -eq 1 ]
 }
 
 @test "validate_target_disks tolerates hand-edited whitespace" {
@@ -511,13 +536,6 @@ setup_personalization() {
     assert_contains "$output" "empty entry"
 }
 
-@test "validate_target_disks never appends an unlisted disk" {
-    # Guards the fail-safe: the build must not widen the list to a fallback.
-    run validate_target_disks '"nvme0n1"'
-    [ "$status" -eq 0 ]
-    [ "$output" = '"nvme0n1"' ]
-}
-
 @test "render_template emits disk-list as a verbatim TOML array" {
     local out="${BATS_TMPDIR}/disks.toml"
     setup_personalization
@@ -569,23 +587,15 @@ setup_personalization() {
 @test "prepare-iso is given a writable --tmp" {
     # The assistant otherwise stages in the source ISO's directory, which is
     # mounted read-only at /iso and fails with "Read-only file system".
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '--tmp /work'
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '--tmp "$tmp_dir"'
 }
 
 @test "first-boot bootstrap is passed to prepare-iso in both carriers" {
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '--on-first-boot "$first_boot"'
-    assert_file_contains_literal "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '--on-first-boot "/work/$(basename "$FIRST_BOOT_WORK")"'
-}
-
-@test "frag/30 has source-guard" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'BASH_SOURCE\[0\].*==.*\$0'
-}
-
-@test "frag/10 has source-guard" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/10-gpu-passthrough.sh" 'BASH_SOURCE\[0\].*==.*\$0'
 }

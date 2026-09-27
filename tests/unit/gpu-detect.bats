@@ -12,80 +12,46 @@ teardown() {
     cleanup_mocks
 }
 
-@test "detect_gpu_pci includes NVIDIA GPU" {
-    cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
-#!/bin/bash
-if [[ "$*" == *"-n -s"* ]]; then
-    BDF=$(echo "$*" | awk '{print $NF}')
-    case "$BDF" in
-        01:00.0) echo "01:00.0 0300: 10de:2204" ;;
-        01:00.1) echo "01:00.1 0403: 10de:1aef" ;;
-        00:02.0) echo "00:02.0 0300: 8086:9bc5" ;;
-        04:00.0) echo "04:00.0 0300: 1af4:1050" ;;
-    esac
-elif [[ "$*" == *"-s"* && "$*" != *"-n"* ]]; then
-    echo "01:00.0 VGA compatible controller: NVIDIA ..."
-    echo "01:00.1 Audio device: NVIDIA ..."
-else
-    cat "${FIXTURES_DIR}/lspci-multi-gpu.txt"
-fi
-SCRIPT
-    chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
+# Installs the shared lspci mock, serving one fixture and one device table.
+# The tests below differ only in those two inputs and the vendor they ask for,
+# so the mock body is written once in tests/fixtures/mock-lspci.sh.
+#
+# $1 = fixture name under tests/fixtures
+# $2... = <bdf>=<vendor:device> pairs
+lspci_mock() {
+    local fixture="$1"; shift
+    install_mock "lspci" "mock-lspci.sh"
+    export LSPCI_FIXTURE_PATH="${FIXTURES_DIR}/${fixture}"
+    export LSPCI_TABLE="$*"
+}
+
+@test "detect_gpu_pci returns the matching GPU from a multi-GPU host" {
+    lspci_mock "lspci-multi-gpu.txt" "01:00.0=10de:2204" "01:00.1=10de:1aef"
     run detect_gpu_pci "10de"
     assert_contains "$output" "0000:01:00.0"
 }
 
-@test "detect_gpu_pci returns empty for non-existent vendor" {
-    cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
-#!/bin/bash
-if [[ "$*" == *"-n -s"* ]]; then
-    BDF=$(echo "$*" | awk '{print $NF}')
-    case "$BDF" in
-        01:00.0) echo "01:00.0 0300: 10de:2204" ;;
-    esac
-else
-    cat "${FIXTURES_DIR}/lspci-single-gpu.txt"
-fi
-SCRIPT
-    chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
+@test "detect_gpu_pci returns empty for a vendor that is not present" {
+    lspci_mock "lspci-single-gpu.txt" "01:00.0=10de:2204" "00:02.0=8086:9bc5"
     run detect_gpu_pci "1234"
     [ -z "$output" ]
 }
 
-@test "detect_gpu_pci returns single GPU for single-gpu fixture" {
-    cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
-#!/bin/bash
-if [[ "$*" == *"-n -s"* ]]; then
-    BDF=$(echo "$*" | awk '{print $NF}')
-    case "$BDF" in
-        01:00.0) echo "01:00.0 0300: 10de:2204" ;;
-        00:02.0) echo "00:02.0 0300: 8086:9bc5" ;;
-    esac
-else
-    cat "${FIXTURES_DIR}/lspci-single-gpu.txt"
-fi
-SCRIPT
-    chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
-    run detect_gpu_pci "10de"
-    assert_contains "$output" "0000:01:00.0"
-    assert_not_contains "$output" "0000:04:00.0"
-}
-
-@test "detect_gpu_pci excludes non-matching vendors" {
-    cat > "${FIXTURES_DIR}/mock-bin/lspci" <<'SCRIPT'
-#!/bin/bash
-if [[ "$*" == *"-n -s"* ]]; then
-    BDF=$(echo "$*" | awk '{print $NF}')
-    case "$BDF" in
-        01:00.0) echo "01:00.0 0300: 10de:2204" ;;
-        00:02.0) echo "00:02.0 0300: 8086:9bc5" ;;
-    esac
-else
-    cat "${FIXTURES_DIR}/lspci-single-gpu.txt"
-fi
-SCRIPT
-    chmod +x "${FIXTURES_DIR}/mock-bin/lspci"
+@test "detect_gpu_pci excludes the non-matching vendor on the same host" {
+    # A host with both an NVIDIA and an Intel GPU: asking for 10de must not
+    # pick up the iGPU, or the guest gets a passthrough id for a device the
+    # host is still using.
+    lspci_mock "lspci-single-gpu.txt" "01:00.0=10de:2204" "00:02.0=8086:9bc5"
     run detect_gpu_pci "10de"
     assert_contains "$output" "0000:01:00.0"
     assert_not_contains "$output" "0000:00:02.0"
+}
+
+@test "detect_gpu_pci returns the virtio device when explicitly asked for" {
+    # detect_gpu_pci filters on whatever vendor it is handed; excluding virtio
+    # is collect_gpu_ids' job (see tests/unit/frag10-iommu.bats). This pins the
+    # boundary between the two so neither grows the other's rule.
+    lspci_mock "lspci-no-gpu.txt" "04:00.0=1af4:1050"
+    run detect_gpu_pci "1af4"
+    assert_contains "$output" "0000:04:00.0"
 }

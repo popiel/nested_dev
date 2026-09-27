@@ -3,22 +3,17 @@
 
 load '../lib/helpers'
 
-@test "desktop user-data parses as YAML" {
+@test "all guest user-data files parse as YAML" {
     require_command python3
-    run python3 -c "import yaml; yaml.safe_load(open(r'${PROJECT_ROOT_WIN}/desktop/user-data/user-data'))"
-    [ "$status" -eq 0 ]
-}
-
-@test "llm user-data parses as YAML" {
-    require_command python3
-    run python3 -c "import yaml; yaml.safe_load(open(r'${PROJECT_ROOT_WIN}/llm/user-data/user-data'))"
-    [ "$status" -eq 0 ]
-}
-
-@test "dev user-data parses as YAML" {
-    require_command python3
-    run python3 -c "import yaml; yaml.safe_load(open(r'${PROJECT_ROOT_WIN}/dev/user-data/user-data'))"
-    [ "$status" -eq 0 ]
+    local ud
+    for ud in desktop llm dev; do
+        run python3 -c "import yaml; yaml.safe_load(open(r'${PROJECT_ROOT_WIN}/${ud}/user-data/user-data'))"
+        if [ "$status" -ne 0 ]; then
+            echo "YAML parse failed for ${ud}/user-data/user-data:" >&2
+            echo "$output" >&2
+            return 1
+        fi
+    done
 }
 
 @test "rendered answer-host.toml parses as TOML" {

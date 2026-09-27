@@ -80,9 +80,6 @@ bats tests/unit/frag25-vmctl.bats
 echo "  first-boot-user..."
 bats tests/unit/first-boot-user.bats
 
-echo "  template..."
-bats tests/unit/template.bats
-
 echo "  build-iso..."
 bats tests/unit/build-iso.bats
 

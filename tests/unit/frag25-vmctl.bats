@@ -46,7 +46,7 @@ DNSMASQ="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
 }
 
 @test "D1: frag/25 keeps the ForceCommand restriction in authorized_keys" {
-    assert_file_contains_literal "$FRAG25" \
+    assert_file_contains "$FRAG25" \
         'command="/usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding'
 }
 
@@ -63,11 +63,11 @@ DNSMASQ="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
 
 @test "frag/25 does not regenerate an existing guest identity keypair" {
     # Regenerating on every run would leave guests holding a stale public key.
-    assert_file_contains_literal "$FRAG25" 'if [ ! -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" ]; then'
+    assert_file_contains "$FRAG25" 'if [ ! -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" ]; then'
 }
 
 @test "frag/25 pins the guest identity key on the host to the desktop address" {
-    assert_file_contains_literal "$FRAG25" \
+    assert_file_contains "$FRAG25" \
         'from="%s",no-agent-forwarding,no-port-forwarding,no-X11-forwarding'
     assert_file_contains "$FRAG25" 'DESKTOP_IP="192.168.100.100"'
 }
@@ -84,7 +84,7 @@ DNSMASQ="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
 
 @test "frag/25 appends the host key entry idempotently" {
     # Without a presence check, every re-run would add a duplicate line.
-    assert_file_contains_literal "$FRAG25" 'if grep -qF "$GUEST_ID_PUB" "$ROOT_AUTH_KEYS"; then'
+    assert_file_contains "$FRAG25" 'if grep -qF "$GUEST_ID_PUB" "$ROOT_AUTH_KEYS"; then'
 }
 
 @test "frag/25 stages the guest identity private half for frag/30" {
@@ -106,9 +106,9 @@ DNSMASQ="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
 # --- admin public key transport: repo tarball → provision tree → frag/30 ---
 
 @test "first-boot.sh preserves the admin public key into the provision tree" {
-    assert_file_contains_literal "$FIRSTBOOT" 'keys/host_os_ed25519.pub'
+    assert_file_contains "$FIRSTBOOT" 'keys/host_os_ed25519.pub'
     assert_file_contains "$FIRSTBOOT" 'ADMIN_PUBKEY_SRC='
-    assert_file_contains_literal "$FIRSTBOOT" 'cp "$ADMIN_PUBKEY_SRC" "${PROVISION_DIR}/keys/host_os_ed25519.pub"'
+    assert_file_contains "$FIRSTBOOT" 'cp "$ADMIN_PUBKEY_SRC" "${PROVISION_DIR}/keys/host_os_ed25519.pub"'
 }
 
 @test "first-boot.sh preserves the admin pubkey BEFORE deleting the extract" {
@@ -125,7 +125,7 @@ DNSMASQ="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
 @test "first-boot.sh fails loudly if the admin public key is absent" {
     # keys/host_os_ed25519.pub is git-tracked, so a missing file means a broken
     # build rather than a normal condition.
-    assert_file_contains_literal "$FIRSTBOOT" \
+    assert_file_contains "$FIRSTBOOT" \
         '[ -f "$ADMIN_PUBKEY_SRC" ] || die "archive did not contain keys/host_os_ed25519.pub"'
 }
 
@@ -135,9 +135,9 @@ DNSMASQ="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
 }
 
 @test "frag/30 dies rather than seeding guests without the admin key" {
-    assert_file_contains_literal "$FRAG30" \
+    assert_file_contains "$FRAG30" \
         '[ -f "$ADMIN_PUBKEY_FILE" ] || die "Admin public key not found'
-    assert_file_contains_literal "$FRAG30" \
+    assert_file_contains "$FRAG30" \
         '[ -f "$GUEST_ID_PUBKEY_FILE" ] || die "Guest identity public key not found'
 }
 
@@ -161,32 +161,24 @@ DNSMASQ="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
     # Otherwise a guest silently boots with no keys and the failure only shows
     # up later as "Permission denied (publickey)".
     # Literal match: [A-Z_] is a regex character class, not literal text.
-    assert_file_contains_literal "$FRAG30" "grep -q '__[A-Z_]*__'"
+    assert_file_contains "$FRAG30" "grep -q '__[A-Z_]*__'"
     assert_file_contains "$FRAG30" 'Unsubstituted placeholders left in'
 }
 
 # D3: allow-pw: false means ssh_authorized_keys is not optional — without it a
 # guest has no working SSH authentication method at all.
 
-@test "desktop user-data declares ssh_authorized_keys with both keys" {
-    assert_file_contains "$DESKTOP_UD" 'ssh_authorized_keys:'
-    assert_file_contains "$DESKTOP_UD" '- "__ADMIN_PUBKEY__"'
-    assert_file_contains "$DESKTOP_UD" '- "__GUEST_ID_PUBKEY__"'
-    assert_file_contains "$DESKTOP_UD" 'allow-pw: false'
-}
-
-@test "llm user-data declares ssh_authorized_keys with both keys" {
-    assert_file_contains "$LLM_UD" 'ssh_authorized_keys:'
-    assert_file_contains "$LLM_UD" '- "__ADMIN_PUBKEY__"'
-    assert_file_contains "$LLM_UD" '- "__GUEST_ID_PUBKEY__"'
-    assert_file_contains "$LLM_UD" 'allow-pw: false'
-}
-
-@test "dev user-data declares ssh_authorized_keys with both keys" {
-    assert_file_contains "$DEV_UD" 'ssh_authorized_keys:'
-    assert_file_contains "$DEV_UD" '- "__ADMIN_PUBKEY__"'
-    assert_file_contains "$DEV_UD" '- "__GUEST_ID_PUBKEY__"'
-    assert_file_contains "$DEV_UD" 'allow-pw: false'
+@test "every guest user-data declares ssh_authorized_keys with both keys" {
+    # allow-pw: false means ssh_authorized_keys is not optional — without it a
+    # guest has no working SSH authentication method at all (D3).
+    local label file
+    for label in desktop llm dev; do
+        file="${PROJECT_ROOT}/${label}/user-data/user-data"
+        assert_file_contains "$file" 'ssh_authorized_keys:'
+        assert_file_contains "$file" '- "__ADMIN_PUBKEY__"'
+        assert_file_contains "$file" '- "__GUEST_ID_PUBKEY__"'
+        assert_file_contains "$file" 'allow-pw: false'
+    done
 }
 
 # --- D2: the seed must create ~/.ssh before writing private keys into it ---

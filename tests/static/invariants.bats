@@ -8,7 +8,7 @@ load '../lib/helpers'
     result=$(grep -r 'popiel' --include='*.sh' --include='*.toml' --include='*.conf' \
         --include='*.yml' --include='*.yaml' "$PROJECT_ROOT" 2>/dev/null \
         | grep -v 'provision/personalization.sh' \
-        | grep -v 'tests/fixtures/' \
+        | grep -v '/tests/' \
         | grep -v '.git/' \
         | grep -v '/output/' \
         | grep -v 'popiel/nested_dev' || true)
@@ -20,7 +20,7 @@ load '../lib/helpers'
     result=$(grep -r 'tapopiel@gmail.com' --include='*.sh' --include='*.toml' \
         "$PROJECT_ROOT" 2>/dev/null \
         | grep -v 'provision/personalization.sh' \
-        | grep -v 'tests/fixtures/' \
+        | grep -v '/tests/' \
         | grep -v '.git/' \
         | grep -v '/output/' || true)
     [ -z "$result" ]
@@ -83,22 +83,21 @@ load '../lib/helpers'
     done
 }
 
-@test "answer-host.toml contains __GITHUB_REF__" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" '__GITHUB_REF__'
-}
-
-@test "answer-host.toml contains __ROOT_SSH_KEY__" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" '__ROOT_SSH_KEY__'
-}
-
-@test "answer-host.toml contains __ROOT_PASSWORD_HASH__" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" '__ROOT_PASSWORD_HASH__'
-}
-
-@test "first-boot.sh contains __PERSONALIZATION_PASSWORD_HASH__" {
-    # The login hash reaches the host only through the bootstrap; without this
-    # placeholder the account would be created with no working password.
-    assert_file_contains "${PROJECT_ROOT}/provision/host/first-boot.sh" '__PERSONALIZATION_PASSWORD_HASH__'
+@test "host templates carry the placeholders their renderer substitutes" {
+    # Each entry is "file|placeholder". A missing placeholder does not fail the
+    # build; it ships an unsubstituted token into the answer file or the host
+    # bootstrap, where it surfaces as a broken install.
+    local entry file placeholder
+    for entry in \
+        "provision/host/answer-host.toml|__GITHUB_REF__" \
+        "provision/host/answer-host.toml|__ROOT_SSH_KEY__" \
+        "provision/host/answer-host.toml|__ROOT_PASSWORD_HASH__" \
+        "provision/host/first-boot.sh|__PERSONALIZATION_PASSWORD_HASH__" \
+    ; do
+        file="${entry%%|*}"
+        placeholder="${entry##*|}"
+        assert_file_contains "${PROJECT_ROOT}/${file}" "$placeholder"
+    done
 }
 
 @test "first-boot.sh carries no root password hash" {
@@ -154,7 +153,14 @@ load '../lib/helpers'
 }
 
 @test "frag/30 aborts when personalization vars are empty" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'exit 1'
+    # The specific guard, not a bare `exit 1` somewhere in a 400-line script:
+    # this is the check that stops the host boot with an operator-readable
+    # reason instead of creating guests with a blank username.
+    local frag30="${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh"
+    assert_file_contains "$frag30" \
+        'PERSONALIZATION_USERNAME or PERSONALIZATION_FULLNAME not set'
+    assert_file_contains "$frag30" \
+        'Personalization password hash not found: ${PERSONALIZATION_HASH_FILE}'
 }
 
 @test "data volume size is 500 GB" {

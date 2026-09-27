@@ -49,14 +49,42 @@ find_audio_companion() {
     echo "$audio_addr"
 }
 
+iommu_group_device_count() {
+    # Number of devices in an IOMMU group directory. Echoes 0 when the directory
+    # does not exist, so callers need no separate existence test.
+    # Takes the directory as an argument rather than deriving it from sysfs, so
+    # the separability rule is testable without a live /sys (tests/unit/frag10-iommu.bats).
+    local group_path="$1"
+    [ -d "$group_path" ] || { echo 0; return 0; }
+    find "$group_path" -maxdepth 1 -type f | wc -l
+}
+
+iommu_group_is_separable() {
+    # The R4 rule, on its own: a group holding more than one device cannot be
+    # handed to VFIO without dragging the other devices along, so the GPU stops
+    # working. This is the only statement of the rule; check_iommu_group_
+    # separable and main() both go through it.
+    [ "$(iommu_group_device_count "$1")" -le 1 ]
+}
+
 check_iommu_group_separable() {
-    # Returns 0 if group has <=1 device (separable), 1 if not
+    # BDF entry point: maps a PCI address to its IOMMU group directory, then
+    # applies the rule. main() calls this rather than re-deriving the group
+    # size, so the rule has exactly one implementation.
     local pci_addr="$1"
-    local group_path="/sys/bus/pci/devices/0000:${pci_addr}/iommu_group/devices"
-    [ -d "$group_path" ] || return 0
-    local size
-    size=$(find "$group_path" -maxdepth 1 -type f | wc -l)
-    [ "$size" -le 1 ]
+    iommu_group_is_separable \
+        "/sys/bus/pci/devices/0000:${pci_addr}/iommu_group/devices"
+}
+
+iommu_flag_for_vendor() {
+    # Maps a lowercased lscpu Vendor ID to the kernel parameter that enables
+    # IOMMU on it. Returns 1 for a vendor with no known flag, so the caller
+    # aborts rather than booting with IOMMU silently off.
+    case "$1" in
+        *intel*) echo "intel_iommu=on" ;;
+        *amd*)   echo "amd_iommu=on" ;;
+        *)       return 1 ;;
+    esac
 }
 
 main() {
@@ -64,11 +92,10 @@ main() {
 
     # --- Detect CPU vendor for IOMMU flag ---
     CPU_VENDOR=$(detect_cpu_vendor)
-    case "$CPU_VENDOR" in
-        *intel*) IOMMU_FLAG="intel_iommu=on" ;;
-        *amd*)   IOMMU_FLAG="amd_iommu=on" ;;
-        *)       log "ERROR: Unknown CPU vendor: $CPU_VENDOR"; exit 1 ;;
-    esac
+    if ! IOMMU_FLAG=$(iommu_flag_for_vendor "$CPU_VENDOR"); then
+        log "ERROR: Unknown CPU vendor: $CPU_VENDOR"
+        exit 1
+    fi
     log "CPU vendor: $CPU_VENDOR, IOMMU flag: $IOMMU_FLAG"
 
     # --- Collect all VGA/3D/compatible controllers ---
@@ -87,28 +114,22 @@ main() {
         GPU_GROUP_PATH="/sys/bus/pci/devices/0000:${PCI_ADDR}/iommu_group/devices"
         [ -d "$GPU_GROUP_PATH" ] || continue
 
-        GPU_GROUP_SIZE=$(find "$GPU_GROUP_PATH" -maxdepth 1 -type f | wc -l)
-
-        if [ "$GPU_GROUP_SIZE" -gt 1 ]; then
+        if ! check_iommu_group_separable "$PCI_ADDR"; then
             GROUP_DEVICES=$(find "$GPU_GROUP_PATH" -maxdepth 1 -type f -printf '%f ')
-            log "ERROR: IOMMU group for $PCI_ADDR contains $GPU_GROUP_SIZE devices: $GROUP_DEVICES"
+            log "ERROR: IOMMU group for $PCI_ADDR contains $(iommu_group_device_count "$GPU_GROUP_PATH") devices: $GROUP_DEVICES"
             log "  Group is NOT separable — aborting to prevent broken passthrough."
             log "  Fix: enable ACS override in BIOS/firmware, or use a different host."
             exit 1
         fi
 
-        AUDIO_ADDR=$(find_audio_companion "$PCI_ADDR")
-        if [ -n "$AUDIO_ADDR" ]; then
-            AUDIO_VD=$(lspci -n -s "$AUDIO_ADDR" | awk '{print $3}')
-            AUDIO_GROUP_PATH="/sys/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices"
-            if [ -d "$AUDIO_GROUP_PATH" ]; then
-                AUDIO_GROUP_SIZE=$(find "$AUDIO_GROUP_PATH" -maxdepth 1 -type f | wc -l)
-                if [ "$AUDIO_GROUP_SIZE" -gt 1 ]; then
-                    log "ERROR: Audio companion $AUDIO_ADDR for GPU $PCI_ADDR is in a shared IOMMU group (${AUDIO_GROUP_SIZE} devices)"
+            AUDIO_ADDR=$(find_audio_companion "$PCI_ADDR")
+            if [ -n "$AUDIO_ADDR" ]; then
+                AUDIO_VD=$(lspci -n -s "$AUDIO_ADDR" | awk '{print $3}')
+                if ! check_iommu_group_separable "$AUDIO_ADDR"; then
+                    log "ERROR: Audio companion $AUDIO_ADDR for GPU $PCI_ADDR is in a shared IOMMU group ($(iommu_group_device_count "/sys/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices") devices)"
                     log "  Abort — audio function must be in the same group as its GPU or isolated."
                     exit 1
                 fi
-            fi
             AUDIO_IN_SET=false
             for id in "${GPU_IDS[@]}"; do
                 if [ "$id" = "$AUDIO_VD" ]; then

@@ -14,20 +14,6 @@ die() { log "FATAL: $*"; exit 1; }
 
 # --- Pure functions (testable via source-guard) ---
 
-resolve_ref_to_sha() {
-    local repo="$1" ref="$2"
-    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "$ref"
-        return
-    fi
-    local sha=""
-    sha=$(git ls-remote "https://github.com/${repo}.git" "refs/heads/${ref}" 2>/dev/null | awk '{print $1}')
-    if [ -z "$sha" ]; then
-        sha=$(git ls-remote "https://github.com/${repo}.git" "refs/tags/${ref}" 2>/dev/null | awk '{print $1}')
-    fi
-    echo "$sha"
-}
-
 detect_gpu_pci() {
     local vendor_filter="$1"
     local ids=()
@@ -90,9 +76,14 @@ download_iso() {
 
 main() {
     # --- Source shared personalization (§05) ---
+    # resolve_ref_to_sha comes from here too: it is the single definition, and
+    # it never fails (empty string when git or the network is unavailable),
+    # which matters under this script's `set -euo pipefail`.
     . /root/provision/personalization.sh 2>/dev/null || true
     GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
     GITHUB_REF="${PERSONALIZATION_REF:-main}"
+    command -v resolve_ref_to_sha >/dev/null 2>&1 \
+        || die "personalization.sh did not provide resolve_ref_to_sha"
 
     REF_SHA=$(resolve_ref_to_sha "${GITHUB_REPO}" "${GITHUB_REF}")
     if [ -n "$REF_SHA" ]; then

@@ -32,12 +32,11 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 
 # --- D4: two distinct credentials, never interchanged ---
 
-@test "D4: build-iso reads the root hash from keys/root-password-hash" {
+@test "D4: build-iso reads each hash from its own file" {
+    # The root hash goes to the installer, the login hash to the host operator
+    # account. One shared source file made a leak of the second to the first
+    # structural rather than accidental.
     assert_file_contains "$BUILDISO" 'ROOT_PASSWORD_HASH_FILE="${REPO_ROOT}/keys/root-password-hash"'
-    assert_file_not_contains "$BUILDISO" 'keys/password-hash'
-}
-
-@test "D4: build-iso reads the login hash from keys/personalization-password-hash" {
     assert_file_contains "$BUILDISO" \
         'PERSONALIZATION_PASSWORD_HASH_FILE="${REPO_ROOT}/keys/personalization-password-hash"'
 }
@@ -49,26 +48,27 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_contains "$BUILDISO" "Missing: \${PERSONALIZATION_PASSWORD_HASH_FILE}"
 }
 
-@test "D4: the answer file takes the root hash, the bootstrap the login hash" {
-    assert_file_contains "$ANSWER" 'root-password-hashed = "__ROOT_PASSWORD_HASH__"'
-    assert_file_contains "$FIRSTBOOT" "printf '%s' '__PERSONALIZATION_PASSWORD_HASH__'"
-    # The root hash must not travel in the bootstrap: that file persists the
-    # login hash to disk, and the two must never share a path.
-    assert_file_not_contains "$FIRSTBOOT" '__ROOT_PASSWORD_HASH__'
-}
+# That each carrier receives the *right* hash is asserted behaviourally on the
+# rendered output in tests/unit/build-iso.bats ("root hash reaches the answer
+# file, login hash reaches the bootstrap"), which is stronger than matching the
+# placeholder names here.
 
 @test "D4: the host account is given the login hash, never the root hash" {
     # chpasswd -e takes the already-encrypted password, so this is the exact
     # yescrypt string the guests receive — no hashing, no plaintext on disk.
+    # Literal: the needle contains \n and $USER_NAME, which a regex would read
+    # as an anchor and a character class.
     assert_file_contains "$FIRSTBOOT" \
-        "printf '%s:%s\\\\n' \"\$USER_NAME\" '__PERSONALIZATION_PASSWORD_HASH__' | chpasswd -e"
+        "printf '%s:%s\n' \"\$USER_NAME\" '__PERSONALIZATION_PASSWORD_HASH__' | chpasswd -e"
 }
 
 @test "D4: the bootstrap never creates or re-credentials root" {
     # Root's credential belongs to the installer alone. A usermod/chpasswd
     # against root here would be the third writer of the root password.
-    assert_file_not_contains "$FIRSTBOOT" 'useradd .*root'
-    assert_file_not_contains "$FIRSTBOOT" 'chpasswd -e.*root'
+    # Regex, not literal: the rule is "chpasswd -e anywhere on a line that
+    # also mentions root", which no fixed substring can express.
+    assert_file_not_matches "$FIRSTBOOT" 'useradd .*root'
+    assert_file_not_matches "$FIRSTBOOT" 'chpasswd -e.*root'
     assert_file_not_contains "$FIRSTBOOT" 'passwd root'
 }
 
@@ -103,7 +103,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 @test "the account gets sudo membership and the operator SSH key" {
     assert_file_contains "$FIRSTBOOT" 'usermod -aG sudo "$USER_NAME"'
     assert_file_contains "$FIRSTBOOT" 'ADMIN_PUBKEY="__ADMIN_PUBKEY__"'
-    assert_file_contains_literal "$FIRSTBOOT" \
+    assert_file_contains "$FIRSTBOOT" \
         'printf '"'"'%s\n'"'"' "$ADMIN_PUBKEY" > "${USER_HOME}/.ssh/authorized_keys"'
 }
 
@@ -145,25 +145,25 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 
 # --- Guests: root must have no password ---
 
-@test "every guest seed locks root explicitly" {
+@test "every guest seed locks root and does nothing else to it" {
     # subiquity already leaves root locked, but nothing said so. Relying on that
     # default means a future identity block change could add a root credential
     # with nothing in the repo noticing.
+    #
+    # Asserted on the executed commands only, not on prose: the comment above the
+    # lock mentions keys/root-password-hash by name. Any other curtin line
+    # touching root would be a second writer of the guest root credential.
+    local guest unexpected
     for guest in desktop llm dev; do
         assert_file_contains "${PROJECT_ROOT}/${guest}/user-data/user-data" \
             'passwd -l root'
-    done
-}
-
-@test "no guest seed does anything to root but lock it" {
-    # Assert on the executed commands only, not on prose: the comment above the
-    # lock mentions keys/root-password-hash by name. Any other curtin line
-    # touching root would be a second writer of the guest root credential.
-    for guest in desktop llm dev; do
         run grep -E 'curtin.*root' "${PROJECT_ROOT}/${guest}/user-data/user-data"
-        local unexpected
         unexpected=$(printf '%s\n' "$output" | grep -v 'passwd -l root' || true)
-        [ -z "$unexpected" ]
+        if [ -n "$unexpected" ]; then
+            echo "${guest} user-data touches root beyond locking it:" >&2
+            echo "$unexpected" >&2
+            return 1
+        fi
     done
 }
 

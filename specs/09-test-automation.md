@@ -52,27 +52,24 @@ fragments); deferred to a future iteration.
 tests/
   run.sh                    # entrypoint: check deps, run static + unit, TAP output
   lib/
-    helpers.bash            # mock_bin(), assert_contains(), assert_exit_code(), fixture loading
+    helpers.bash            # mock helpers, assert_contains(), assert_file_contains(),
+                            # assert_file_matches(), install_mock()
   fixtures/
-    lspci-multi-gpu.txt     # NVIDIA GPU + audio companion + virtio VGA
+    mock-lspci.sh           # stand-in for lspci(8), driven by LSPCI_TABLE + LSPCI_FIXTURE_PATH
+    lspci-multi-gpu.txt     # NVIDIA GPU + audio companion + Intel iGPU + virtio VGA
     lspci-single-gpu.txt    # single GPU, no audio companion
     lspci-no-gpu.txt        # no GPU (only virtio VGA)
-    lspci-shared-iommu.txt  # GPU + audio in same IOMMU group (R4 abort case)
-    iommu-group-separable/  # directory listing for a separable group
-    iommu-group-shared/     # directory listing for a non-separable group
-    personalization.sh      # test copy with known values
     ubuntu-release.conf     # test copy: 26.04 / noble
   static/
-    lint.bats               # shellcheck all scripts; hadolint Dockerfiles (guarded)
+    lint.bats               # shellcheck all scripts; /bin/sh parse; source-guard presence
     configs.bats            # YAML, TOML, dnsmasq, iptables parse validation
     invariants.bats         # identity, placeholder, credential-split, decision-table invariants
   unit/
-    personalization.bats    # sourcing, var values, fail-fast on missing
-    resolve-ref.bats        # resolve_ref_to_sha: branch, tag, SHA, empty
-    gpu-detect.bats         # detect_gpu_pci: multi-GPU, audio companion, virtio exclusion
-    frag10-iommu.bats       # vendor matching, R4 abort, audio companion detection
-    template.bats           # sed substitution: placeholder injection, no leftovers
-    build-iso.bats          # ISO filename/URL construction from ubuntu-release.conf
+    personalization.bats    # sourcing contract of provision/personalization.sh
+    resolve-ref.bats        # resolve_ref_to_sha: branch, tag, SHA, empty, no-git, git-failure
+    gpu-detect.bats         # detect_gpu_pci: multi-GPU, non-matching vendor, virtio passthrough
+    frag10-iommu.bats       # CPU vendor → IOMMU flag, audio companion, virtio exclusion, R4 rule
+    build-iso.bats          # pure functions, placeholder substitution, credential split
     first-boot-user.bats    # host account creation, credential split, guest root lock
 ```
 
@@ -124,12 +121,20 @@ Scripts NOT refactored (static-only testing suffices):
 
 | Function | File | What it does | Mock needed |
 |---|---|---|---|
-| `resolve_ref_to_sha` | `frag/30` | Resolves branch/tag/SHA via `git ls-remote` | `git` (returns canned output) |
-| `detect_gpu_pci` | `frag/30` | Reads `lspci` + `/sys/bus/pci/devices/*/iommu_group/devices` | `lspci` (reads fixture), `/sys` (temp dir with fake sysfs) |
-| `download_iso` | `frag/30` | Downloads ISO with SHA256 verify | `wget` (no-op), `sha256sum` (returns known hash) |
-| vendor detection | `frag/10` | Reads `lscpu` Vendor ID, matches `*intel*`/`*amd*` | `lscpu` (fixture), `awk` (real) |
-| IOMMU group check | `frag/10` | Reads `/sys/bus/pci/devices/*/iommu_group/devices` | `/sys` (temp dir with fake group listings) |
-| audio companion detection | `frag/10` | Scans same-bus devices via `lspci -s <prefix>.` | `lspci` (fixture) |
+| `resolve_ref_to_sha` | `personalization.sh` | Resolves branch/tag/SHA via `git ls-remote`; never fails | `git` (canned output) or no `git` at all |
+| `detect_gpu_pci` | `frag/30` | Reads `lspci` + `/sys/bus/pci/devices/*/iommu_group/devices` | `lspci` (reads fixture) |
+| `download_iso` | `build-iso.sh` | Downloads ISO with SHA256 verify | `wget` (no-op), `sha256sum` (known hash) |
+| `detect_cpu_vendor` | `frag/10` | Reads `lscpu` Vendor ID, lowercases it | `lscpu` (fixture) |
+| `iommu_flag_for_vendor` | `frag/10` | Maps the vendor to `intel_iommu=on` / `amd_iommu=on`; returns 1 otherwise | none |
+| `iommu_group_device_count` | `frag/10` | Counts devices in a group directory; 0 when absent | temp dir |
+| `iommu_group_is_separable` | `frag/10` | The R4 rule: ≤1 device | temp dir |
+| `collect_gpu_ids` | `frag/10` | Collects passthrough candidates, excluding virtio `1af4` | `lspci` (fixture) |
+| `find_audio_companion` | `frag/10` | Scans same-bus devices via `lspci -s <prefix>.` | `lspci` (fixture) |
+
+`resolve_ref_to_sha` lives in `provision/personalization.sh` only. frag/30
+sources that file and calls it. A second copy is what let the two versions
+drift apart into a state where frag/30's would abort a `set -euo pipefail`
+provisioning run when `git` was missing or the network failed.
 
 ### 5.2 Side-effecting logic (static-only or integration-test)
 
@@ -144,13 +149,22 @@ format of `lspci | grep -iE 'vga|3d|display' | awk '{print $1, $0}'`:
 ```
 01:00.0 VGA compatible controller: NVIDIA Corporation GA102 [GeForce RTX 3090] (rev a1)
 01:00.1 Audio device: NVIDIA Corporation GA102 HDMI Audio (rev a1)
-00:02.0 VGA compatible controller: Intel Corporation Coffee Lake HD Graphics (rev 05)
+00:02.0 VGA compatible controller: Intel Corporation Coffee Lake-S GT2 [UHD Graphics 630] (rev 05)
 04:00.0 VGA compatible controller: Red Hat, Inc. Virtio GPU (rev 01)
 ```
 
-`tests/fixtures/iommu-group-separable/` — a directory with one file per PCI
-device in the group (filename = BDF address). For R4 abort test, the
-`iommu-group-shared/` directory has both the GPU and audio BDF.
+`tests/fixtures/mock-lspci.sh` — installed as `lspci` on the mock PATH and
+driven by two variables, so one script serves every test that needs PCI data:
+
+- `LSPCI_FIXTURE_PATH` — fixture used for full listings and bus-scoped queries
+- `LSPCI_TABLE` — space-separated `<bdf>=<vendor:device>` pairs answering
+  `lspci -n -s <bdf>`
+
+IOMMU groups are **not** faked with a fixture file. The rule counts directory
+entries under `/sys/bus/pci/devices/<BDF>/iommu_group/devices`, so the tests
+create a temp directory with one file per device and pass its path to
+`iommu_group_is_separable`. A fixture of `lspci` output cannot express it, which
+is why the two tests that claimed to cover the R4 abort did not.
 
 ## 6. Static validation suite
 
@@ -172,7 +186,16 @@ device in the group (filename = BDF address). For R4 abort test, the
     [ "$status" -eq 0 ]
   done
 }
+
+@test "every sourced-later script has a source-guard" { ... }
+
+@test "sh scripts parse under /bin/sh" { ... }
 ```
+
+The `sh` test exists because `first-boot.sh` and `provision-host.sh` run on a
+stock Debian PVE host where `/bin/sh` is dash, while the lint tier only ever
+checked them with `shellcheck -s bash`. A bashism there fails at provisioning
+time on the one host that matters. It skips when `dash` is not installed.
 
 ### 6.2 `tests/static/configs.bats`
 
@@ -208,14 +231,14 @@ device in the group (filename = BDF address). For R4 abort test, the
 @test "no hardcoded popiel outside personalization.sh" {
   run grep -r 'popiel' --include='*.sh' --include='*.toml' --include='*.conf' \
     --include='*.yml' --include='*.yaml' .
-  # filter out personalization.sh and test fixtures
-  filtered=$(echo "$output" | grep -v 'provision/personalization.sh' | grep -v 'tests/fixtures/' || true)
+  # filter out personalization.sh and the test tree
+  filtered=$(echo "$output" | grep -v 'provision/personalization.sh' | grep -v '/tests/' || true)
   [ -z "$filtered" ]
 }
 
 @test "no hardcoded tapopiel@gmail.com outside personalization.sh" {
   run grep -r 'tapopiel@gmail.com' --include='*.sh' --include='*.toml' .
-  filtered=$(echo "$output" | grep -v 'provision/personalization.sh' | grep -v 'tests/fixtures/' || true)
+  filtered=$(echo "$output" | grep -v 'provision/personalization.sh' | grep -v '/tests/' || true)
   [ -z "$filtered" ]
 }
 
@@ -241,12 +264,15 @@ device in the group (filename = BDF address). For R4 abort test, the
   done
 }
 
-@test "answer-host.toml contains __GITHUB_REF__" {
-  grep -q '__GITHUB_REF__' provision/host/answer-host.toml
-}
-
-@test "answer-host.toml contains __ROOT_SSH_KEY__" {
-  grep -q '__ROOT_SSH_KEY__' provision/host/answer-host.toml
+@test "host templates carry the placeholders their renderer substitutes" {
+  for entry in \
+    "provision/host/answer-host.toml|__GITHUB_REF__" \
+    "provision/host/answer-host.toml|__ROOT_SSH_KEY__" \
+    "provision/host/answer-host.toml|__ROOT_PASSWORD_HASH__" \
+    "provision/host/first-boot.sh|__PERSONALIZATION_PASSWORD_HASH__" \
+  ; do
+    grep -q "${entry##*|}" "${entry%%|*}"
+  done
 }
 
 # --- Credential split (Spec 05 §5) ---
@@ -255,14 +281,9 @@ device in the group (filename = BDF address). For R4 abort test, the
 # failure mode they prevent is silent and late: nothing breaks at build time,
 # the host just ends up with a root password where the operator expected a
 # login password (or the reverse) after a reinstall.
-
-@test "answer-host.toml contains __ROOT_PASSWORD_HASH__" {
-  grep -q '__ROOT_PASSWORD_HASH__' provision/host/answer-host.toml
-}
-
-@test "first-boot.sh contains __PERSONALIZATION_PASSWORD_HASH__" {
-  grep -q '__PERSONALIZATION_PASSWORD_HASH__' provision/host/first-boot.sh
-}
+#
+# Which carrier receives which hash is asserted on the *rendered* output in
+# tests/unit/build-iso.bats, not by matching placeholder names here.
 
 @test "first-boot.sh carries no root password hash" {
   ! grep -q '__ROOT_PASSWORD_HASH__' provision/host/first-boot.sh
@@ -297,10 +318,11 @@ device in the group (filename = BDF address). For R4 abort test, the
 }
 
 @test "frag/30 aborts when personalization vars are empty" {
-  grep -q 'PERSONALIZATION_USERNAME.*PERSONALIZATION_FULLNAME.*exit 1' \
-    provision/host/frag/30-create-guests.sh || \
-  grep -A5 'PERSONALIZATION_USERNAME.*PERSONALIZATION_FULLNAME' \
-    provision/host/frag/30-create-guests.sh | grep -q 'exit 1'
+  # The specific guard, not a bare `exit 1` somewhere in a 400-line script.
+  grep -q 'PERSONALIZATION_USERNAME or PERSONALIZATION_FULLNAME not set' \
+    provision/host/frag/30-create-guests.sh
+  grep -q 'Personalization password hash not found' \
+    provision/host/frag/30-create-guests.sh
 }
 ```
 
@@ -308,241 +330,98 @@ device in the group (filename = BDF address). For R4 abort test, the
 
 ### 7.1 `tests/unit/personalization.bats`
 
-Tests that `provision/personalization.sh` sources correctly and fails fast
-when missing.
+Asserts the *contract* of `provision/personalization.sh`, not its concrete
+values. The identity is the fork owner's to change (§ Spec 05), so no test may
+hardcode a username, name, email or UID — the previous version of this file
+asserted eight fixture values, which tested the fixture rather than the repo.
 
 ```
-setup() {
-  source tests/fixtures/personalization.sh
+setup_personalization() {
+  local var
+  for var in "${REQUIRED_VARS[@]}"; do export "$var"=""; done
+  source provision/personalization.sh
 }
 
-@test "personalization.sh sets PERSONALIZATION_USERNAME" {
-  [ "$PERSONALIZATION_USERNAME" = "popiel" ]
-}
-
-@test "personalization.sh sets PERSONALIZATION_UID" {
-  [ "$PERSONALIZATION_UID" = "1401" ]
-}
-
-@test "personalization.sh sets PERSONALIZATION_GID" {
-  [ "$PERSONALIZATION_GID" = "1401" ]
-}
-
-@test "personalization.sh sets PERSONALIZATION_HOME" {
-  [ "$PERSONALIZATION_HOME" = "/home/popiel" ]
-}
-
-@test "personalization.sh sets PERSONALIZATION_REPO" {
-  [ "$PERSONALIZATION_REPO" = "popiel/nested_dev" ]
-}
-
-@test "personalization.sh sets PERSONALIZATION_REF" {
-  [ "$PERSONALIZATION_REF" = "main" ]
-}
+@test "sourcing personalization.sh defines every required variable" { ... }
+@test "PERSONALIZATION_HOME derives from PERSONALIZATION_USERNAME" { ... }
+@test "resolve_ref_to_sha is defined in exactly one script" { ... }
 ```
+
+`TARGET_DISKS` is excluded from the required set: it is build-host-specific and
+empty by design.
 
 ### 7.2 `tests/unit/resolve-ref.bats`
 
-Tests `resolve_ref_to_sha` from `frag/30-create-guests.sh` with mocked `git`.
+Tests `resolve_ref_to_sha` from `provision/personalization.sh` with mocked
+`git`. The last two cases are the contract frag/30's private copy violated: the
+function must return successfully and print an empty string when `git` is absent
+or fails, because its callers run under `set -euo pipefail` and a non-zero
+return there aborts provisioning mid-flight.
 
-```
-setup() {
-  export PATH="tests/fixtures/mock-bin:$PATH"
-  mkdir -p tests/fixtures/mock-bin
-  # Source the function under test (source-guard required)
-  source provision/host/frag/30-create-guests.sh <<'EOF' || true
-EOF
-}
-
-@test "resolve_ref_to_sha returns SHA for branch" {
-  cat > tests/fixtures/mock-bin/git <<'SCRIPT'
-#!/bin/bash
-echo "abc123def456789012345678901234567890abcd  refs/heads/main"
-SCRIPT
-  chmod +x tests/fixtures/mock-bin/git
-  run resolve_ref_to_sha "popiel/nested_dev" "main"
-  [ "$output" = "abc123def456789012345678901234567890abcd" ]
-}
-
-@test "resolve_ref_to_sha returns SHA for tag" {
-  cat > tests/fixtures/mock-bin/git <<'SCRIPT'
-#!/bin/bash
-echo ""
-echo "deadbeef1234567890abcdef1234567890abcdef  refs/tags/v1.0"
-SCRIPT
-  chmod +x tests/fixtures/mock-bin/git
-  run resolve_ref_to_sha "popiel/nested_dev" "v1.0"
-  [ "$output" = "deadbeef1234567890abcdef1234567890abcdef" ]
-}
-
-@test "resolve_ref_to_sha passes through 40-hex SHA" {
-  run resolve_ref_to_sha "popiel/nested_dev" "deadbeef1234567890abcdef1234567890abcdef"
-  [ "$output" = "deadbeef1234567890abcdef1234567890abcdef" ]
-}
-
-@test "resolve_ref_to_sha returns empty on unresolvable" {
-  cat > tests/fixtures/mock-bin/git <<'SCRIPT'
-#!/bin/bash
-echo ""
-SCRIPT
-  chmod +x tests/fixtures/mock-bin/git
-  run resolve_ref_to_sha "popiel/nested_dev" "nonexistent"
-  [ -z "$output" ]
-}
-```
+| Case | Expectation |
+|---|---|
+| branch | SHA from `refs/heads/` |
+| tag | SHA from `refs/tags/`, after the branch lookup returns nothing |
+| same name for both | the branch wins |
+| 40-hex input | passed through unchanged, no `git` call |
+| unresolvable ref | empty string |
+| no `git` on PATH | exit 0, empty string |
+| `git` exits 128 | exit 0, caller continues |
 
 ### 7.3 `tests/unit/gpu-detect.bats`
 
-Tests `detect_gpu_pci` from `frag/30-create-guests.sh` with mock `lspci` and
-fake `/sys` sysfs.
+Tests `detect_gpu_pci` from `frag/30-create-guests.sh` using the shared
+`tests/fixtures/mock-lspci.sh`, configured per test through `LSPCI_TABLE` and
+`LSPCI_FIXTURE_PATH`.
 
-```
-setup() {
-  export PATH="tests/fixtures/mock-bin:$PATH"
-  mkdir -p tests/fixtures/mock-bin
-  # mock lspci reads from fixture file
-  export LPCSI_FIXTURE="tests/fixtures/lspci-multi-gpu.txt"
-  cat > tests/fixtures/mock-bin/lspci <<'SCRIPT'
-#!/bin/bash
-if [[ "$*" == "-n -s"* ]]; then
-  # lspci -n -s <addr> format: "<addr> <class>: <vd>"
-  BDF=$(echo "$*" | awk '{print $NF}')
-  case "$BDF" in
-    01:00.0) echo "01:00.0 0300: 10de:2204" ;;
-    01:00.1) echo "01:00.1 0403: 10de:1aef" ;;
-    00:02.0) echo "00:02.0 0300: 8086:9bc5" ;;
-    04:00.0) echo "04:00.0 0300: 1af4:1050" ;;
-  esac
-elif [[ "$*" == "-s"*" && "$*" != "-n"* ]]; then
-  # lspci -s <prefix>. format: list devices on same bus
-  echo "01:00.0 VGA compatible controller: NVIDIA ..."
-  echo "01:00.1 Audio device: NVIDIA ..."
-fi
-SCRIPT
-  chmod +x tests/fixtures/mock-bin/lspci
-  source provision/host/frag/30-create-guests.sh <<'EOF' || true
-EOF
-}
-
-@test "detect_gpu_pci includes NVIDIA GPU + audio companion" {
-  run detect_gpu_pci "10de"
-  [[ "$output" == *"10de:2204"* ]]
-  [[ "$output" == *"10de:1aef"* ]]
-}
-
-@test "detect_gpu_pci excludes virtio VGA" {
-  run detect_gpu_pci "1af4"
-  [ -z "$output" ]
-}
-
-@test "detect_gpu_pci returns empty for non-existent vendor" {
-  run detect_gpu_pci "1234"
-  [ -z "$output" ]
-}
-```
+Note the division of labour: `detect_gpu_pci` filters on whatever vendor it is
+handed and will happily return a virtio device. Excluding virtio is
+`collect_gpu_ids`' job in frag/10, and that is where the exclusion is tested
+(§7.4). Neither function should grow the other's rule.
 
 ### 7.4 `tests/unit/frag10-iommu.bats`
 
-Tests CPU vendor detection and IOMMU R4 abort from `frag/10-gpu-passthrough.sh`.
+Tests the frag/10 helpers directly, which is only possible because each one
+takes the data it needs as an argument rather than reading a hardcoded path.
 
-```
-setup() {
-  export PATH="tests/fixtures/mock-bin:$PATH"
-  mkdir -p tests/fixtures/mock-bin
-  source provision/host/frag/10-gpu-passthrough.sh <<'EOF' || true
-EOF
-}
+| Group | Function | Covers |
+|---|---|---|
+| CPU vendor | `detect_cpu_vendor` | lowercases the `lscpu` Vendor ID; empty when absent |
+| | `iommu_flag_for_vendor` | `genuineintel` → `intel_iommu=on`, `authenticamd` → `amd_iommu=on`, anything else → non-zero so the caller aborts rather than booting with IOMMU silently off |
+| Passthrough set | `collect_gpu_ids` | excludes virtio `1af4`; returns an empty set on a host whose only GPU is virtio |
+| Audio | `find_audio_companion` | BDF of the audio function; empty when the GPU has none |
+| IOMMU R4 | `iommu_group_device_count` | 0 / 1 / 2 devices; 0 for a group that does not exist |
+| | `iommu_group_is_separable` | 1 device → separable; 2 or 3 → not separable |
+| | `check_iommu_group_separable` | maps a BDF to `/sys/bus/pci/devices/0000:<BDF>/iommu_group/devices` |
 
-@test "vendor detection matches genuineintel" {
-  cat > tests/fixtures/mock-bin/lscpu <<'SCRIPT'
-#!/bin/bash
-echo "Vendor ID:                        GenuineIntel"
-SCRIPT
-  chmod +x tests/fixtures/mock-bin/lscpu
-  run bash -c 'source provision/host/frag/10-gpu-passthrough.sh 2>/dev/null; echo "$IOMMU_FLAG"'
-  [[ "$output" == *"intel_iommu=on"* ]]
-}
+The R4 rule is stated in exactly one place in the source, `iommu_group_is_separable`,
+and `main()` calls it for both the GPU and the audio function rather than
+re-deriving the group size. A test asserts that wiring, because the previous
+version of this file asserted R4 coverage with two tests that created a temp
+directory, counted its own files, and never called the function they were named
+after — the rule had no coverage while the spec claimed it did.
 
-@test "vendor detection matches authenticamd" {
-  cat > tests/fixtures/mock-bin/lscpu <<'SCRIPT'
-#!/bin/bash
-echo "Vendor ID:                        AuthenticAMD"
-SCRIPT
-  chmod +x tests/fixtures/mock-bin/lscpu
-  run bash -c 'source provision/host/frag/10-gpu-passthrough.sh 2>/dev/null; echo "$IOMMU_FLAG"'
-  [[ "$output" == *"amd_iommu=on"* ]]
-}
-
-@test "R4 aborts on non-separable IOMMU group" {
-  # Create fake sysfs with shared group
-  mkdir -p tests/fixtures/sysfs/0000:01:00.0/iommu_group/devices
-  mkdir -p tests/fixtures/sysfs/0000:01:00.1/iommu_group/devices
-  echo "01:00.0" > tests/fixtures/sysfs/0000:01:00.0/iommu_group/devices/0000:01:00.0
-  echo "01:00.1" > tests/fixtures/sysfs/0000:01:00.0/iommu_group/devices/0000:01:00.1
-  # mock lspci to report both devices
-  cat > tests/fixtures/mock-bin/lspci <<'SCRIPT'
-#!/bin/bash
-echo "01:00.0 VGA compatible controller: NVIDIA ..."
-echo "01:00.1 Audio device: NVIDIA ..."
-SCRIPT
-  chmod +x tests/fixtures/mock-bin/lspci
-  run bash -c 'set +e; source provision/host/frag/10-gpu-passthrough.sh 2>&1; echo "exit:$?"'
-  [[ "$output" == *"exit:1"* ]]
-}
-```
-
-### 7.5 `tests/unit/template.bats`
-
-Tests sed substitution of placeholders in user-data templates.
-
-```
-@test "substitution replaces all placeholders in desktop user-data" {
-  PASS_HASH='$6$rounds=4096$testhash'
-  PERSONALIZATION_USERNAME="testuser"
-  PERSONALIZATION_FULLNAME="Test User"
-  VMCTL_KEY_B64=$(echo "testkey" | base64)
-  DEFAULT_REF="v1.0"
-
-  sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
-      -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
-      -e "s|__PERSONALIZATION_USERNAME__|${PERSONALIZATION_USERNAME}|g" \
-      -e "s|__PERSONALIZATION_FULLNAME__|${PERSONALIZATION_FULLNAME}|g" \
-      -e "s|__GITHUB_REF__|${DEFAULT_REF}|g" \
-      desktop/user-data/user-data > /tmp/test-userdata
-
-  ! grep -q '__PERSONALIZATION_USERNAME__' /tmp/test-userdata
-  ! grep -q '__PERSONALIZATION_FULLNAME__' /tmp/test-userdata
-  ! grep -q 'CHANGE_ME_HASHED' /tmp/test-userdata
-  ! grep -q '__GITHUB_REF__' /tmp/test-userdata
-  grep -q 'testuser' /tmp/test-userdata
-  grep -q 'Test User' /tmp/test-userdata
-  grep -q 'v1.0' /tmp/test-userdata
-}
-
-@test "answer-host.toml substitution replaces __GITHUB_REF__" {
-  DEFAULT_REF="abc123"
-  sed -e "s|__GITHUB_REF__|${DEFAULT_REF}|g" \
-      provision/host/answer-host.toml > /tmp/test-answer
-  ! grep -q '__GITHUB_REF__' /tmp/test-answer
-  grep -q 'abc123' /tmp/test-answer
-}
-```
-
-### 7.6 `tests/unit/build-iso.bats`
+### 7.5 `tests/unit/build-iso.bats`
 
 Sources `build-iso.sh` through the source-guard and tests `render_template`,
 `generate_answer_file`, `generate_first_boot_script`,
 `validate_target_disks` and the MANIFEST writer.
 
 ISO filename and URL construction comes from `ubuntu-release.conf`. Template
-rendering is covered in three groups:
+rendering is covered in five groups:
 
 | Group | Asserts |
 |---|---|
-| Disk validation | quoted/unquoted/bracketed lists normalize; `/dev/` paths, partition names, empty and multi-disk lists are rejected at build time, so a bad `PERSONALIZATION_TARGET_DISKS` fails before the 1.7 GB ISO step |
+| Disk validation | quoted/unquoted/bracketed lists normalize to exactly the requested entries and nothing else; `/dev/` paths, partition names, empty and multi-disk lists are rejected at build time, so a bad `PERSONALIZATION_TARGET_DISKS` fails before the 1.7 GB ISO step |
 | Escaping | a yescrypt hash survives `sed` (unescaped `$y$…` expands to nothing and silently produces an install with no working credentials); the same for the login hash, the email and the SSH key |
-| Two hashes, two destinations | the answer file receives only `__ROOT_PASSWORD_HASH__` and the bootstrap only `__PERSONALIZATION_PASSWORD_HASH__` — swapping the two positionals would compile, validate, install, and hand out a host whose root password is the login password |
+| Two hashes, two destinations | the rendered answer file receives only the root hash and the rendered bootstrap only the login hash — swapping the two positionals would compile, validate, install, and hand out a host whose root password is the login password |
+| No leftovers | neither the answer file nor the **bootstrap** retains any `__PLACEHOLDER__`. The bootstrap was previously unchecked: a now-removed test file re-implemented the `sed` pipeline inline instead of calling `render_template`, so it proved `sed` works, not that the shipped bootstrap is complete |
 | Un-sourced identity | an unset `PERSONALIZATION_*` leaves its `__PLACEHOLDER__` in the output so the build's guard fires. The answer file can only show the email; the username, UID, GID and home show up in the bootstrap, since PVE's schema has no non-root user field for them |
+
+There is also a **no-orphan-function** test: every function defined in
+`build-iso.sh` must be called somewhere else. It replaces three "function
+exists" greps, which could only ever fail if a definition was deleted, never if
+a call site was renamed away or a helper was left behind.
 
 Carrier assertions pin `source = "from-iso"` (never `from-url`), the absence
 of any `late-commands` section, and that the bootstrap reaches
@@ -624,7 +503,8 @@ bats tests/unit/personalization.bats
 bats tests/unit/resolve-ref.bats
 bats tests/unit/gpu-detect.bats
 bats tests/unit/frag10-iommu.bats
-bats tests/unit/template.bats
+bats tests/unit/frag25-vmctl.bats
+bats tests/unit/first-boot-user.bats
 bats tests/unit/build-iso.bats
 
 echo ""
@@ -686,55 +566,65 @@ bats --filter "branch" tests/unit/resolve-ref.bats
 
 1. `tests/run.sh` exits 0 on a clean checkout (all static + unit pass).
 2. `shellcheck -x -s bash` passes on every script in the repo.
-3. All 3 user-data files parse as YAML without error.
-4. `answer-host.toml` parses as TOML without error.
-5. `dnsmasq --test` passes on `provision/network/dnsmasq.conf`.
-6. `iptables-restore --test` passes on `provision/network/iptables-forwarding.conf`.
-7. No `popiel`/`tapopiel@gmail.com` outside `provision/personalization.sh` and `tests/fixtures/`.
-8. All template placeholders (`__GITHUB_REF__`, `CHANGE_ME_HASHED`,
-   `__PERSONALIZATION_USERNAME__`, `__PERSONALIZATION_FULLNAME__`) present in
-   user-data templates and answer-host.toml.
-9. `resolve_ref_to_sha` returns correct output for branch, tag, SHA, and
-   unresolvable inputs against mock `git ls-remote`.
-10. `detect_gpu_pci` correctly identifies GPU + audio companion, excludes
-    virtio, and returns empty for non-existent vendors.
-11. CPU vendor detection matches `genuineintel`/`authenticamd` (glob patterns,
-    not bare `intel`/`amd`).
-12. IOMMU R4 check aborts (exit 1) when GPU + audio share a group.
-13. Sed substitution produces user-data with no leftover placeholders and
-    correct injected values.
-14. Decision-table values (40/80/40 GB, 8192/16384/8192 MB, 4/6/4 cores,
+3. The `#!/bin/sh` scripts parse under `dash`.
+4. Every script a test sources has a `BASH_SOURCE` source-guard.
+5. All 3 user-data files parse as YAML without error.
+6. The rendered `answer-host.toml` parses as TOML without error.
+7. `dnsmasq --test` passes on `provision/network/dnsmasq.conf`.
+8. `iptables-restore --test` passes on `provision/network/iptables-forwarding.conf`.
+9. No `popiel`/`tapopiel@gmail.com` outside `provision/personalization.sh`.
+10. All template placeholders (`__GITHUB_REF__`, `CHANGE_ME_HASHED`,
+    `__PERSONALIZATION_USERNAME__`, `__PERSONALIZATION_FULLNAME__`) present in
+    user-data templates and answer-host.toml.
+11. `resolve_ref_to_sha` returns correct output for branch, tag, SHA, and
+    unresolvable inputs against mock `git ls-remote`, and exits 0 without
+    raising when `git` is absent or fails.
+12. `resolve_ref_to_sha` is defined in exactly one script.
+13. `detect_gpu_pci` returns the matching GPU, returns empty for a vendor that
+    is not present, and excludes the non-matching vendor on a mixed-GPU host.
+14. `collect_gpu_ids` excludes the virtio GPU.
+15. `iommu_flag_for_vendor` maps `genuineintel`/`authenticamd` to
+    `intel_iommu=on`/`amd_iommu=on` and fails for any other vendor.
+16. IOMMU R4: a group of one device is separable; two or more is not, and
+    `main()` enforces it through the shared rule.
+17. `render_template` leaves no `__PLACEHOLDER__` in the rendered answer file
+    **or** the rendered bootstrap, and injects the expected values.
+18. Decision-table values (40/80/40 GB, 8192/16384/8192 MB, 4/6/4 cores,
     500 GB data) present in `frag/30-create-guests.sh`.
-15. GitHub Actions workflow runs `tests/run.sh` on push and PR.
-16. `keys/root-password-hash` and `keys/personalization-password-hash` are
+19. GitHub Actions workflow runs `tests/run.sh` on push and PR.
+20. `keys/root-password-hash` and `keys/personalization-password-hash` are
     both required by `build-iso.sh`, neither is git-tracked, and no committed
     template contains a real hash.
-17. `answer-host.toml` carries only `__ROOT_PASSWORD_HASH__`; `first-boot.sh`
-    carries only `__PERSONALIZATION_PASSWORD_HASH__` — never each other's.
-18. The host account is created with the configured UID/GID/home/shell, `sudo`
+21. The rendered answer file carries the root hash and the rendered bootstrap
+    the login hash — never each other's.
+22. The host account is created with the configured UID/GID/home/shell, `sudo`
     membership, the operator key, and the login hash, and is never given the
     root hash.
-19. All three guest seeds run `passwd -l root`.
+23. All three guest seeds run `passwd -l root` and do nothing else to root.
+24. No function in `build-iso.sh` is defined but never called.
 
 ## 12. Traceability
 
 | Requirement | Source | Tested in |
 |---|---|---|
 | No hardcoded identity outside personalization.sh | Spec 05 §9 | `invariants.bats` |
-| CPU vendor glob matching (`*intel*`/`*amd*`) | Spec 01 §5.1 | `frag10-iommu.bats` |
-| Audio companion discovery via BDF prefix | Spec 01 §5.1 | `gpu-detect.bats` |
+| CPU vendor glob mapping to the IOMMU flag | Spec 01 §5.1 | `frag10-iommu.bats` |
+| Audio companion discovery via BDF prefix | Spec 01 §5.1 | `frag10-iommu.bats` |
 | IOMMU R4 abort on non-separable groups | Spec 01 §5.1 R4 | `frag10-iommu.bats` |
+| Virtio GPU excluded from passthrough | Spec 01 §5.1 | `frag10-iommu.bats` |
 | OS disk sizes from decision table | Spec 00 §3 | `invariants.bats` |
 | RAM/core sizes from decision table | Spec 00 §3 | `invariants.bats` |
-| Template placeholder injection | Spec 06 | `template.bats` |
-| Personalization sourcing fail-fast | Spec 05 | `personalization.bats` |
-| REF resolution (branch/tag/SHA) | Spec 00 §5 | `resolve-ref.bats` |
-| shellcheck compliance | Repo convention | `lint.bats` |
+| Template placeholder injection, no leftovers | Spec 06 | `build-iso.bats` |
+| Personalization sourcing contract | Spec 05 | `personalization.bats` |
+| REF resolution (branch/tag/SHA/empty/no-git) | Spec 00 §5 | `resolve-ref.bats` |
+| Single definition of `resolve_ref_to_sha` | Spec 05 §5.2 | `personalization.bats` |
+| shellcheck compliance, `/bin/sh` parse, source-guards | Repo convention | `lint.bats` |
 | Config file validity | Specs 01, 02, 03, 04 | `configs.bats` |
 | Two separate hash files, neither tracked | Spec 05 §5, Spec 01 §4.3 | `invariants.bats`, `first-boot-user.bats` |
-| Root hash reaches only the answer file | Spec 01 §4.3 | `first-boot-user.bats` |
+| Root hash reaches only the answer file | Spec 01 §4.3 | `build-iso.bats` (rendered output) |
 | Host account identity, sudo, key, modes | Spec 05 §4.1 | `first-boot-user.bats` |
 | Account created before the provision fetch | Spec 01 §4.1 | `first-boot-user.bats` |
 | `/root/.personalization-password-hash` rename, agreed by both sides | Spec 05 §5.2 | `first-boot-user.bats` |
-| Guest root locked | Spec 05 §5.4 | `first-boot-user.bats` |
+| Guest root locked, and only locked | Spec 05 §5.4 | `first-boot-user.bats` |
 | Dev VM reports on both hashes | Spec 08 | `first-boot-user.bats` |
+| No dead functions in the build script | Repo convention | `build-iso.bats` |

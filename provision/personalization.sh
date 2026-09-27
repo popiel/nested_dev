@@ -51,7 +51,9 @@ PERSONALIZATION_TARGET_DISKS='"nvme0n1"'
 # git unavailable) — callers decide whether that is fatal. Never fails, so it
 # is safe to call from a `set -e` script.
 #
-# frag/30-create-guests.sh carries its own copy; the two are interchangeable.
+# frag/30-create-guests.sh sources this file and uses the same function; there
+# is deliberately only one definition, so build-iso and frag/30 cannot resolve
+# the same REF to different SHAs.
 resolve_ref_to_sha() {
     local repo="$1" ref="$2"
     if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then

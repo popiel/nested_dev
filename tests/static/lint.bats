@@ -42,3 +42,36 @@ load '../lib/helpers'
     done
     [ "$fail" -eq 0 ]
 }
+
+@test "every sourced-later script has a source-guard" {
+    # A script without this guard runs main() the moment a test sources it, so
+    # its functions are only unit-testable by accident and any future test that
+    # sources one will start executing real host actions.
+    local script guard='BASH_SOURCE\[0\].*==.*\$0'
+    for script in \
+        provision/host/build-iso.sh \
+        provision/host/frag/10-gpu-passthrough.sh \
+        provision/host/frag/30-create-guests.sh; do
+        if ! assert_file_matches "${PROJECT_ROOT}/${script}" "$guard"; then
+            return 1
+        fi
+    done
+}
+
+@test "sh scripts parse under /bin/sh" {
+    # first-boot.sh runs on a stock Debian PVE host where /bin/sh is dash, but
+    # the lint tier only checked it with shellcheck -s bash. A bashism here
+    # fails at provisioning time on the one host that matters, not in CI.
+    require_command dash
+    local script
+    for script in \
+        provision/host/first-boot.sh \
+        provision/host/provision-host.sh; do
+        run dash -n "${PROJECT_ROOT}/${script}"
+        if [ "$status" -ne 0 ]; then
+            echo "FAIL: ${script} does not parse as /bin/sh" >&2
+            echo "$output" >&2
+            return 1
+        fi
+    done
+}
