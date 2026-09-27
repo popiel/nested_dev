@@ -13,6 +13,22 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/nested-dev-vmctl.log; }
 
 die() { echo "ERROR: $*" >&2; log "REJECT: $*"; exit 1; }
 
+# Wait for the guest agent to answer, then set the guest's hostname to the
+# PVE VM name. Runs detached; every outcome is logged. Failure is not fatal:
+# the VM is running and usable, and the name can be set by hand.
+set_hostname_when_agent_ready() {
+    local vmid="$1" name="$2" i
+    for i in $(seq 1 60); do
+        if qm guest exec "$vmid" -- hostnamectl set-hostname "$name" >/dev/null 2>&1; then
+            log "HOSTNAME $vmid set to $name (after ${i} attempt(s))"
+            return 0
+        fi
+        sleep 5
+    done
+    log "WARNING: guest agent never answered on VM $vmid; hostname left as the"
+    log "  template's. Set it by hand: qm guest exec $vmid -- hostnamectl set-hostname $name"
+}
+
 # --- Parse SSH_ORIGINAL_COMMAND or $@ ---
 CMD="${SSH_ORIGINAL_COMMAND:-$*}"
 # shellcheck disable=SC2086
@@ -29,14 +45,16 @@ case "$VERB" in
         printf "%-5s %-18s %-24s %-17s %s\n" 100 desktop lychee "192.168.100.100" "running"
         printf "%-5s %-18s %-24s %-17s %s\n" 101 llm lychee-llm "192.168.100.101" "running"
         printf "%-5s %-18s %-24s %-17s %s\n" 102 dev-template lychee-dev-template "192.168.100.102" "template"
-        # Dynamic entries from qm (dev VMs 103-249)
-        for vid in $(seq $DEV_MIN $DEV_MAX); do
-            if qm status "$vid" >/dev/null 2>&1; then
-                STATUS=$(qm status "$vid" 2>/dev/null | awk '{print $2}')
-                NAME=$(qm config "$vid" 2>/dev/null | grep '^name:' | awk '{print $2}')
-                HOST="${NAME:-dev-${vid}}"
-                printf "%-5s %-18s %-24s %-17s %s\n" "$vid" "$NAME" "$HOST" "192.168.100.${vid}" "$STATUS"
-            fi
+        # Dynamic entries: read the cluster's VM inventory once. Probing the
+        # whole 103-249 range with `qm status` costs two subprocesses per ID
+        # (~294 calls) on every `list`, and `devctl` calls it again for each
+        # name lookup.
+        for vid in $(qm list 2>/dev/null | awk -v lo="$DEV_MIN" -v hi="$DEV_MAX" \
+                          '$1 ~ /^[0-9]+$/ && $1 >= lo && $1 <= hi {print $1}'); do
+            STATUS=$(qm status "$vid" 2>/dev/null | awk '{print $2}')
+            NAME=$(qm config "$vid" 2>/dev/null | grep '^name:' | awk '{print $2}')
+            HOST="${NAME:-dev-${vid}}"
+            printf "%-5s %-18s %-24s %-17s %s\n" "$vid" "$NAME" "$HOST" "192.168.100.${vid}" "$STATUS"
         done
         ;;
 
@@ -60,6 +78,12 @@ case "$VERB" in
         qm start "$VMID"
         log "START $VMID ($NAME)"
         echo "VM $VMID ($NAME) started"
+        # A clone inherits the template's hostname, so without this every dev VM
+        # in the fleet reports itself as the same name and the DNS entry
+        # registered by `add` never matches the guest's own hostname. The
+        # guest agent is not up yet at this point, so settle the name in the
+        # background rather than blocking `start` for the agent's timeout.
+        ( set_hostname_when_agent_ready "$VMID" "$NAME" ) &
         ;;
 
     shutdown)

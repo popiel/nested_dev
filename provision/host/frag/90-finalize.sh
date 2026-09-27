@@ -186,7 +186,42 @@ iptables -F FORWARD
 # Desktop (192.168.100.100) can reach anyone on vmbr0 (SSH, X11 forwarding)
 iptables -A FORWARD -i vmbr0 -o vmbr0 -s 192.168.100.100 -j ACCEPT
 
-# All other inter-VM: DENIED (desktop initiates; dev/LLM cannot reach desktop)
+# --- Guest egress policy ---
+# FORWARD governs traffic between a VM and the LAN; the OUTPUT chain below
+# governs only the host's own traffic and does not restrict guests. MASQUERADE
+# (above) handles the return path, so each allowance here needs a matching
+# protocol filter or the guest gets a black hole.
+#
+# Desktop (100): unrestricted by design — it is the bastion and browses.
+# LLM (101): DNS/HTTP/HTTPS. It installs the driver/CUDA/Docker stack and pulls
+#   Ollama images and models on first boot, so it cannot be air-gapped.
+# dev-nested (103): DNS/HTTP/HTTPS. This is the trusted ISO builder; it fetches
+#   from GitHub, the Ubuntu archive and the PVE ISO mirror.
+# All other dev VMs (104-249): no egress. Their toolchain is baked into
+#   template 102 during the pre-firewall provisioning window and is cloned
+#   already-provisioned, so a clone never needs to reach the network.
+
+# Desktop (100): unrestricted by design — it is the bastion and browses.
+# Without this rule the desktop has no route off vmbr0 at all, and the
+# "unrestricted" claim in the comment above is not backed by a rule.
+iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s 192.168.100.100 -j ACCEPT
+
+# LLM + trusted builder: DNS, HTTP, HTTPS only.
+# DNS is allowed over both UDP and TCP: a truncated or oversized answer falls
+# back to TCP, and a resolver that only speaks UDP fails exactly when the guest
+# most needs an answer. The host's own OUTPUT chain below allows both for the
+# same reason.
+for EGRESS_IP in 192.168.100.101 192.168.100.103; do
+    iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
+        -p udp --dport 53 -j ACCEPT
+    iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
+        -p tcp --dport 53 -j ACCEPT
+    iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
+        -p tcp --dport 80 -j ACCEPT
+    iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
+        -p tcp --dport 443 -j ACCEPT
+done
+log "FORWARD egress: 100 unrestricted; 101 + 103 allowed 53/80/443; other dev VMs denied"
 
 # Return traffic for established connections
 iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT

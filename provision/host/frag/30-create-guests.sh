@@ -197,10 +197,12 @@ main() {
             continue
         fi
 
-        if [ -z "${PERSONALIZATION_USERNAME:-}" ] || [ -z "${PERSONALIZATION_FULLNAME:-}" ]; then
-            log "ERROR: PERSONALIZATION_USERNAME or PERSONALIZATION_FULLNAME not set — check /root/provision/personalization.sh"
-            exit 1
-        fi
+        for required in PERSONALIZATION_USERNAME PERSONALIZATION_FULLNAME \
+                       PERSONALIZATION_UID PERSONALIZATION_GID; do
+            if [ -z "${!required:-}" ]; then
+                die "${required} not set — check /root/provision/personalization.sh"
+            fi
+        done
         sed -e "s|CHANGE_ME_HASHED|${PERSONALIZATION_HASH}|g" \
             -e "s|__VMCTL_PRIV_B64__|${VMCTL_KEY_B64}|g" \
             -e "s|__GUEST_ID_PRIV_B64__|${GUEST_ID_KEY_B64}|g" \
@@ -208,7 +210,9 @@ main() {
             -e "s|__GUEST_ID_PUBKEY__|${GUEST_ID_PUBKEY}|g" \
             -e "s|__PERSONALIZATION_USERNAME__|${PERSONALIZATION_USERNAME}|g" \
             -e "s|__PERSONALIZATION_FULLNAME__|${PERSONALIZATION_FULLNAME}|g" \
-            -e "s|__GITHUB_REF__|${DEFAULT_REF}|g" \
+            -e "s|__PERSONALIZATION_UID__|${PERSONALIZATION_UID}|g" \
+            -e "s|__PERSONALIZATION_GID__|${PERSONALIZATION_GID}|g" \
+            -e "s|__GITHUB_REF__|${REF_SHA:-$GITHUB_REF}|g" \
             "${SEED_DIR}/${guest}-template" > "$SEED_FILE"
 
         # A surviving placeholder means a substitution silently failed and the

@@ -6,6 +6,7 @@
 set -euo pipefail
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+die() { log "FATAL: $*"; exit 1; }
 
 log "=== desktop-control setup ==="
 
@@ -73,7 +74,14 @@ chown -R vmctl:vmctl /home/vmctl/.ssh
 log "authorized_keys written (ForceCommand → vmctl-host)"
 
 # --- sudoers: only vmctl-host via root, no password ---
-VMCTL_SUDOERS_SRC="/root/provision/vmctl/sudoers"
+# provision/host/vmctl/ in the repo becomes /root/provision/host/vmctl/ on the
+# host: first-boot.sh extracts the archive's provision/ directory to
+# /root/provision. Resolving the source relative to this script keeps the
+# fragment correct wherever the tree lives, and means a missing vmctl-host is a
+# hard failure instead of a warning that leaves the whole devctl control
+# channel pointing at a binary that was never installed.
+VMCTL_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../vmctl" && pwd)"
+VMCTL_SUDOERS_SRC="${VMCTL_SRC_DIR}/sudoers"
 VMCTL_SUDOERS_DST="/etc/sudoers.d/vmctl"
 if [ -f "$VMCTL_SUDOERS_SRC" ]; then
     cp "$VMCTL_SUDOERS_SRC" "$VMCTL_SUDOERS_DST"
@@ -86,14 +94,16 @@ chmod 440 "$VMCTL_SUDOERS_DST"
 log "sudoers drop-in written"
 
 # --- Copy vmctl-host script ---
-VMCTL_HOST_SRC="/root/provision/vmctl/vmctl-host"
+VMCTL_HOST_SRC="${VMCTL_SRC_DIR}/vmctl-host"
 VMCTL_HOST_DST="/usr/local/sbin/vmctl-host"
 if [ -f "$VMCTL_HOST_SRC" ]; then
     cp "$VMCTL_HOST_SRC" "$VMCTL_HOST_DST"
     chmod 755 "$VMCTL_HOST_DST"
     log "vmctl-host installed"
 else
-    log "WARNING: vmctl-host source not found at ${VMCTL_HOST_SRC}"
+    die "vmctl-host source not found at ${VMCTL_HOST_SRC} — the desktop's
+devctl fleet verbs (list/status/start/stop/kill/add/log) would all fail
+against a forced command that does not exist"
 fi
 
 # --- Staging path for frag/30 (desktop seed injection) ---

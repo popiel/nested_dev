@@ -25,9 +25,9 @@ autoinstall:
     - fakeroot
     - qemu-guest-agent
   late-commands:
-    # Set UID/GID to 1401 (§05) — must run before any chown on this user
-    - "curtin in-target --target=/target -- usermod -u 1401 __PERSONALIZATION_USERNAME__"
-    - "curtin in-target --target=/target -- groupmod -g 1401 __PERSONALIZATION_USERNAME__"
+    # UID/GID from personalization.sh — must run before any chown on this user
+    - "curtin in-target --target=/target -- usermod -u __PERSONALIZATION_UID__ __PERSONALIZATION_USERNAME__"
+    - "curtin in-target --target=/target -- groupmod -g __PERSONALIZATION_GID__ __PERSONALIZATION_USERNAME__"
     # root gets no password: the personalization account is the only login, and
     # root's own credential (keys/root-password-hash) is host-only. subiquity
     # already leaves root locked, but state it explicitly so a later seed
@@ -42,3 +42,13 @@ autoinstall:
     - "curtin in-target --target=/target -- sh -c 'cat > /etc/systemd/system/dev-firstboot.service << \"UNIT\"\n[Unit]\nDescription=Dev first-boot configuration\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/opt/nested-dev/dev-firstboot.sh\nTimeoutStartSec=1800\nRemainAfterExit=no\n\n[Install]\nWantedBy=multi-user.target\nUNIT\nln -s /etc/systemd/system/dev-firstboot.service /etc/systemd/system/multi-user.target.wants/dev-firstboot.service'"
     # Fetch first-boot script + personalization from GitHub at pinned REF
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /opt/nested-dev && cd /opt/nested-dev && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/dev/dev-firstboot.sh -O dev-firstboot.sh && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/provision/personalization.sh -O personalization.sh && chmod +x dev-firstboot.sh && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ dev-firstboot.sh personalization.sh'"
+    # The guest's own personalization.sh still carries the branch name, so a
+    # later fetch from inside the guest (dev/docker/*.dockerfile, dev/tools/*)
+    # would resolve against a moving branch rather than the commit this guest
+    # was built from. Pin it to the same reference this seed was fetched at.
+    - "curtin in-target --target=/target -- sh -c 'sed -i -e s/^PERSONALIZATION_REF=.*/PERSONALIZATION_REF=__GITHUB_REF__/ /opt/nested-dev/personalization.sh'"
+    # The wrapper scripts under ~/.local/bin shell out to dev/tools/nested, and
+    # dev-refresh-images refreshes the base image set. dev-firstboot.sh copies
+    # them from ${SCRIPT_DIR}/tools, so the seed has to put them there or the
+    # copy silently finds nothing and the wrappers are half-installed.
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /opt/nested-dev/tools && cd /opt/nested-dev/tools && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/dev/tools/nested -O nested && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/dev/tools/dev-refresh-images -O dev-refresh-images && chmod +x nested dev-refresh-images && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ nested dev-refresh-images'"

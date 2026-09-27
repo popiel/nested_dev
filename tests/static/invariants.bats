@@ -76,10 +76,37 @@ load '../lib/helpers'
 }
 
 @test "user-data templates contain required placeholders" {
-    for ud in desktop llm dev; do
-        assert_file_contains "${PROJECT_ROOT}/${ud}/user-data/user-data" '__PERSONALIZATION_USERNAME__'
-        assert_file_contains "${PROJECT_ROOT}/${ud}/user-data/user-data" '__PERSONALIZATION_FULLNAME__'
-        assert_file_contains "${PROJECT_ROOT}/${ud}/user-data/user-data" 'CHANGE_ME_HASHED'
+    # Every token frag/30 substitutes. A guest seed that reaches the installer
+    # with a surviving token boots without its login hash, its operator key or
+    # its desktop fleet-control key — frag/30 aborts on this, and so does the
+    # pre-commit hook, but the templates are the contract being asserted here.
+    local token
+    for token in \
+        '__PERSONALIZATION_USERNAME__' \
+        '__PERSONALIZATION_FULLNAME__' \
+        '__PERSONALIZATION_UID__' \
+        '__PERSONALIZATION_GID__' \
+        '__ADMIN_PUBKEY__' \
+        '__GUEST_ID_PUBKEY__' \
+        'CHANGE_ME_HASHED' \
+    ; do
+        for ud in desktop llm dev; do
+            assert_file_contains "${PROJECT_ROOT}/${ud}/user-data/user-data" "$token"
+        done
+    done
+}
+
+@test "the desktop seed carries both desktop private-key placeholders" {
+    # devctl is unusable on the desktop without these two: pvehost_vmctl is
+    # the restricted fleet-control credential and nested-dev-id is the guest
+    # identity key. The other two guests must not receive a private half.
+    local token
+    for token in '__VMCTL_PRIV_B64__' '__GUEST_ID_PRIV_B64__'; do
+        assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" "$token"
+    done
+    for ud in llm dev; do
+        run grep -E '__[A-Z_]*PRIV_B64__' "${PROJECT_ROOT}/${ud}/user-data/user-data"
+        [ -z "$output" ]
     done
 }
 
@@ -92,7 +119,12 @@ load '../lib/helpers'
         "provision/host/answer-host.toml|__GITHUB_REF__" \
         "provision/host/answer-host.toml|__ROOT_SSH_KEY__" \
         "provision/host/answer-host.toml|__ROOT_PASSWORD_HASH__" \
+        "provision/host/answer-host.toml|__TARGET_DISKS__" \
         "provision/host/first-boot.sh|__PERSONALIZATION_PASSWORD_HASH__" \
+        "provision/host/first-boot.sh|__PERSONALIZATION_UID__" \
+        "provision/host/first-boot.sh|__PERSONALIZATION_GID__" \
+        "provision/host/first-boot.sh|__PERSONALIZATION_HOME__" \
+        "provision/host/first-boot.sh|__ADMIN_PUBKEY__" \
     ; do
         file="${entry%%|*}"
         placeholder="${entry##*|}"
@@ -155,14 +187,79 @@ load '../lib/helpers'
 @test "frag/30 aborts when personalization vars are empty" {
     # The specific guard, not a bare `exit 1` somewhere in a 400-line script:
     # this is the check that stops the host boot with an operator-readable
-    # reason instead of creating guests with a blank username.
+    # reason instead of creating guests with a blank username or a default UID.
+    # It covers UID and GID as well as name, because an unset UID would let the
+    # seed ship a guest account whose identity no longer matches the host's.
     local frag30="${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh"
-    assert_file_contains "$frag30" \
-        'PERSONALIZATION_USERNAME or PERSONALIZATION_FULLNAME not set'
+    local var
+    for var in PERSONALIZATION_USERNAME PERSONALIZATION_FULLNAME \
+               PERSONALIZATION_UID PERSONALIZATION_GID; do
+        assert_file_contains "$frag30" "$var"
+    done
+    assert_file_contains "$frag30" 'not set — check /root/provision/personalization.sh'
     assert_file_contains "$frag30" \
         'Personalization password hash not found: ${PERSONALIZATION_HASH_FILE}'
 }
 
 @test "data volume size is 500 GB" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'DATA_VOL_SIZE=500'
+}
+
+# --- Guest egress policy (Spec 00 R-00.2.6) ---
+# The FORWARD chain is the only thing that gives a guest a route off vmbr0.
+# A policy stated in a comment but not backed by a rule is the failure mode
+# these guard: the desktop was documented as unrestricted with no rule at all,
+# so the bastion had no egress.
+
+@test "the desktop has an unrestricted egress rule toward the LAN NIC" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
+        '-o "$PHYS_NIC" -s 192.168.100.100 -j ACCEPT'
+    assert_file_contains "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf" \
+        '-o CHANGE_ME_DETECT_AT_PROVISION -s 192.168.100.100 -j ACCEPT'
+}
+
+@test "the LLM VM and the trusted builder are the only guests granted egress" {
+    local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
+    # The egress loop must name exactly the two addresses the policy allows:
+    # the LLM VM and the trusted ISO builder. Adding a third here silently
+    # gives it a route off vmbr0.
+    assert_file_contains "$frag" 'for EGRESS_IP in 192.168.100.101 192.168.100.103; do'
+    for port in 53 80 443; do
+        assert_file_contains "$frag" "--dport ${port} -j ACCEPT"
+    done
+}
+
+@test "guest DNS egress allows TCP as well as UDP" {
+    # A truncated or oversized DNS answer falls back to TCP. UDP-only DNS fails
+    # exactly when the guest most needs an answer, and the host's own OUTPUT
+    # chain already allows both.
+    local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
+    assert_file_contains "$frag" '-p udp --dport 53 -j ACCEPT'
+    assert_file_contains "$frag" '-p tcp --dport 53 -j ACCEPT'
+}
+
+@test "no dev VM at or above 104 is granted egress" {
+    # 104-249 must fall through to the DROP default. Any explicit rule for that
+    # range reverses the containment the range boundary exists to provide.
+    assert_file_not_contains "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
+        '-s 192.168.100.104'
+    assert_file_not_contains "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf" \
+        '-s 192.168.100.104'
+}
+
+@test "the reference ruleset grants each allowed guest each allowed port" {
+    # The reference file documents the live policy. If the two drift, a
+    # reviewer reading the reference is reading a policy the host does not
+    # enforce. Compare the rules, not the comments.
+    local conf="${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"
+    local ip port
+    for ip in 192.168.100.101 192.168.100.103; do
+        for port in "tcp --dport 53" "tcp --dport 80" "tcp --dport 443"; do
+            # shellcheck disable=SC2016
+            grep -qE -- "-s ${ip} -p ${port} -j ACCEPT" "$conf" || {
+                echo "reference ruleset is missing: ${ip} ${port}" >&2
+                return 1
+            }
+        done
+    done
 }

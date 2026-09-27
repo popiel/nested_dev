@@ -41,13 +41,17 @@ case "$VERB" in
         ;;
 
     verify)
-        echo "[nested] Verifying answer file..."
-        docker run --rm \
-          -v "${NESTED_DEV}:/work/nested_dev" \
-          -w /work/nested_dev \
-          "${IMAGE}" \
-          -c 'cat provision/host/answer-host.toml'
-        echo "[nested] Answer file OK"
+        # The committed answer file is a TEMPLATE, not a finished answer file:
+        # build-iso.sh renders it from the identity and hash values and is the
+        # only thing that can validate it (it needs the rendered passwords and
+        # the autoinstall assistant). Printing the template is what this verb
+        # can honestly do, so say so instead of implying a validation that
+        # did not happen.
+        echo "[nested] Answer file template (not rendered — nothing to validate here)"
+        echo "[nested] Validation happens during the build: nested build, or"
+        echo "        provision/host/build-iso.sh on the host."
+        echo
+        cat provision/host/answer-host.toml
         ;;
 
     refresh)
@@ -60,23 +64,28 @@ case "$VERB" in
         ;;
 
     keys-status)
-        echo "[nested] Checking keys..."
+        echo "[nested] Checking keys and hashes..."
         # Both password hashes are required: build-iso.sh reads the root one for
         # the answer file and the personalization one for the first-boot
-        # bootstrap and the guest seeds.
+        # bootstrap and the guest seeds. They live in keys/ — the same
+        # gitignored directory the public keys use — not in a separate
+        # secrets/ directory, so a check that looks elsewhere reports working
+        # credentials as missing and tells the operator to create a second,
+        # wrong copy that no build ever reads.
         for secret in personalization-password-hash root-password-hash; do
-            if [ -f "${NESTED_DEV}/secrets/${secret}" ]; then
-                echo "  ${secret}: present"
+            if [ -f "${NESTED_DEV}/keys/${secret}" ]; then
+                echo "  keys/${secret}: present"
             else
-                echo "  ${secret}: MISSING"
-                echo "    Generate: mkpasswd -m yescrypt > ${NESTED_DEV}/secrets/${secret}"
+                echo "  keys/${secret}: MISSING"
+                echo "    Generate: mkpasswd -m yescrypt > ${NESTED_DEV}/keys/${secret}"
+                echo "    (mode 600; keys/* is gitignored, so it stays local)"
             fi
         done
         for key in host_os_ed25519.pub ubuntu-release-key.asc; do
             if [ -f "${NESTED_DEV}/keys/${key}" ]; then
-                echo "  ${key}: present"
+                echo "  keys/${key}: present"
             else
-                echo "  ${key}: MISSING"
+                echo "  keys/${key}: MISSING"
             fi
         done
         ;;

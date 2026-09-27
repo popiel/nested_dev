@@ -1,478 +1,214 @@
-# Spec 08 — Nested dev repo development VM
+# Spec 08 — The repository builds its own host image, from inside a dev VM
 
-Status: Draft (new)
-Pinned versions: Ubuntu Server **26.04 LTS (Resolute Raccoon)**, Proxmox VE **9.2**
-Depends on: Spec 01 (host), Spec 04 (dev image), Spec 05 (personalization),
-            Spec 06 (guest provisioning), Spec 07 (dev fleet lifecycle)
+Status: Draft
+Applies to: the builder dev VM (vm 103 and other clones that take this role)
+Pinned versions: Ubuntu **26.04 LTS** build image, Proxmox VE **9.2** target
+Implementation: `dev/tools/nested`, `dev/docker/Dockerfile.nested`,
+`dev/tools/dev-refresh-images`, `provision/host/build-iso.sh`
 
-## 1. Purpose and scope
+## 1. Scope
 
-Produce a dedicated dev VM (**VM 103, `dev-nested`**) specifically for working on
-the `popiel/nested_dev` repository. This VM hosts the build toolchain for
-producing host ISOs, golden images, and acceptance-testing artifacts — all
-delegated to a purpose-built Docker container (`dev-nested-build`).
+The host install ISO is built from this repository, and the build needs tools
+that do not belong on a desktop or in a dev VM's own filesystem. So the build
+runs in a container on a dev VM: the dev VM supplies a checkout, a container
+runtime and the two credential files; the container supplies the ISO-building
+toolchain; the output comes back to the checkout.
 
-In scope: VM 103 profile (name, resources, storage), `dev/docker/Dockerfile.nested`
-(container image), wrapper scripts (`nested`, `dev-refresh-images`), per-project
-storage conventions, image rebuild and refresh procedures, acceptance. Out of
-scope: host provisioning (Spec 01), other dev VM fleets (Spec 07), desktop
-control (Spec 07), the generic dev VM toolchain (Spec 04 §3–§5.5).
+In scope: the builder image, the wrapper interface, where credentials come
+from, what the wrapper must not do, and output ownership. Out of scope: what
+the ISO contains (Spec 01), dev VM lifecycle (Spec 07), the other tool
+wrappers (Spec 04).
 
-## 2. Design decisions
+## 2. Decisions
 
-| Decision | Default | Rationale |
-|---|---|---|
-| VM identity | VM 103 `dev-nested`, hostname `lychee-dev-nested` | First project clone of dev-template; deterministic from Spec 07 naming convention |
-| Resources | 8192 MB RAM, 4 cores, CPU host | Same as generic dev VM; sufficient for ISO builds |
-| Storage | 40 GB OS (scsi0) + 100 GB data (`scsi1`, per-project volume for `output/` and ISO cache) | Build ISOs can be ~1 GB; data volume keeps workspace separate from OS |
-| Build container | `dev-nested-build` (new image) | Runs as root (required by `build-iso.sh`); bind-mounts repo checkout + keys + output |
-| Base image | `ubuntu:26.04` | Matches host OS; `xorriso` 2.x available in archive |
-| Run-as | Root inside container; ownership normalized after build | `build-iso.sh` asserts `id -u == 0`; ownership fix handles host uid mapping |
-| Repo location | `/work/nested_dev` (bind-mounted from `scsi1`) | Per-project volume; workspace persists across clones |
-| Keys location | `/work/nested_dev/secrets/` on the data volume (symlinked into `keys/`) | `keys/personalization-password-hash` and `keys/root-password-hash` are gitignored; they live only on the data volume |
-| Output location | `/work/nested_dev/output/` (data volume) | gitignored; build artifacts persist here |
-| Golden image rebuild | Operator-run `refresh-guests.sh` or `devctl` + manual; no automatic rebuild | REF changes require intentional action; documented procedure |
-| Tool image refresh | `dev-refresh-images` script (shared across all dev VMs) | Rebuilds with `--pull`; logs digests to `MANIFEST` |
-
-## 3. Build inputs (new files)
-
-| File | Description |
+| Aspect | Choice |
 |---|---|
-| `dev/docker/Dockerfile.nested` | `dev-nested-build` container: Ubuntu 26.04, wget, xorriso, libarchive-tools, whois, git, curl, gnupg, ca-certificates, openssh-client, python3 |
-| `dev/tools/nested` | Wrapper script: `build`, `verify`, `refresh`, `keys-status` verbs |
-| `dev/tools/dev-refresh-images` | Refresh all tool images + dev-nested-build |
-| `dev/tools/dev-nested-provision.sh` | One-time provisioner for VM 103: clone repo, set up secrets, build config |
-
-## 4. VM 103 profile
-
-Created via `devctl add nested` from the desktop (Spec 07), or manually:
-
-```bash
-# From desktop via devctl:
-devctl add nested
-
-# Or from host (manual):
-qm clone 102 103 --name dev-nested --full
-qm set 103 --memory 8192 --cores 4 --cpu host
-qm set 103 --scsi1 local-lvm:100,size=100G
-qm set 103 --net0 virtio=52:54:00:00:02:67,bridge=vmbr0,firewall=1
-```
-
-On first boot (after `devctl start 103`), the cloned VM's generic dev first-boot
-script (`dev-firstboot.sh`) runs: Docker CE, workspace `/work`, git config, base
-image pulls, wrapper scripts, cache dirs, firewall. The per-project provisioner
-then handles the nested_dev-specific setup.
-
-## 5. Container image: `dev-nested-build`
-
-### 5.1 `dev/docker/Dockerfile.nested`
-
-```dockerfile
-FROM ubuntu:26.04
-
-# Build dependencies for nested_dev ISO builder
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-        wget \
-        xorriso \
-        libarchive-tools \
-        whois \
-        git \
-        curl \
-        gnupg \
-        ca-certificates \
-        openssh-client \
-        python3 \
-        file \
-        rsync \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /work
-ENTRYPOINT ["bash"]
-```
-
-**Key properties:**
-- Runs as **root** (required by `build-iso.sh` which asserts `id -u == 0`).
-- Packages: `wget` (ISO downloads), `xorriso` (ISO repackaging), `libarchive-tools`
-  (`bsdtar` for ISO extraction), `whois` (`mkpasswd` for password hash generation),
-  `git`, `curl`, `gnupg` (key verification), `openssh-client`, `python3`, `file`,
-  `rsync`.
-- **No** `proxmox-auto-install-assistant` (requires PVE repo; optional; `build-iso.sh`
-  tolerates its absence).
-- `ENTRYPOINT ["bash"]` — wrapper scripts pass commands via `-c '...'`.
-
-### 5.2 Build invocation pattern
-
-The wrapper script mounts the repo checkout, keys, and output:
-
-```bash
-docker run --rm \
-  -v "${NESTED_DEV}:/work/nested_dev" \
-  -v "${NESTED_DEV}/output:/work/nested_dev/output" \
-  -w /work/nested_dev \
-  dev-nested-build \
-  -c 'provision/host/build-iso.sh'
-```
-
-After the build, ownership of output files is normalized:
-
-```bash
-chown -R "${USER}:${USER}" "${NESTED_DEV}/output/" "${NESTED_DEV}/keys/"
-```
-
-## 6. Wrapper scripts
-
-### 6.1 `nested` — build toolchain wrapper
-
-Installed to `~/.local/bin/nested` by `dev-firstboot.sh` or the per-project
-provisioner.
-
-```bash
-#!/usr/bin/env bash
-# nested — wrapper for popiel/nested_dev build toolchain
-set -euo pipefail
-
-DOCKER_DIR="/opt/dev-docker"
-IMAGE="dev-nested-build"
-NESTED_DEV="${HOME}/work/nested_dev"
-
-# Ensure repo checkout exists
-if [ ! -d "${NESTED_DEV}/.git" ]; then
-    echo "[nested] Repository not found at ${NESTED_DEV}. Clone or mount it first."
-    exit 1
-fi
-
-# Ensure data volume mounted (output/ writable)
-if ! mountpoint -q /work 2>/dev/null; then
-    echo "[nested] Warning: /work is not a mount point. Output may not persist."
-fi
-
-# Ensure image exists; build on first use
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-    echo "[nested] Building ${IMAGE} (first run)..."
-    docker build --tag "${IMAGE}" -f "${DOCKER_DIR}/Dockerfile.nested" "${DOCKER_DIR}"
-fi
-
-# Parse verb
-VERB="${1:-help}"
-shift || true
-
-case "$VERB" in
-    build)
-        echo "[nested] Building host ISO..."
-        docker run --rm \
-          -v "${NESTED_DEV}:/work/nested_dev" \
-          -w /work/nested_dev \
-          -e DEBIAN_FRONTEND=noninteractive \
-          "${IMAGE}" \
-          -c 'provision/host/build-iso.sh'
-        chown -R "${USER}:${USER}" "${NESTED_DEV}/output/" 2>/dev/null || true
-        echo "[nested] Build complete. Output in ${NESTED_DEV}/output/"
-        ;;
-
-    verify)
-        echo "[nested] Verifying answer file..."
-        docker run --rm \
-          -v "${NESTED_DEV}:/work/nested_dev" \
-          -w /work/nested_dev \
-          "${IMAGE}" \
-          -c 'cd provision/host && cat answer-host.toml' \
-          && echo "[nested] Answer file OK"
-        ;;
-
-    refresh)
-        echo "[nested] Refreshing dev-nested-build image..."
-        docker build --pull --no-cache --tag "${IMAGE}" \
-          -f "${DOCKER_DIR}/Dockerfile.nested" "${DOCKER_DIR}"
-        echo "[nested] Refreshed. New digest:"
-        docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" 2>/dev/null || echo "  (local only, no registry digest)"
-        ;;
-
-    keys-status)
-        echo "[nested] Checking keys..."
-        for hash in personalization-password-hash root-password-hash; do
-            if [ -f "${NESTED_DEV}/secrets/${hash}" ]; then
-                echo "  ${hash}: present"
-            else
-                echo "  ${hash}: MISSING (generate with: mkpasswd -m yescrypt > ${NESTED_DEV}/secrets/${hash})"
-            fi
-        done
-        for key in host_os_ed25519.pub ubuntu-release-key.asc; do
-            if [ -f "${NESTED_DEV}/keys/${key}" ]; then
-                echo "  ${key}: present"
-            else
-                echo "  ${key}: MISSING"
-            fi
-        done
-        ;;
-
-    help|*)
-        echo "Usage: nested <command>" >&2
-        echo "" >&2
-        echo "Commands:" >&2
-        echo "  build        Build the host autoinstall ISO" >&2
-        echo "  verify       Verify the answer file" >&2
-        echo "  refresh      Rebuild the dev-nested-build image from scratch" >&2
-        echo "  keys-status  Check that required keys are present" >&2
-        echo "  help         Show this help" >&2
-        exit 1
-        ;;
-esac
-```
-
-### 6.2 `dev-refresh-images` — shared tool image refresh
-
-Installed to `~/.local/bin/dev-refresh-images` by `dev-firstboot.sh`. Rebuilds
-all tool images (java, scala, sbt, opencode, nested-build) with `--pull` and logs
-digests.
-
-```bash
-#!/usr/bin/env bash
-# dev-refresh-images — rebuild all dev tool images with latest base layers
-set -euo pipefail
-
-DOCKER_DIR="/opt/dev-docker"
-MANIFEST="${HOME}/.local/share/dev-images-manifest"
-mkdir -p "$(dirname "$MANIFEST")"
-
-log() { printf '%s %s\n' "$(date -Is)" "$*"; }
-
-log "=== Refreshing dev tool images ==="
-echo "" >> "$MANIFEST"
-echo "## Image refresh — $(date -Is)" >> "$MANIFEST"
-
-IMAGES=(
-    "dev-java:Dockerfile.java"
-    "dev-scala:Dockerfile.scala"
-    "dev-sbt:Dockerfile.sbt"
-    "dev-opencode:Dockerfile.opencode"
-    "dev-nested-build:Dockerfile.nested"
-)
-
-for entry in "${IMAGES[@]}"; do
-    IFS=':' read -r TAG FILENAME <<< "$entry"
-    log "Rebuilding ${TAG}..."
-    if docker build --pull --tag "${TAG}" \
-        --build-arg PERSONALIZATION_USERNAME="${USER}" \
-        --build-arg PERSONALIZATION_UID="$(id -u)" \
-        -f "${DOCKER_DIR}/${FILENAME}" "${DOCKER_DIR}" 2>&1; then
-        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${TAG}" 2>/dev/null || echo "local")
-        log "  ${TAG}: ${DIGEST}"
-        echo "${TAG}: ${DIGEST}" >> "$MANIFEST"
-    else
-        log "  ${TAG}: BUILD FAILED"
-        echo "${TAG}: BUILD_FAILED" >> "$MANIFEST"
-    fi
-done
-
-log "=== Refresh complete — digests saved to ${MANIFEST} ==="
-cat "$MANIFEST" | tail -20
-```
-
-## 7. Per-project provisioner
-
-### 7.1 `dev/tools/dev-nested-provision.sh` (run once on VM 103 first boot)
-
-Handles the nested_dev-specific setup on top of the generic dev first-boot:
-
-```bash
-#!/usr/bin/env bash
-# dev-nested-provision.sh — one-time nested_dev repo setup on VM 103
-set -euo pipefail
-
-log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a /var/log/nested-provision.log; }
-
-NESTED_DEV="${HOME}/work/nested_dev"
-SECRETS_DIR="${NESTED_DEV}/secrets"
-
-# --- 1. Clone repo (if not already present) ---
-if [ ! -d "${NESTED_DEV}/.git" ]; then
-    log "Cloning popiel/nested_dev..."
-    mkdir -p "$(dirname "${NESTED_DEV}")"
-    git clone https://github.com/popiel/nested_dev.git "${NESTED_DEV}"
-    log "Repository cloned"
-fi
-
-# --- 2. Set up secrets directory ---
-mkdir -p "${SECRETS_DIR}"
-chmod 700 "${SECRETS_DIR}"
-
-# Ensure both password hashes exist (reminder only — operator must generate)
-for hash in personalization-password-hash root-password-hash; do
-    if [ ! -f "${SECRETS_DIR}/${hash}" ]; then
-        log "WARNING: keys/${hash} not found."
-        log "  Generate on the host: mkpasswd -m yescrypt > ${SECRETS_DIR}/${hash}"
-        log "  Then copy to ${SECRETS_DIR}/${hash} on this VM."
-    fi
-done
-
-# Symlink secrets/ into keys/ for build-iso.sh compatibility
-if [ -d "${NESTED_DEV}/keys" ] && [ ! -L "${NESTED_DEV}/keys" ]; then
-    # keys/ is a real directory with .pub and .asc — overlay with secrets
-    for hash in personalization-password-hash root-password-hash; do
-        ln -sfn "${SECRETS_DIR}/${hash}" "${NESTED_DEV}/keys/${hash}"
-    done
-    log "Symlinked secrets/{personalization,root}-password-hash into keys/"
-fi
-
-# --- 3. Data volume mount ---
-if [ -b /dev/vdb ]; then
-    if ! mountpoint -q /work 2>/dev/null; then
-        if ! blkid /dev/vdb >/dev/null 2>&1; then
-            mkfs.ext4 -F /dev/vdb
-        fi
-        mkdir -p /work
-        mount /dev/vdb /work
-        if ! grep -q "/dev/vdb /work" /etc/fstab; then
-            echo "/dev/vdb /work ext4 defaults,nofail 0 2" >> /etc/fstab
-        fi
-    fi
-    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" /work 2>/dev/null || true
-    log "Data volume mounted at /work"
-fi
-
-# --- 4. Verify toolchain ---
-log "Verifying build toolchain..."
-for cmd in wget xorriso bsdtar mkpasswd git ssh docker; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-        log "  $cmd: $(command -v "$cmd")"
-    else
-        log "  $cmd: MISSING"
-    fi
-done
-
-# --- 5. First build smoke test (optional) ---
-log "Provision complete. Run 'nested build' to produce the host ISO."
-log "Run 'nested keys-status' to check required keys."
-```
-
-## 8. Image rebuild and refresh procedures
-
-### 8.1 Dev tool images (all VMs)
-
-All dev VMs share the same tool images (java, scala, sbt, opencode). The
-`dev-nested-build` image is specific to VM 103 but follows the same pattern.
-
-**Refresh a single image:**
-```bash
-docker build --pull --tag dev-java -f /opt/dev-docker/Dockerfile.java /opt/dev-docker
-```
-
-**Refresh all tool images:**
-```bash
-dev-refresh-images
-```
-
-**Digest tracking:** `dev-refresh-images` writes digests to
-`~/.local/share/dev-images-manifest`. This file is local (not versioned)
-and records when each image was last refreshed.
-
-### 8.2 Dev template (VM 102)
-
-The template is the clone source for all dev VMs. When the template needs
-updating (e.g. new REF, changed packages):
-
-**Option A — destroy and recreate (cleanest):**
-```bash
-# On the host (or via vmctl if frag/30 provides a rebuild verb):
-qm destroy 102
-# Re-run frag/30 guest creation for 102 (provisioning gate + template conversion)
-```
-
-**Option B — refresh the running template's first-boot state (faster):**
-```bash
-# From desktop or host:
-qm start 102   # wait for provisioning
-qm guest exec 102 -- bash -c 'cd /root && wget -qO- ... | bash'  # re-run first-boot
-qm guest exec 102 -- cloud-init clean
-qm shutdown 102
-qm template 102
-```
-
-**Operator tool (host-side):** `provision/host/refresh-guests.sh` (shipped as
-repo file) automates Option A with appropriate logging.
-
-### 8.3 Nested dev builder image (VM 103)
-
-Refresh on VM 103:
-```bash
-nested refresh
-# or directly:
-docker build --pull --no-cache --tag dev-nested-build \
-  -f /opt/dev-docker/Dockerfile.nested /opt/dev-docker
-```
-
-### 8.4 Guest images under NoCloud
-
-Since guest VMs install from the official Ubuntu ISO + NoCloud seed (Spec 06),
-there are no golden qcow2 files to rebuild. The "image" that matters is the
-**template VM 102**, which is rebuilt as described in §8.2.
-
-When `PERSONALIZATION_REF` changes:
-1. Update `provision/personalization.sh` with new REF.
-2. Rebuild host ISO: `sudo provision/host/build-iso.sh`.
-3. On existing host: run `refresh-guests.sh` or manually rebuild template 102.
-4. `devctl` clones from the updated template.
-
-### 8.5 Host ISO rebuild
-
-```bash
-sudo provision/host/build-iso.sh
-```
-
-Produces `output/proxmox-ve_9.2-1_auto.iso` with the new REF. The host's
-`MANIFEST` records the resolved commit SHA.
-
-## 9. Storage layout
-
-VM 103 `dev-nested` storage:
-
-```
-scsi0 (OS disk, 40 GB):    Ubuntu Server 26.04 + Docker CE + toolchains
-scsi1 (data volume, 100 GB): workspace mounted at /work
-  /work/nested_dev/           git checkout of popiel/nested_dev
-  /work/nested_dev/output/    build artifacts (ISO, MANIFEST)
-  /work/nested_dev/secrets/   both password hashes + other secrets (not in git)
-  /work/nested_dev/keys/      secrets overlaid for build-iso.sh
-```
-
-Per-project scsi1 volumes are created at clone time by the operator or
-`vmctl-host add`:
-```bash
-qm set 103 --scsi1 local-lvm:100,size=100G
-```
-
-## 10. Network containment
-
-VM 103 follows the generic dev VM firewall (Spec 04 §5 step 8):
-- Default deny incoming and outgoing.
-- Allow SSH inbound.
-- Allow outbound 53, 80, 443 (DNS, HTTP, HTTPS for package repos and GitHub).
-- Host iptables OUTPUT chain restricts dev egress at the host level.
-
-The `build-iso.sh` workflow needs outbound HTTPS (GitHub, Ubuntu archive, PVE ISO
-download) — satisfied by the allowlist.
-
-Nested virtualization for acceptance testing (running PVE inside the dev VM)
-requires `kvm_intel nested=1` (or AMD equivalent) on the **host** PVE.
-This is an optional host configuration, not part of the dev VM provisioning.
-
-## 11. Acceptance
-
-* `devctl add nested` creates VM 103 (`dev-nested`, stopped); `devctl start 103`
-  boots it; first-boot completes (Docker CE, toolchains installed).
-* `devctl log 103` shows `/var/log/dev-firstboot.log` output.
-* Inside VM 103: `nested keys-status` reports both password hashes and the
-  public keys' presence/absence.
-* Inside VM 103: `nested build` produces `output/proxmox-ve_9.2-1_auto.iso` with
-  correct MANIFEST (requires `keys/personalization-password-hash` and
-  `keys/root-password-hash`).
-* Inside VM 103: `nested refresh` rebuilds `dev-nested-build` from upstream
-  Ubuntu base; new digest logged.
-* Inside VM 103: `dev-refresh-images` rebuilds all five tool images (java, scala,
-  sbt, opencode, nested-build) with `--pull`; digests appended to manifest.
-* `devctl ssh 103 nested build` runs the build remotely from the desktop.
-* `devctl stop 103` gracefully shuts down the VM.
-* Data volume persists across `devctl` stop/start cycles (`/work` remains mounted).
-* Golden image rebuild: on the host, `refresh-guests.sh` destroys + recreates
-  template 102; subsequent `devctl add` clones produce VMs with updated packages.
-* `devctl ssh 103 git log --oneline -1` shows the cloned repo's HEAD.
+| Where the build runs | A container on a dev VM, never on the desktop, never on the host |
+| Build image | Ubuntu 26.04, the same release as the guests, with the ISO-building toolchain and no desktop software |
+| Repository source | A checkout the operator clones into the workspace; the wrapper does not clone it |
+| Container identity | `root`, because the ISO builder needs it |
+| Output | Written into the bind-mounted checkout, then handed back to the operator's account |
+| Credentials | Read from the checkout's gitignored `keys/` directory; never copied into the image, never passed as build arguments |
+| Image refresh | An explicit rebuild from scratch, on request |
+| Per-project volume | Not used. Output lands on the dev VM's own disk |
+| Network | The dev VM's egress policy applies: DNS, HTTP and HTTPS (Spec 04 §R-04.8.2) |
+
+### 2.1 Why the build is not a script on the host
+
+The ISO builder needs `xorriso`, archive tooling, and a container runtime of
+its own. Installing that on the hypervisor means the build's dependencies sit
+on the machine the build installs, and a build that goes wrong touches the
+host. Keeping the toolchain in an image on a dev VM means the build is
+reproducible from an image tag and the host carries no build dependencies at
+all.
+
+## 3. Requirements
+
+### R-08.1 The builder image carries the build toolchain and nothing else
+
+* **R-08.1.1** The image is based on the same Ubuntu release as the guests, so
+  a build runs against the release it is building for.
+* **R-08.1.2** It contains the tools the ISO build needs: download, ISO
+  authoring, archive handling, WHOIS, version control, HTTP and GPG tooling,
+  Python, and the container runtime client the builder uses to obtain the
+  install assistant when it is not present natively.
+* **R-08.1.3** It contains **no** desktop software, no GPU or CUDA stack, and no
+  inference components. The build image is a build tool, and anything in it
+  that is not needed to build is weight the operator pulls on every refresh.
+* **R-08.1.4** Package installation leaves no apt lists behind, so a later
+  layer does not carry a stale index.
+* **R-08.1.5** The image runs a shell as its entry point and takes the build
+  command as its argument, so the build is the only thing it does.
+* **R-08.1.6** The image carries no credential, no key and no identity value.
+  Every secret the build needs arrives through the bind-mounted checkout at
+  run time, and is therefore absent from every layer and every cache entry.
+
+### R-08.2 The wrapper is the interface, and it is thin
+
+* **R-08.2.1** The wrapper exposes exactly four operations: build the host ISO,
+  inspect the answer-file template, rebuild the builder image, and report
+  whether the required credentials are present. Anything else is refused.
+* **R-08.2.2** Each operation is described in the wrapper's own help. The
+  operator should not have to read the wrapper to find out what it does.
+* **R-08.2.3** An unrecognised operation prints the help and exits non-zero,
+  rather than doing nothing and exiting zero. A wrapper that succeeds on a
+  typo is a wrapper the operator stops trusting.
+* **R-08.2.4** The wrapper requires a checkout at a known path inside the
+  workspace, and says so — naming the command that creates it — when it is
+  absent. It does not clone on the operator's behalf, because a build that
+  silently fetches a different revision than the one the operator is reading
+  produces an ISO nobody can account for.
+* **R-08.2.5** The builder image is built on first use, not at first boot. A
+  dev VM that has never run a build does not carry the builder image.
+
+### R-08.3 The build runs against the checkout, and its output returns to it
+
+* **R-08.3.1** The checkout is bind-mounted into the container at the same path
+  it has on the dev VM, and the build runs with that path as its working
+  directory. Identical paths inside and outside mean a path in a build log can
+  be opened directly on the dev VM.
+* **R-08.3.2** Output is written **into the checkout's own output directory**,
+  which is bind-mounted, not into a container-local path. An ISO produced
+  inside a container and not bind-mounted disappears when the container exits.
+* **R-08.3.3** The container runs as `root`, so files it creates are
+  root-owned on the dev VM. The wrapper hands them back to the operator's
+  account immediately after the build, and a build that fails before the
+  hand-back leaves files the operator cannot delete.
+* **R-08.3.4** Both the output directory and the credential directory are
+  handed back, because the build writes into both.
+* **R-08.3.5** The build is non-interactive. A build that prompts produces a
+  container that hangs until the operator attaches to it.
+
+### R-08.4 Credentials come from the checkout and go nowhere else
+
+* **R-08.4.1** The build reads the two password hashes and the operator's public
+  key from the checkout's gitignored `keys/` directory.
+* **R-08.4.2** The two hashes have distinct, non-interchangeable roles, and
+  the build must keep them that way: the host's root credential goes only into
+  the install answer file, and the operator login credential goes into the
+  first-boot bootstrap and every guest seed. A build that swapped them
+  produces a host whose root has the operator's password.
+* **R-08.4.3** The credential directory is **gitignored except for its public
+  parts.** A committed hash is a credential in a public repository's history,
+  and removing it in a later commit does not remove it from the history.
+* **R-08.4.4** The pre-commit hook and the static test both reject a committed
+  hash or private key. Two independent gates, because the hook is skipped
+  easily (`--no-verify`) and the test is not run at all.
+* **R-08.4.5** Credential paths are stated in one place. A check that looks for
+  a credential in a different directory than the build reads reports a working
+  setup as broken, and tells the operator to create a second copy that no
+  build ever reads.
+
+### R-08.5 Answer-file inspection is honest about what it inspects
+
+* **R-08.5.1** The wrapper's inspection operation states that the committed
+  answer file is a **template** and that it is not validating it.
+* **R-08.5.2** It says where validation actually happens: the build, which
+  renders the template and validates the result with the version-matched
+  install assistant.
+* **R-08.5.3** It then prints the template. An operation that prints a template
+  and reports success must not be named as if it verified the finished file —
+  an operator who trusts the word "verify" will not read the output.
+
+### R-08.6 Refreshing the builder image is deliberate
+
+* **R-08.6.1** Refreshing rebuilds the builder image from scratch with the base
+  image re-pulled and no cache, so a rebuild actually tests the current base
+  rather than reusing cached layers.
+* **R-08.6.2** The refresh reports the resulting image digest afterwards, so the
+  operator can record which toolchain built a given ISO.
+* **R-08.6.3** Refreshing is never automatic. A build that silently changed its
+  toolchain would make two ISOs from the same commit differ.
+
+### R-08.7 The build itself
+
+* **R-08.7.1** The build validates its inputs before it downloads anything. In
+  particular the target disk is validated **before** the multi-gigabyte install
+  media step, so a malformed value fails in seconds rather than after the
+  download it would have invalidated.
+* **R-08.7.2** The build refuses to run when a required credential is absent,
+  naming the file and how to produce it.
+* **R-08.7.3** The build's exit status is meaningful, and a failure inside the
+  assistant is not reported as success. The assistant can report a hard failure
+  and still exit zero.
+* **R-08.7.4** The build records what it produced and the reference it was built
+  from, in a manifest written from values that were already computed and
+  checked.
+* **R-08.7.5** Build output is written outside version control.
+* **R-08.7.6** The build does not care which shell invoked it, and does not
+  depend on path-rewriting behaviour that differs between a Linux shell, a
+  Windows Git Bash, and a Linux container. A build that works in one of the
+  three and silently produces a different result in another is worse than a
+  build that fails.
+
+## 4. Invariants
+
+* I-08.1 The build toolchain exists only inside the builder image.
+* I-08.2 The builder image contains no credential.
+* I-08.3 No credential is committed, and the two hashes never exchange roles.
+* I-08.4 A build's output is on the dev VM's filesystem, owned by the operator.
+* I-08.5 The builder image is rebuilt only on request.
+* I-08.6 The build never fetches the repository itself.
+
+## 5. Acceptance
+
+| # | Check |
+|---|---|
+| A-08.1 | The builder image contains the ISO-authoring toolchain and contains no desktop, GPU or inference packages. |
+| A-08.2 | The image contains no password hash, no private key, and no username, UID or email, at any layer. |
+| A-08.3 | With no checkout in the workspace, the wrapper names the clone command and builds nothing. |
+| A-08.4 | With a checkout present, the build produces an ISO in the checkout's output directory. |
+| A-08.5 | The ISO's path is identical inside the container and on the dev VM, and a build log path can be opened directly on the dev VM. |
+| A-08.6 | The built ISO is owned by the operator's account, including the credential directory's entries. |
+| A-08.7 | A build that fails part-way still leaves output the operator can delete. |
+| A-08.8 | With a credential file removed, the build stops and names the file and how to produce it. |
+| A-08.9 | A malformed target-disk value fails in seconds, before any install media is downloaded. |
+| A-08.10 | A build whose install assistant reports a hard failure exits non-zero. |
+| A-08.11 | The manifest records the produced media's checksum and the reference the build used. |
+| A-08.12 | The wrapper's inspection operation states that the file is an unvalidated template, and names where validation happens. |
+| A-08.13 | An unrecognised wrapper operation prints help and exits non-zero. |
+| A-08.14 | The builder image is absent from a dev VM that has never run a build. |
+| A-08.15 | A refresh re-pulls the base image, discards the cache, and reports the resulting digest. |
+| A-08.16 | Two builds of the same commit with no refresh produce the same builder image digest. |
+| A-08.17 | Staging a hash in the credential directory and committing it is rejected by both the hook and the static test. |
+| A-08.18 | No build output is tracked by version control. |
+| A-08.19 | The build succeeds under a Linux shell, under Windows Git Bash, and inside the container, with the same result. |
+
+## 6. Cross-references
+
+| Spec | Relationship |
+|---|---|
+| Spec 00 | Sourcing policy, pinning, build ordering |
+| Spec 01 | What the produced ISO does |
+| Spec 04 | The dev VM this runs on; the container-only toolchain rule |
+| Spec 05 | The two credential files and their non-interchangeable roles |
+| Spec 07 | Which dev VM this is, and how it was created |
+| Spec 09 | The credential and output tests above |
+
+## 7. Known gaps
+
+| Gap | Effect |
+|---|---|
+| No per-project data volume is attached to a dev VM | A checkout plus its ISO output share one 40 GB disk. Large checkouts will fill it (Spec 04 §R-04.9.2) |
+| The builder image is not version-pinned to a digest | A refresh can change the toolchain. The digest is reported so the operator can record it, but nothing prevents the change (R-08.6.2) |
+| The dev VM's 53/80/443-only egress covers the build's downloads, but the build cannot reach an internal mirror on any other port | A build that must fetch from an internal service on another port fails (Spec 04 §R-04.8.2) |

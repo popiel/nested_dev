@@ -26,7 +26,7 @@ fi
 require_guest_id_key() {
     if [ ! -s "$GUEST_ID_KEY" ]; then
         echo "devctl: missing guest identity key ${GUEST_ID_KEY}" >&2
-        echo "        run 'devctl firstboot-log' or check /var/log/desktop-firstboot.log" >&2
+        echo "        see /var/log/desktop-firstboot.log on the desktop" >&2
         exit 1
     fi
 }

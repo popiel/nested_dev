@@ -1,657 +1,277 @@
-# Spec 07 — Dev VM fleet lifecycle and desktop control
+# Spec 07 — Dev VM fleet lifecycle and control plane
 
-Status: Draft (new)
-Pinned versions: Ubuntu Server **26.04 LTS (Resolute Raccoon)**, Proxmox VE **9.2**
-Depends on: Spec 01 (host), Spec 04 (dev image), Spec 05 (personalization), Spec 06 (guest provisioning)
+Status: Draft
+Applies to: vm 102 `dev-template` and the dev VMs at 103 and above
+Pinned versions: Proxmox VE **9.2**
+Implementation: `desktop/devctl`, `provision/host/frag/25-desktop-control.sh`,
+`provision/host/vmctl/vmctl-host`, `provision/host/vmctl/sudoers`
 
-## 1. Purpose and scope
+## 1. Scope
 
-Defines how per-project dev VMs are created, started, stopped, and removed — and
-how the **desktop VM** (bastion) controls this lifecycle **indirectly** through the
-host.
+How a dev VM comes into existence, how it is addressed, how it is operated
+from the desktop, and — most importantly — which credentials may do what.
 
-The key invariants:
+In scope: the control credentials, the host-side control program, the
+`devctl` interface, the clone contract, addressing and naming, the dev VM ID
+range, and the audit log. Out of scope: the template's contents (Spec 04), the
+host firewall (Spec 01), the desktop's own installation (Spec 02).
 
-1. Dev VMs are **never auto-started** by the host. Only Desktop (100) and LLM
-   (101) auto-start at host first boot.
-2. The dev-template (VM 102) is a **PVE template** (can't be started directly)
-   and serves as the clone source for all per-project dev VMs.
-3. Per-project dev VMs (103+) are **created on demand** via `devctl` from the
-   desktop, and remain **stopped until explicitly started**.
-4. The control path is **indirect**: desktop → restricted SSH → host `qm` commands.
+## 2. Decisions
 
-In scope: `vmctl` host-side control stub, `vmctl` user + SSH key + sudoers
-provisioning (frag/25), `vmctl-host` enforcement script, inventory, dnsmasq
-runtime registration, `devctl` desktop wrapper, firewall addition, first-start
-provisioning gate, template conversion, acceptance. Out of scope: desktop/LLM
-VM lifecycle (Spec 02/03), desktop's own first-boot (Spec 02), image rebuild
-(Spec 08).
+| Aspect | Choice |
+|---|---|
+| Operator | The desktop, through `devctl`. No lifecycle access from any other guest |
+| Dev VM IDs | 103 and above, up to 249. 100–102 are the static fleet |
+| Dev VM name | `dev-<project>`, derived from the project name at creation |
+| Address | `192.168.100.<vmid>`, the last octet of the ID |
+| MAC | Derived from the dev VM ID, so a clone never collides with its siblings |
+| Hostname | Matches the registered name, set on first start once the guest agent answers |
+| DNS | Registered on the host for both the short name and the fleet domain |
+| Control credential | A dedicated account whose only capability is the control program |
+| Admin credential | A separate credential that reaches host `root`, pinned to the desktop's address |
+| Guest shell access | The guest-identity key, not either control credential |
+| Audit | Every accepted and every rejected control operation is logged on the host |
 
-Supersedes: Spec 04 §5.3 (manual `qm clone` block) and the "dev-template runs"
-convention from Spec 04 §5.3.
+### 2.1 The credential matrix
 
-## 2. Design decisions
+This is the security core of the fleet. Four credentials, four different
+blast radii:
 
-| Decision | Default | Rationale |
-|---|---|---|
-| Control channel | Restricted SSH (`vmctl` user, `ForceCommand`, sudoers whitelist) | Matches repo's SSH-centric model; no new services on the host |
-| `vmctl` login shell | Real shell (`/bin/bash`), not `nologin` | `sshd_config(5)` runs `ForceCommand` via the user's login shell, so `nologin` makes every forced command fail with "This account is currently not available". Restriction comes from `ForceCommand`, not the shell; the password stays locked (`useradd -r`), so the account is key-only |
-| Credential bootstrap | Host generates keypairs (frag/25), private halves injected into desktop seed via `late-commands` (base64 placeholders) | Consistent with password-hash injection precedent; nothing secret on GitHub |
-| Admin key distribution | `keys/host_os_ed25519.pub` preserved out of the repo tarball by `first-boot.sh` into `/root/provision/keys/`, then injected into every guest seed | Reads the authoritative file rather than the host's `authorized_keys`, so a key added to the host by hand does not silently propagate to every guest |
-| Guest identity key | One keypair generated at install time; private half on the desktop only, public half trusted by the host and all guests | Gives the desktop a single credential for the whole deployment, distinct from the restricted `vmctl` credential |
-| Host trust pin | Guest identity key trusted with `from="192.168.100.100"` plus `no-*-forwarding` | Limits a leaked copy of the key to the desktop VM. Couples host access to the desktop's static lease — if that address changes, the pin must change too or host access breaks while the key is still present |
-| Staged private keys | `shred -u` after all seeds are built | Narrowest exposure for the staging copies. Canonical copies under `/root/.nested-dev/` are kept (600, root-only) so re-provisioning stays idempotent |
-| Clone source | PVE template VM 102 (created at host first boot, then converted to template) | `qm template` prevents accidental start; `qm clone` from template is the standard PVE pattern |
-| Per-project creation | `devctl add <name>` → `vmctl-host add` (host-side) | On-demand, no pre-registration; desktop remains unaware of future projects |
-| IP allocation | `192.168.100.<vmid>` for VMIDs 103–249 | Deterministic, matches existing dnsmasq convention for 100/101/102 |
-| MAC allocation | `52:54:00:00:02:XX` where XX = `vmid & 255` (hex) | Deterministic, avoids dnsmasq conflicts |
-| Firewall addition | Host INPUT: `--dport 22 -s 192.168.100.100` (desktop only) | Minimal; desktop is the only trusted interactive client |
-| Provisioning gate | `qm guest cmd` ping + log tail with bounded timeout before template conversion | Ensures 102 is provisioned before lockdown |
-| Template refresh | `refresh-guests.sh` (operator-run on host) | Avoids host-side automation; operator controls REF bump + rebuild |
-
-### 2.1 Credential matrix
-
-| Principal | Host `/root/.ssh/authorized_keys` | Desktop `~/.ssh` | LLM / dev `~/.ssh/authorized_keys` |
+| Credential | Lives on | Can do | Cannot do |
 |---|---|---|---|
-| `host_os_ed25519.pub` (operator) | via PVE answer `root-ssh-keys` | `authorized_keys` | `authorized_keys` |
-| Guest identity public key | `from="192.168.100.100"` pin | — | `authorized_keys` |
-| Guest identity private key | — | `nested-dev-id` | — |
-| `vmctl` public key | — | — | — |
-| `vmctl` private key | — | `pvehost_vmctl` | — |
-
-All guests set `allow-pw: false`, so `ssh_authorized_keys` is mandatory rather than
-optional — without it a guest has no working SSH authentication method at all.
-The password hash is still set (console and xrdp) but is not usable for SSH.
-
-The two desktop credentials serve different purposes and are not
-interchangeable: `pvehost_vmctl` is `ForceCommand`-restricted to the
-`vmctl-host` verb allowlist, while `nested-dev-id` opens a full shell on the
-host (`devctl host`) and on guests (`devctl ssh <vmid>`).
-
-## 3. Host-side components
-
-### 3.1 `frag/25-desktop-control.sh` — vmctl user + keys + inventory
-
-Runs between frag/20 (memory) and frag/30 (guest creation) in the host first-boot
-provisioner. Creates the vmctl account and its control keypair, plus the guest
-identity keypair and the host trust entry for it.
-
-```bash
-#!/usr/bin/env bash
-# frag/25-desktop-control.sh — vmctl user, keypair, sudoers, inventory
-set -euo pipefail
-
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
-
-# --- Inventory directory ---
-mkdir -p /etc/nested-dev
-cat > /etc/nested-dev/inventory <<'EOF'
-# VMID  NAME  HOSTNAME  IP  MAC  STATUS  PROJECT
-# 100  desktop  lychee  192.168.100.100  52:54:00:00:01:00  auto-started  desktop
-# 101  llm  lychee-llm  192.168.100.101  52:54:00:00:01:01  auto-started  llm
-# 102  dev-template  lychee-dev-template  192.168.100.102  52:54:00:00:01:02  template  dev-template
-# (103+ per-project dev VMs added by vmctl-host on demand)
-EOF
-log "Inventory created at /etc/nested-dev/inventory"
-
-# --- vmctl user ---
-# NOTE: the shell must be a real one. sshd_config(5) invokes ForceCommand as
-# "<login shell> -c '<forced command>'", so nologin would make every devctl
-# command fail. Restriction comes from the forced command, not the shell.
-VMCTL_SHELL="/bin/bash"
-if ! id vmctl >/dev/null 2>&1; then
-    useradd -r -m -s "$VMCTL_SHELL" -d /home/vmctl vmctl
-    log "vmctl user created (shell=${VMCTL_SHELL})"
-else
-    current_shell=$(getent passwd vmctl | cut -d: -f7)
-    if [ "$current_shell" != "$VMCTL_SHELL" ]; then
-        usermod -s "$VMCTL_SHELL" vmctl
-        log "vmctl shell corrected: ${current_shell} -> ${VMCTL_SHELL}"
-    else
-        log "vmctl user already exists (shell=${VMCTL_SHELL})"
-    fi
-fi
-
-# --- Generate control keypair ---
-VMCTL_KEY_DIR="/root/.nested-dev/vmctl"
-mkdir -p "$VMCTL_KEY_DIR"
-if [ ! -f "${VMCTL_KEY_DIR}/vmctl_ed25519" ]; then
-    ssh-keygen -t ed25519 -f "${VMCTL_KEY_DIR}/vmctl_ed25519" -N "" \
-        -C "vmctl@nested-dev"
-    log "Control keypair generated"
-else
-    log "Control keypair already exists"
-fi
-
-# --- authorized_keys with ForceCommand restriction ---
-mkdir -p /home/vmctl/.ssh
-chmod 700 /home/vmctl/.ssh
-PUB_KEY=$(cat "${VMCTL_KEY_DIR}/vmctl_ed25519.pub")
-cat > /home/vmctl/.ssh/authorized_keys <<AUTH_EOF
-command="/usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ${PUB_KEY}
-AUTH_EOF
-chmod 600 /home/vmctl/.ssh/authorized_keys
-chown -R vmctl:vmctl /home/vmctl/.ssh
-log "authorized_keys written (ForceCommand → vmctl-host)"
-
-# --- sudoers: only vmctl-host via root, no password ---
-cat > /etc/sudoers.d/vmctl <<'SUDOERS_EOF'
-vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host
-SUDOERS_EOF
-chmod 440 /etc/sudoers.d/vmctl
-log "sudoers drop-in written"
-
-# --- Copy vmctl-host script ---
-cp /root/provision/vmctl/vmctl-host /usr/local/sbin/vmctl-host
-chmod 755 /usr/local/sbin/vmctl-host
-log "vmctl-host installed"
-
-# --- Staging path for frag/30 (desktop seed injection) ---
-cp "${VMCTL_KEY_DIR}/vmctl_ed25519" /root/.nested-dev/vmctl-priv-staged
-chmod 600 /root/.nested-dev/vmctl-priv-staged
-log "Private key staged for desktop seed injection"
-
-# --- Guest identity keypair (private half → desktop only) ---
-GUEST_ID_KEY_DIR="/root/.nested-dev/guest-id"
-DESKTOP_IP="192.168.100.100"
-mkdir -p "$GUEST_ID_KEY_DIR"
-if [ ! -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" ]; then
-    ssh-keygen -t ed25519 -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" -N "" \
-        -C "guest-id@$(hostname -s)"
-    chmod 600 "${GUEST_ID_KEY_DIR}/guest_id_ed25519"
-    chmod 644 "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub"
-fi
-
-# Trust it on the host, pinned to the desktop's static address so a leaked copy
-# is only usable from the desktop VM. grep -qF on the key body keeps re-runs
-# from appending a duplicate entry.
-GUEST_ID_PUB=$(cat "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub")
-mkdir -p /root/.ssh && chmod 700 /root/.ssh
-touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
-if ! grep -qF "$GUEST_ID_PUB" /root/.ssh/authorized_keys; then
-    printf 'from="%s",no-agent-forwarding,no-port-forwarding,no-X11-forwarding %s\n' \
-        "$DESKTOP_IP" "$GUEST_ID_PUB" >> /root/.ssh/authorized_keys
-fi
-
-# Staged unconditionally on every run; frag/30 shreds it once seeds are built.
-cp "${GUEST_ID_KEY_DIR}/guest_id_ed25519" /root/.nested-dev/guest-id-priv-staged
-chmod 600 /root/.nested-dev/guest-id-priv-staged
-
-log "=== desktop-control setup complete ==="
-```
-
-### 3.2 `provision/host/vmctl/vmctl-host` — enforcement script (shipped as repo file)
-
-The `ForceCommand` target; validates verbs, VMIDs, and project names; wraps `qm`.
-
-```bash
-#!/usr/bin/env bash
-# vmctl-host — restricted host-side control for dev VMs
-# Called by vmctl@host via ForceCommand; argv: <verb> [args...]
-set -euo pipefail
-
-INVENTORY="/etc/nested-dev/inventory"
-DEV_MIN=103
-DEV_MAX=249
-
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/nested-dev-vmctl.log; }
-
-die() { echo "ERROR: $*" >&2; log "REJECT: $*"; exit 1; }
-
-# --- Parse SSH_ORIGINAL_COMMAND or $@ ---
-CMD="${SSH_ORIGINAL_COMMAND:-$*}"
-set -- $CMD  # re-split into positional
-
-VERB="${1:-}"
-shift || true
-
-case "$VERB" in
-    list)
-        echo "VMID  NAME                HOSTNAME                IP                STATUS"
-        echo "----  ----                --------                --                ------"
-        # Static entries (always present)
-        printf "%-5s %-18s %-24s %-17s %s\n" 100 desktop lychee "192.168.100.100" "running"
-        printf "%-5s %-18s %-24s %-17s %s\n" 101 llm lychee-llm "192.168.100.101" "running"
-        printf "%-5s %-18s %-24s %-17s %s\n" 102 dev-template lychee-dev-template "192.168.100.102" "template"
-        # Dynamic entries from qm
-        for vid in $(seq $DEV_MIN $DEV_MAX); do
-            if qm status "$vid" >/dev/null 2>&1; then
-                STATUS=$(qm status "$vid" 2>/dev/null | awk '{print $2}')
-                NAME=$(qm config "$vid" 2>/dev/null | grep '^name:' | awk '{print $2}')
-                HOST="${NAME:-dev-${vid}}"
-                printf "%-5s %-18s %-24s %-17s %s\n" "$vid" "$NAME" "$HOST" "192.168.100.${vid}" "$STATUS"
-            fi
-        done
-        ;;
-
-    status)
-        [ -n "${1:-}" ] || die "usage: status <vmid>"
-        VMID="$1"
-        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range ($DEV_MIN–$DEV_MAX)"
-        qm status "$VMID" 2>/dev/null || die "VM $VMID does not exist"
-        ;;
-
-    start)
-        [ -n "${1:-}" ] || die "usage: start <vmid>"
-        VMID="$1"
-        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
-        NAME=$(qm config "$VMID" 2>/dev/null | grep '^name:' | awk '{print $2}')
-        [[ "$NAME" == dev-* ]] || die "VM $VMID name '$NAME' does not match dev-* pattern"
-        STATUS=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
-        [ "$STATUS" = "stopped" ] || die "VM $VMID is not stopped (status: $STATUS)"
-        qm start "$VMID"
-        log "START $VMID ($NAME)"
-        echo "VM $VMID ($NAME) started"
-        ;;
-
-    shutdown)
-        [ -n "${1:-}" ] || die "usage: shutdown <vmid>"
-        VMID="$1"
-        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
-        qm shutdown "$VMID" --forceStop 0 2>/dev/null || qm stop "$VMID" 2>/dev/null
-        log "SHUTDOWN $VMID"
-        echo "VM $VMID shutting down"
-        ;;
-
-    stop)
-        [ -n "${1:-}" ] || die "usage: stop <vmid>"
-        VMID="$1"
-        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
-        qm stop "$VMID" 2>/dev/null || true
-        log "STOP $VMID (forced)"
-        echo "VM $VMID stopped (forced)"
-        ;;
-
-    add)
-        [ -n "${1:-}" ] || die "usage: add <project-name>"
-        PROJECT="$1"
-        [[ "$PROJECT" =~ ^[a-z0-9][a-z0-9_-]{0,30}$ ]] || die "Project name must be lowercase alphanumeric/underscore/hyphen, max 32 chars"
-        # Find next available VMID
-        NEXT_VID=""
-        for vid in $(seq $DEV_MIN $DEV_MAX); do
-            if ! qm status "$vid" >/dev/null 2>&1; then
-                NEXT_VID="$vid"
-                break
-            fi
-        done
-        [ -n "$NEXT_VID" ] || die "No free VMIDs in range $DEV_MIN–$DEV_MAX"
-
-        # Clone template
-        FULLNAME="dev-${PROJECT}"
-        MAC_SUFFIX=$(printf '%02x' $((NEXT_VID & 255)))
-        MAC="52:54:00:00:02:${MAC_SUFFIX}"
-        HOSTNAME="lychee-${FULLNAME}"
-        IP="192.168.100.${NEXT_VID}"
-
-        qm clone 102 "$NEXT_VID" --name "$FULLNAME" --full
-        qm set "$NEXT_VID" --net0 "virtio=${MAC},bridge=vmbr0,firewall=1"
-        log "CLONE $NEXT_VID <- 102, name=$FULLNAME, MAC=$MAC"
-
-        # dnsmasq static entry
-        cat >> /etc/dnsmasq.d/zz-dev.conf <<DNS_EOF
-dhcp-host=${MAC},${HOSTNAME},${IP}
-address=/${HOSTNAME}/${IP}
-address=/${HOSTNAME}.wolfskeep.com/${IP}
-DNS_EOF
-        systemctl reload dnsmasq
-        log "dnsmasq entry added: ${HOSTNAME} → ${IP}"
-
-        # /etc/hosts entry
-        if ! grep -q "^${IP} " /etc/hosts; then
-            echo "${IP} ${HOSTNAME}.wolfskeep.com ${HOSTNAME}" >> /etc/hosts
-            log "/etc/hosts updated: ${IP} ${HOSTNAME}"
-        fi
-
-        # Inventory
-        echo "${NEXT_VID}  ${FULLNAME}  ${HOSTNAME}  ${IP}  ${MAC}  stopped  ${PROJECT}" >> "$INVENTORY"
-        log "Inventory updated: VMID ${NEXT_VID} = ${PROJECT}"
-
-        echo "VM ${NEXT_VID} (${FULLNAME}) created and stopped. Start with: start ${NEXT_VID}"
-        ;;
-
-    log)
-        [ -n "${1:-}" ] || die "usage: log <vmid>"
-        VMID="$1"
-        [[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be numeric"
-        [ "$VMID" -ge "$DEV_MIN" ] && [ "$VMID" -le "$DEV_MAX" ] || die "VMID $VMID outside dev range"
-        # Guest agent required; fall back to serial console
-        qm guest exec "$VMID" -- tail -n 50 /var/log/dev-firstboot.log 2>/dev/null \
-            || qm guest exec "$VMID" -- cat /var/log/dev-firstboot.log 2>/dev/null \
-            || echo "Could not read log (VM may not be running or guest agent not ready)"
-        ;;
-
-    *)
-        echo "Usage: <command> [args]" >&2
-        echo "  list                    — list dev VMs" >&2
-        echo "  status <vmid>           — VM status" >&2
-        echo "  start <vmid>            — start a dev VM" >&2
-        echo "  shutdown <vmid>         — graceful stop" >&2
-        echo "  stop <vmid>             — force stop" >&2
-        echo "  add <project-name>      — create new dev VM from template" >&2
-        echo "  log <vmid>              — tail first-boot log" >&2
-        exit 1
-        ;;
-esac
-```
-
-### 3.3 `provision/host/vmctl/sudoers` (shipped as repo file, installed by frag/25)
-
-```
-# /etc/sudoers.d/vmctl — vmctl can only run vmctl-host as root
-vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host
-```
-
-## 4. Desktop-side components
-
-### 4.1 `devctl` wrapper (shipped as repo file at `desktop/devctl`, installed by desktop-firstboot)
-
-```bash
-#!/usr/bin/env bash
-# devctl — desktop-side dev VM control wrapper
-# Fleet control (list/start/stop/add/log) delegates to vmctl@pvehost, which is a
-# restricted forced-command credential with no shell access.
-# `devctl ssh` opens a real shell inside a guest using the desktop's own
-# guest-identity key (~/.ssh/nested-dev-id), not the admin key.
-# `devctl host` runs a command on the PVE host as root via the same identity key.
-set -euo pipefail
-
-PVEHOST="pvehost"    # ~/.ssh/config alias → 192.168.100.1 via vmctl@host
-PVEADMIN="pveadmin"  # ~/.ssh/config alias → 192.168.100.1 via root@host
-SSH_OPTS="-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
-GUEST_ID_KEY="${HOME}/.ssh/nested-dev-id"
-
-# All guests share the desktop's username, so take it from the environment
-# rather than hardcoding it (devctl is not templated through personalization.sh).
-GUEST_USER="${USER:-}"
-if [ -z "$GUEST_USER" ]; then
-    echo "devctl: USER is not set — run as the desktop user" >&2
-    exit 1
-fi
-
-require_guest_id_key() {
-    if [ ! -s "$GUEST_ID_KEY" ]; then
-        echo "devctl: missing guest identity key ${GUEST_ID_KEY}" >&2
-        exit 1
-    fi
-}
-
-usage() {
-    echo "Usage: devctl <command> [args]" >&2
-    echo "" >&2
-    echo "Fleet control (restricted, via vmctl):" >&2
-    echo "  list                          List dev VMs" >&2
-    echo "  status <name|vmid>            VM status" >&2
-    echo "  start <name|vmid>             Start a dev VM" >&2
-    echo "  stop <name|vmid>              Graceful stop" >&2
-    echo "  kill <name|vmid>              Force stop" >&2
-    echo "  add <project-name>            Create new dev VM from template" >&2
-    echo "  log <name|vmid>               Tail first-boot log" >&2
-    echo "" >&2
-    echo "Shell access (full privileges, via guest identity key):" >&2
-    echo "  ssh <name|vmid> [cmd...]      SSH to dev VM directly" >&2
-    echo "  host [cmd...]                 Run a command on the PVE host as root" >&2
-    exit 1
-}
-
-[ $# -ge 1 ] || usage
-
-# Resolve name→vmid (names start with "dev-")
-resolve() {
-    local arg="$1"
-    if [[ "$arg" =~ ^[0-9]+$ ]]; then
-        echo "$arg"
-        return
-    fi
-    # Look up by name via list
-    local line
-    line=$(ssh $SSH_OPTS vmctl@${PVEHOST} list 2>/dev/null | grep -E "^[0-9]+\s+${arg}\b" | head -1) || true
-    if [ -n "$line" ]; then
-        echo "$line" | awk '{print $1}'
-    else
-        echo ""
-    fi
-}
-
-case "$1" in
-    list)
-        ssh $SSH_OPTS vmctl@${PVEHOST} list
-        ;;
-    status)
-        [ $# -ge 2 ] || { echo "Usage: devctl status <name|vmid>" >&2; exit 1; }
-        VMID=$(resolve "$2")
-        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
-        ssh $SSH_OPTS vmctl@${PVEHOST} status "$VMID"
-        ;;
-    start)
-        [ $# -ge 2 ] || { echo "Usage: devctl start <name|vmid>" >&2; exit 1; }
-        VMID=$(resolve "$2")
-        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
-        ssh $SSH_OPTS vmctl@${PVEHOST} start "$VMID"
-        echo ""
-        echo "First boot may take several minutes. Check with: devctl log ${VMID}"
-        ;;
-    stop)
-        [ $# -ge 2 ] || { echo "Usage: devctl stop <name|vmid>" >&2; exit 1; }
-        VMID=$(resolve "$2")
-        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
-        ssh $SSH_OPTS vmctl@${PVEHOST} shutdown "$VMID"
-        ;;
-    kill)
-        [ $# -ge 2 ] || { echo "Usage: devctl kill <name|vmid>" >&2; exit 1; }
-        VMID=$(resolve "$2")
-        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
-        ssh $SSH_OPTS vmctl@${PVEHOST} stop "$VMID"
-        ;;
-    add)
-        [ $# -ge 2 ] || { echo "Usage: devctl add <project-name>" >&2; exit 1; }
-        ssh $SSH_OPTS vmctl@${PVEHOST} add "$2"
-        ;;
-    log)
-        [ $# -ge 2 ] || { echo "Usage: devctl log <name|vmid>" >&2; exit 1; }
-        VMID=$(resolve "$2")
-        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
-        ssh $SSH_OPTS vmctl@${PVEHOST} log "$VMID"
-        ;;
-    ssh)
-        [ $# -ge 2 ] || { echo "Usage: devctl ssh <name|vmid> [cmd...]" >&2; exit 1; }
-        VMID=$(resolve "$2")
-        [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
-        shift
-        require_guest_id_key
-        # Guests set allow-pw: false, so the guest identity key is the only way in.
-        ssh $SSH_OPTS -i "$GUEST_ID_KEY" -o IdentitiesOnly=yes \
-            "${GUEST_USER}@192.168.100.${VMID}" "$@"
-        ;;
-    host)
-        # Full root on the PVE host. The host pins this key to the desktop's
-        # address, so the desktop can reach root but a leaked copy cannot.
-        shift || true
-        require_guest_id_key
-        ssh $SSH_OPTS -i "$GUEST_ID_KEY" -o IdentitiesOnly=yes "${PVEADMIN}" "$@"
-        ;;
-    *)
-        usage
-        ;;
-esac
-```
-
-### 4.2 `~/.ssh/config` (installed by desktop-firstboot.sh)
-
-Two aliases, two different privilege levels:
-
-```
-Host pvehost
-    HostName 192.168.100.1
-    User vmctl
-    IdentityFile ~/.ssh/pvehost_vmctl
-    StrictHostKeyChecking accept-new
-    IdentitiesOnly yes
-Host pveadmin
-    HostName 192.168.100.1
-    User root
-    IdentityFile ~/.ssh/nested-dev-id
-    StrictHostKeyChecking accept-new
-    IdentitiesOnly yes
-```
-
-### 4.3 Desktop private keys (injected via desktop user-data seed)
-
-Both keys are generated on the host at install time, base64-encoded by
-`frag/30`, and decoded into the desktop's `~/.ssh` by `late-commands`:
-
-| Key | Placeholder | Written to |
-|---|---|---|
-| vmctl control | `__VMCTL_PRIV_B64__` | `~/.ssh/pvehost_vmctl` |
-| guest identity | `__GUEST_ID_PRIV_B64__` | `~/.ssh/nested-dev-id` |
-
-`late-commands` runs in cloud-init's **init** stage, which is *before* the
-cloud_config stage where `cc_ssh` creates `~/.ssh` and writes
-`authorized_keys`. So the seed must `mkdir -p ~/.ssh` before redirecting into
-it, otherwise the write fails with "No such file or directory". The committed
-templates do this, and `desktop-firstboot.sh` independently hard-fails if either
-key is missing or is not a valid OpenSSH private key.
-
-`frag/30` shreds both staged private copies once every seed is built. The
-canonical copies under `/root/.nested-dev/` are kept at mode 600 so a
-re-provision stays idempotent.
-
-## 5. Firewall addition
-
-Host `frag/90-finalize.sh` adds to the INPUT chain (after the existing ESTABLISHED
-and LAN rules):
-
-```bash
-# SSH to host from desktop only (for vmctl/devctl control)
-iptables -A INPUT -p tcp --dport 22 -s 192.168.100.100 -j ACCEPT
-```
-
-This goes in `frag/90-finalize.sh` alongside the existing SSH/2222 and 8006 rules.
-FORWARD remains unchanged (desktop can already reach any vmbr0 peer).
-
-## 6. First-start provisioning gate
-
-When `devctl add` creates a new clone, the clone boots from a copy of the
-template's provisioned disk. If the template was properly provisioned and
-`cloud-init clean` was run, the clone boots with a fresh identity — no
-first-boot provisioning needed.
-
-However, the dev-template (102) itself must be provisioned exactly **once** at
-host first boot. The sequence in `frag/30-create-guests.sh`:
-
-1. Create VM 102 with NoCloud seed + Ubuntu Server ISO.
-2. `qm start 102`.
-3. Wait for provisioning to complete (poll `qm guest cmd 102 ping` +
-   check `/var/log/dev-firstboot.log` via `qm guest exec`, bounded by timeout).
-4. `qm guest exec 102 -- cloud-init clean` (clean identity for future clones).
-5. `qm guest exec 102 -- /bin/bash -c 'truncate -s 0 /etc/machine-id && rm -f /etc/ssh/ssh_host_*'` (clear host identity).
-6. `qm shutdown 102`.
-7. `qm template 102` (marks as template; can never be started directly).
-
-If the timeout expires before provisioning completes, `frag/30` logs a warning and
-leaves VM 102 running. The operator can then finish provisioning manually and run
-`qm template 102` by hand. `frag/90` (firewall lockdown) still runs — the
-provisioning network window is the brief time between `qm start 102` in frag/30
-and `iptables` application in frag/90.
-
-## 7. Inventory and DNS
-
-### 7.1 Inventory file (`/etc/nested-dev/inventory`)
-
-Maintained by `vmctl-host`; tab-separated:
-
-```
-VMID  NAME  HOSTNAME  IP  MAC  STATUS  PROJECT
-100  desktop  lychee  192.168.100.100  52:54:00:00:01:00  running  desktop
-101  llm  lychee-llm  192.168.100.101  52:54:00:00:01:01  running  llm
-102  dev-template  lychee-dev-template  192.168.100.102  52:54:00:00:01:02  template  dev-template
-103  dev-nested  lychee-dev-nested  192.168.100.103  52:54:00:00:02:67  stopped  nested
-```
-
-### 7.2 dnsmasq drop-in (`/etc/dnsmasq.d/zz-dev.conf`)
-
-Created by `frag/25` (empty header) and appended to by `vmctl-host add`:
-
-```bash
-# Per-project dev VMs — added by vmctl-host on demand
-# (do not edit manually; managed by vmctl-host)
-```
-
-After each `add`, the file gets entries like:
-
-```
-dhcp-host=52:54:00:00:02:67,lychee-dev-nested,192.168.100.103
-address=/lychee-dev-nested/192.168.100.103
-address=/lychee-dev-nested.wolfskeep.com/192.168.100.103
-```
-
-`dnsmasq` is reloaded after each addition.
-
-### 7.3 `/etc/hosts`
-
-Appended by `vmctl-host add`; entries like:
-
-```
-192.168.100.103 lychee-dev-nested.wolfskeep.com lychee-dev-nested
-```
-
-## 8. User-data template change
-
-The desktop `user-data/user-data` gains a placeholder for the vmctl private key
-injected by the host at seed build time. This follows the same pattern as the
-password-hash injection (Spec 06).
-
-New `late-commands` entry in `desktop/user-data/user-data`:
-
-```yaml
-    # vmctl control key for dev fleet management
-    - "curtin in-target --target=/target -- sh -c 'echo __VMCTL_PRIV_B64__ | base64 -d > /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl && chmod 600 /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl'"
-```
-
-The host substitutes `__VMCTL_PRIV_B64__` with the base64-encoded private key
-during seed assembly (same `sed` pass as password hash). The placeholder
-`__VMCTL_PRIV_B64__` in the committed file is harmless.
-
-## 9. Security model
-
-| Secret | Where it lives | On GitHub? |
-|---|---|---|
-| vmctl private key | Host: `/root/.nested-dev/vmctl/vmctl_ed25519` | No |
-| | Desktop: `~/.ssh/pvehost_vmctl` (injected via seed) | No |
-| vmctl public key | Host: `/home/vmctl/.ssh/authorized_keys` | No (host only) |
-| Host root SSH key | Host ISO → `keys/host_os_ed25519.pub` embedded | Pub key: yes |
-| Login password hash | Host ISO → `/root/.personalization-password-hash` → guest seeds | No |
-| Root password hash | Host ISO → `/etc/shadow` only; no file the provisioner can read | No |
-
-`vmctl` holds no password: it is key-only with a `ForceCommand` shell and
-passwordless sudo limited to `vmctl-host`. It cannot read either hash — the
-root hash is never written to a file at all.
-
-**vmctl is constrained to:**
-- Verbs: `list`, `status`, `start`, `shutdown`, `stop`, `add`, `log`
-- VMIDs: 103–249 (100/101/102 explicitly rejected by the range check)
-- Project names: `dev-*` pattern (validated by name check on `start`)
-- No shell, no file access, no forwarding
-
-**Desktop→host INPUT:** TCP/22 from 192.168.100.100 only; vmctl user with
-ForceCommand → `vmctl-host`; sudoers restricted to one exact script path.
-
-## 10. Acceptance
-
-* Host first boot: `qm list` shows 100 (running), 101 (running), 102 (template).
-  No other VMs.
-* `qm status 102` returns template status; `qm start 102` is rejected by PVE.
-* Desktop can `ssh pvehost list` and see the three base VMs.
-* `devctl add test-project` creates VM 103 (`dev-test-project`, stopped), with
-  dnsmasq entry; desktop resolves `lychee-dev-test-project` via DNS.
-* `devctl start 103` boots the VM; `devctl log 103` shows first-boot output.
-* `devctl stop 103` gracefully shuts it down; `devctl kill 103` force-stops.
-* `vmctl-host` rejects VMID 100/101/102 (out of range) and non-`dev-*` names.
-* Desktop cannot reach host:22 before frag/90 (no rule yet); can reach after.
-* `grep __VMCTL_PRIV_B64__ desktop/user-data/user-data` shows only the placeholder;
-  the committed file contains no real key material.
-* `/etc/nested-dev/inventory` is maintained with correct entries after `add`.
-* `devctl ssh 103 hostname` returns `lychee-dev-nested` (the cloned VM's hostname).
+| Operator key | Operator's machine, trusted by the host account | Log in as the operator account on the host and every guest | Nothing privileged on its own |
+| Control key | Desktop only | List, inspect, start, stop, create and read logs of dev VMs — through the control program and nothing else | Open a shell on the host; touch any VM outside the dev range; do anything the control program does not implement |
+| Admin key | Desktop only | Host `root`; guest shells on any VM | Nothing beyond that |
+| Guest-identity key | Desktop, and the public half in every guest | Open a shell in a guest as the account; host `root` from the desktop's address only | Operate the fleet through the control program |
+
+The separation is the point. The control key is what fleet automation would
+hold; giving it a shell would turn a bug in one project's dev VM into root on
+the hypervisor. The admin key is the operator's escape hatch and is
+deliberately the most powerful credential in the fleet, which is why it is
+pinned to one address.
+
+## 3. Requirements
+
+### R-07.1 The control account can only run the control program
+
+* **R-07.1.1** A dedicated, non-human account on the host exists solely to
+  carry the control key. It has a locked password and is reachable by key only.
+* **R-07.1.2** Its key entry carries a forced command naming the control
+  program, plus options disabling agent, port and X11 forwarding. Anything the
+  client asks for is replaced by the forced command; the client's own command
+  string is passed as arguments to it.
+* **R-07.1.3** The account's login shell is a real shell, not a "no login"
+  shell. A forced command is executed *by* the login shell; a shell that refuses
+  to run refuses the forced command too, so the entire control channel fails
+  closed with an error that looks like a permissions problem.
+* **R-07.1.4** The account has no privilege beyond invoking the control
+  program, and the control program is owned by `root` and not writable by the
+  account. The restriction must not be removable by the credential it
+  restricts.
+* **R-07.1.5** The account is created idempotently, including correcting a
+  shell left wrong by an earlier run.
+
+### R-07.2 The control program is the whole surface
+
+* **R-07.2.1** The host-side control program accepts exactly these
+  operations: list, status, start, graceful stop, forced stop, create, and read
+  a guest log. Anything else is refused and logged as refused.
+* **R-07.2.2** Every operation that takes an ID validates that it is numeric
+  **and** inside the dev range before acting on it. The dev range starts above
+  the static fleet, so an out-of-range ID cannot reach the desktop, the LLM VM
+  or the template even if the range check is somehow skipped.
+* **R-07.2.3** Starting a dev VM additionally requires that the ID's VM is
+  currently stopped and that its name matches the dev naming pattern. Both
+  checks exist because a name change is how a VM would be moved across the
+  fleet's trust boundary.
+* **R-07.2.4** The program never passes unvalidated input to the
+  hypervisor's tooling. Project names and IDs are pattern-checked first.
+* **R-07.2.5** Reading a guest log goes through the guest agent and degrades
+  to a clear message when the VM is stopped or the agent is not up yet, rather
+  than an error the operator has to interpret.
+* **R-07.2.6** The program is installed at a fixed path and its installation is
+  **fatal** if it cannot be found in the provision tree. A missing control
+  program is not a warning: every control verb then fails against a forced
+  command that does not exist, and the failure surfaces on the desktop as an
+  unexplained channel failure.
+
+### R-07.3 `devctl` is the desktop's interface
+
+* **R-07.3.1** The desktop presents the fleet operations as named subcommands,
+  grouped in its own help text by the credential they use. The grouping is the
+  security documentation: the operator can see which operations are restricted
+  and which are full-privilege without reading the source.
+* **R-07.3.2** A VM may be named by its name or by its ID, for every operation
+  that takes one. Requiring the operator to remember IDs is how IDs get copied
+  wrong.
+* **R-07.3.3** Name resolution goes through the control channel's own listing,
+  so a name the host does not know is reported as unknown rather than passed
+  through.
+* **R-07.3.4** Starting a dev VM tells the operator that the first boot takes
+  several minutes and how to watch it. A start that returns instantly looks
+  like it failed.
+* **R-07.3.5** Shelling into a guest uses the guest-identity key and reaches
+  the guest by its own address, never by a control credential. Guests refuse
+  password authentication, so this key is the only way in.
+* **R-07.3.6** Running a command on the host uses the admin credential, and
+  requires the guest-identity key to be present. Both operations fail with a
+  named error naming the missing key rather than an opaque SSH failure.
+* **R-07.3.7** The wrapper takes the guest account name from its environment
+  and refuses to run without it, rather than embedding a name that a
+  personalization change would silently invalidate.
+* **R-07.3.8** Errors the operator can act on name the thing to check: a
+  missing key names the log to read; an unknown VM names what was asked for.
+
+### R-07.4 The clone contract
+
+* **R-07.4.1** Creating a dev VM requires a project name, which is validated as
+  a short lowercase name and is the only operator-supplied free text in the
+  whole control path.
+* **R-07.4.2** The next free ID in the dev range is allocated, and the range
+  being exhausted is an explicit error rather than an ID outside the range.
+* **R-07.4.3** The dev VM is a full clone of the template. It is created
+  **stopped** and never started by the create operation, so a VM that is
+  created is not yet running, untrusted code.
+* **R-07.4.4** Its name is `dev-<project>`; its address is the last octet of
+  its ID; its MAC is derived from that ID; its registered hostname is the fleet
+  name derived from its project.
+* **R-07.4.5** The dev VM's network interface is marked firewall-managed, so the
+  host's forwarding policy applies to it (R-01.11.8).
+* **R-07.4.6** Registration happens as part of creation, atomically with it:
+  the address lease, both name resolutions, and the inventory row are all
+  written before the operation reports success. A dev VM that resolves by
+  neither name is a dev VM the operator cannot reach.
+* **R-07.4.7** The host's name service is reloaded after registration, so the
+  new name resolves without waiting for a restart.
+* **R-07.4.8** The inventory row records the ID, name, hostname, address, MAC,
+  status and project, so the fleet can be reconstructed from one file.
+* **R-07.4.9** A clone's hostname is set to its registered name once the guest
+  agent first answers, without blocking the start operation. A clone that
+  reports the template's hostname makes every log line in the fleet ambiguous.
+* **R-07.4.10** A guest agent that never answers is a logged warning, not a
+  failed start. The VM is running and usable; only its self-reported name is
+  wrong, and the log says exactly which VM and what to run.
+
+### R-07.5 Addressing and naming
+
+* **R-07.5.1** Every fleet VM has a fixed address, and the address is derivable
+  from the ID. Nothing in the fleet depends on DHCP-assigned addresses.
+* **R-07.5.2** Every fleet VM resolves by short name and by fleet domain, on the
+  host and in every guest, through the host's name service.
+* **R-07.5.3** The static fleet's entries are fixed at install time; dev VM
+  entries are appended. A re-provision does not drop the appended entries.
+* **R-07.5.4** A dev VM's MAC is unique among the fleet by construction, so a
+  clone's name and address cannot be confused with a sibling's.
+
+### R-07.6 The admin credential is address-pinned
+
+* **R-07.6.1** The host trusts the guest-identity public key for host `root`
+  only from the desktop's fixed address. A copy of that key presented from any
+  other address is refused.
+* **R-07.6.2** The forwarding options on that entry match the control
+  credential's. An entry that forwards ports would let the same key be used to
+  pivot out of the private subnet.
+* **R-07.6.3** The desktop's address is asserted against the host's name-service
+  configuration by a test, because the pin and the lease must agree. If the
+  desktop's address ever changes and only one of the two is updated, the key is
+  still present and access still silently fails.
+* **R-07.6.4** Trusting the key is idempotent: a re-run does not add a second
+  entry.
+
+### R-07.7 Staged key material
+
+* **R-07.7.1** The control key and the guest-identity key are generated on the
+  host at install time, in a root-only location, and are retained across
+  re-runs so that re-provisioning does not invalidate a credential a guest
+  already trusts.
+* **R-07.7.2** Their private halves are staged for the desktop seed and
+  destroyed once the seeds are built (Spec 06 §R-06.6).
+* **R-07.7.3** The guest-identity key is a **different key** from the control
+  key. The control key cannot be used to open a guest shell, and the
+  guest-identity key cannot operate the fleet. One key serving both purposes
+  would make the forced-command restriction the only thing standing between a
+  leaked credential and a host shell.
+
+### R-07.8 Audit
+
+* **R-07.8.1** Every accepted operation is logged on the host with the
+  operation, the ID and, where relevant, the name.
+* **R-07.8.2** Every refused operation is logged as refused, with the reason.
+  A refusal log is what makes an attempt to reach a non-dev VM visible.
+* **R-07.8.3** The control log is separate from the provisioning log, because
+  the control channel is used for the whole life of the fleet while
+  provisioning runs once.
+* **R-07.8.4** Logging records which credential class acted: control operations
+  and administrative operations are distinguishable in the log.
+
+### R-07.9 Sizing and limits
+
+* **R-07.9.1** The dev range holds 147 IDs, 103 through 249, matching the
+  addressing scheme's usable range.
+* **R-07.9.2** The dev range is closed. The operator can add dev VMs; nothing
+  in the fleet can address a VM outside the range.
+
+## 4. Invariants
+
+* I-07.1 Only the desktop holds a credential that can operate the fleet.
+* I-07.2 The fleet control credential cannot open a shell on the host.
+* I-07.3 No dev VM can address or operate any VM outside the dev range.
+* I-07.4 A newly created dev VM is stopped.
+* I-07.5 A dev VM is always a clone of the one template.
+* I-07.6 Every fleet VM is addressable by name and by fixed address.
+* I-07.7 Every control operation, accepted or refused, is logged.
+* I-07.8 The template is never started.
+
+## 5. Acceptance
+
+| # | Check |
+|---|---|
+| A-07.1 | The control account exists with a locked password, a real login shell, and a key entry carrying a forced command plus the three forwarding restrictions. |
+| A-07.2 | The control credential can list, inspect, start, stop, create and log. It cannot open an interactive shell, and an attempted shell is replaced by the forced command. |
+| A-07.3 | The control program is present and root-owned; the control account cannot replace it. |
+| A-07.4 | A missing control program in the provision tree aborts provisioning with a named error rather than a warning. |
+| A-07.5 | Every control verb accepts a name or an ID and reports an unknown name as unknown. |
+| A-07.6 | A non-numeric ID, and an ID for the desktop, the LLM VM or the template, are all refused and logged as refused. |
+| A-07.7 | Starting a VM whose name does not match the dev pattern is refused and logged. Starting an already-running VM is refused. |
+| A-07.8 | An unrecognised verb is refused and logged. |
+| A-07.9 | A dev VM is created stopped, with the dev name pattern, an address whose last octet is its ID, a MAC derived from that ID, and a firewall-managed interface. |
+| A-07.10 | Immediately after creation the new VM resolves by short name and by fleet domain from the host and from another guest, without a restart. |
+| A-07.11 | The inventory has exactly one row for the new VM, with the ID, name, hostname, address, MAC and project. |
+| A-07.12 | After the first start, the dev VM's own hostname matches its registered name, and the start command returned before the agent answered. |
+| A-07.13 | With the agent withheld, the start still succeeds, and the log names the VM and the command to set the name by hand. |
+| A-07.14 | The inventory's static rows survive a re-provision. |
+| A-07.15 | A dev VM's MAC differs from every other fleet VM's. |
+| A-07.16 | The guest-identity key opens a shell in a guest; the control key does not. |
+| A-07.17 | Host `root` over the admin credential works from the desktop and is **refused** from another guest, using the same key. |
+| A-07.18 | Re-running provisioning does not regenerate either keypair, and does not duplicate the host's trust entry. |
+| A-07.19 | The test that asserts the admin pin matches the name-service lease fails when either one is changed alone. |
+| A-07.20 | The control log shows accepted and refused operations, and distinguishes control operations from administrative ones. |
+| A-07.21 | The dev range is exhausted: the create operation reports that no ID is free. |
+| A-07.22 | `devctl` refuses to run with no account name in its environment, and an unknown verb prints the grouped help. |
+
+## 6. Cross-references
+
+| Spec | Relationship |
+|---|---|
+| Spec 00 | Topology, addressing, the dev range, egress policy |
+| Spec 01 | Fragment 25, the firewall flags on dev VMs, host `root` reachability from the desktop |
+| Spec 02 | The desktop as the operator of this interface; `devctl` installation |
+| Spec 04 | The template these VMs are cloned from; what a clone already has |
+| Spec 05 | Key generation, staging, destruction, the two-credential split |
+| Spec 06 | Seed injection of the two private key halves |
+| Spec 09 | Credential-split, range-boundary and pin-consistency tests |
+
+## 7. Risks
+
+| Risk | Mitigation |
+|---|---|
+| A leaked control key becomes a host shell | The credential is forced-command-only with a real shell, so a shell is not reachable (R-07.1.2, R-07.1.3). A "no login" shell is not used, because it would break the control channel in a way that looks like a permissions fault |
+| A project compromises its dev VM and pivots to the host | No dev VM holds a control or admin credential, and dev VMs cannot address anything outside their range (I-07.1, I-07.3) |
+| The control key is repurposed as a guest-login key | It is a different key from the guest-identity key (R-07.7.3) |
+| A leaked admin key is usable from any guest | The host trust entry is pinned to the desktop's address (R-07.6.1) |
+| The desktop's address changes and the pin and the lease disagree | A test asserts the two agree, and a re-run does not duplicate the entry (R-07.6.3) |
+| A missing control program looks like a control-channel failure | Its installation is fatal, naming the consequence (R-07.2.6) |
+| A dev VM reports the template's hostname | The name is set once the agent answers, and an unanswered agent is a named warning (R-07.4.9, R-07.4.10) |
+| An ID outside the dev range is operated | Two independent checks, and the range starts above the static fleet (R-07.2.2) |
+| Operator-supplied text reaches the hypervisor tooling | Project names are pattern-checked before use (R-07.2.4) |
+| A control operation is attempted and leaves no trace | Accepted and refused operations are both logged (R-07.8.1, R-07.8.2) |

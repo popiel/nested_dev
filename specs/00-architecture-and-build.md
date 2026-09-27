@@ -1,39 +1,41 @@
-# Spec 00 — Architecture and Build Overview
+# Spec 00 — Architecture and build overview
 
-Status: Draft (merged; supersedes `specs-mimo/` and `specs-ds4/`)
-Applies to: Proxmox VE host + Desktop guest + LLM guest + Dev guest(s) media build
-Pinned versions: Proxmox VE **9.2**, Ubuntu **26.04 LTS (Resolute Raccoon)**
+Status: Draft
+Applies to: Proxmox VE host, desktop guest, LLM guest, dev template, dev project VMs
+Pinned versions: Proxmox VE **9.2**, Ubuntu **26.04 LTS**
+Implementation: whole of `provision/`, `desktop/`, `llm/`, `dev/`
 
-## 1. Purpose
+## 1. Scope
 
-This directory specifies how to **build and automatically provision** a
-virtualization setup from install media, per `README.md`:
+Defines the fleet this repository builds and provisions, the decisions that
+apply across all of it, and the requirements every artifact shares.
 
-1. **Host**: Proxmox VE (headless hypervisor, minimal — KVM, storage,
-   bridging, lifecycle only), installed fully unattended from a custom
-   autoinstall ISO.
-2. **Desktop guest (vm 100)**: Ubuntu Desktop VM that owns the motherboard
-   iGPU via VFIO and serves the desktop over RDP (and physical outputs
-   where attached).
-3. **LLM guest (vm 101)**: Ubuntu Server VM that owns the discrete GPU(s)
-   via VFIO and runs CUDA / LLM inference, Docker-based.
-4. **Dev template (vm 102)**: Ubuntu Server VM used as the clone source for
-   all per-project dev VMs. Created once at host first boot from ISO+NoCloud
-   seed, provisioned, then converted to a PVE template (never auto-started).
-5. **Dev project VMs (vm 103+)**: cloned on demand from the template via
-   `devctl` from the desktop VM. Each hosts one software project. Disk +
-   Docker engine only; dev work runs in ephemeral containers. Network
-   severely constrained. Created stopped; started/stopped via `devctl`.
-6. **Reserved (vm 200–249)**: future workload guests.
+In scope: component inventory, topology, cross-cutting decisions, artifact
+provenance, build ordering, shared acceptance. Out of scope: per-component
+detail (Specs 01–09).
 
-No significant utilities run on the host. Additional workload guests can be
-added later without touching the ISO.
+### Purpose
 
-This spec merges `specs-mimo/` (concrete HOWTO, FAI-based) and `specs-ds4/`
-(rigorous autoinstall-based spec). Where they conflicted, this directory wins.
-Rationale for each resolution is recorded in §7.
+A safe environment for running untrusted software. Each concern — desktop,
+LLM inference, software development — is isolated in its own guest VM under a
+minimal host hypervisor. Guests are rebuilt from trusted sources on a regular
+cycle to contain any corruption that occurs.
 
-## 2. Target topology
+## 2. Components
+
+| # | Component | Role | Auto-starts |
+|---|---|---|---|
+| Host | Proxmox VE 9.2 | Minimal hypervisor: KVM, storage, bridging, VM lifecycle. No significant utilities. | — |
+| vm 100 | `desktop` | Owns the motherboard iGPU. Display server and bastion for the other guests. | Yes |
+| vm 101 | `llm` | Owns the discrete GPU(s). CUDA and LLM inference, containerised. | Yes |
+| vm 102 | `dev-template` | Clone source for every per-project dev VM. PVE template. | Never |
+| vm 103+ | `dev-<project>` | One software project each. Disk + Docker engine; dev work in ephemeral containers. | Never |
+| vm 200–249 | reserved | Future workload guests. | Never |
+
+Additional workload guests can be added without rebuilding the host install
+media.
+
+## 3. Topology
 
 ```
 +-----------------------------------------------------------------------+
@@ -42,179 +44,178 @@ Rationale for each resolution is recorded in §7.
 |  $PHYS_NIC (DHCP) --- LAN 192.168.14.0/24                             |
 |  vmbr0 (private, 192.168.100.1/24) --- VMs                            |
 |  dnsmasq on vmbr0: DHCP + DNS for VMs                                 |
-|  NAT/MASQUERADE: VMs → $PHYS_NIC → LAN                                |
-|  storage: local-lvm thin (default); ZFS rpool variant §3              |
+|  NAT/MASQUERADE: VMs -> $PHYS_NIC -> LAN                              |
+|  storage: local-lvm thin                                              |
 |  RAM: 2 GB reserved for host; rest via balloon + ZRAM + swap          |
 |                                                                       |
-|  vm 100 desktop <-- iGPU (0000:00:02.x, VFIO)   --> hostpci0         |
-|  '-- Ubuntu Desktop 26.04 + i3-gaps/dmenu + xrdp (:3389) + lightdm  |
+|  vm 100 desktop <-- iGPU (VFIO)                                       |
+|  '-- Ubuntu Desktop 26.04 + i3-gaps/dmenu + xrdp (:3389) + lightdm    |
 |      Firefox + Chrome (snap); SSH client; X11 forwarding from dev VMs |
-|      192.168.100.100 (lychee / lychee.wolfskeep.com)                  |
+|      192.168.100.100  lychee                                          |
 |                                                                       |
-|  vm 101 llm      <-- dGPU(s) (VFIO)          --> hostpci0[,1]        |
-|  '-- Ubuntu Server 26.04 + NVIDIA driver + CUDA + Docker             |
+|  vm 101 llm     <-- dGPU(s) (VFIO)                                    |
+|  '-- Ubuntu Server 26.04 + NVIDIA driver + CUDA + Docker               |
 |      + Ollama/vLLM containers; models on /data/models                 |
-|      192.168.100.101 (lychee-llm / lychee-llm.wolfskeep.com)         |
+|      192.168.100.101  lychee-llm                                      |
 |                                                                       |
-|  vm 102    dev-template (clone source, PVE template)                  |
+|  vm 102    dev-template (PVE template, clone source)                  |
 |  '-- Ubuntu Server 26.04 + Docker engine; never auto-started          |
-|      192.168.100.102 (lychee-dev-template)                            |
+|      192.168.100.102  lychee-dev-template                             |
 |                                                                       |
 |  vm 103+   dev-<project> (on demand via devctl, Spec 07)              |
-|  '-- Cloned from 102; stopped unless started by desktop               |
-|      192.168.100.103+ (lychee-dev-<project>)                          |
+|  '-- Cloned from 102; stopped unless started by the desktop           |
+|      192.168.100.103+  lychee-dev-<project>                           |
 |      vm 103 = dev-nested (nested_dev repo, Spec 08)                   |
 |                                                                       |
-|  vm 200..249   (reserved: future workload guests)                     |
+|  vm 200..249   reserved                                                |
 +-----------------------------------------------------------------------+
 ```
 
-Physical display outputs (motherboard HDMI/DP) belong to **vm 100** when the
-iGPU is passed through. The host itself is framebuffer-less after boot;
-console/management is via SSH, Proxmox web UI, or serial console.
+Physical display outputs on the motherboard belong to vm 100 once the iGPU is
+passed through. The host is then framebuffer-less; management is via SSH, the
+Proxmox web UI, or a serial/IPMI console.
 
-## 3. Decisions and defaults
+## 4. Requirements
 
-| Decision | Default | Rationale / alternative |
-|---|---|---|
-| Host distro | Proxmox VE **9.2** (official ISO, SHA256 pinned in `provision/host/build-iso.sh`) | `specs-mimo` 9.2 wins over `specs-ds4` 8.x; purpose-built KVM, first-class VFIO |
-| Guest OS | Ubuntu **26.04 LTS** Desktop (vm 100) / Server (vm 101, 102+) | `specs-mimo` 26.04 wins over `specs-ds4` 24.04 per task instruction; `resolute` archive everywhere |
-| VM IDs | `100=desktop`, `101=llm`, `102+=dev-<project>`, `200–249` reserved | `specs-ds4` convention wins; `specs-mimo` (`100=llm`, `200=desktop`, `9001/9002` templates) is superseded |
-| Host storage | `ext4` root + `local-lvm` thin for guest disks + 4–8 GB swap (file or partition) | `specs-mimo` simplicity wins; ZFS `rpool` allowed as documented variant in Spec 01, not default |
-| Memory model (32 GB host) | Host hard-capped 2 GB; Desktop 8 GB / 4 cores; LLM 16 GB / 6 cores; each Dev 8 GB / 4 cores; QEMU balloon + ZRAM (zstd, 50%) + 4 GB disk swap; 64 GB+ tier: LLM 24 GB / 8 cores | 32 GB is the baseline; 16 GB was the original small-host profile (retained as scale-down path in scripts) |
-| Guest media build | `autoinstall` (Subiquity) ISO per guest → host-mediated NoCloud seed at VM creation (Spec 06) | Host fetches user-data from GitHub, injects the personalization login hash (+ vmctl key for desktop), builds seed ISO, boots VM with NoCloud seed. No golden qcow2 files. |
-| GPU driver delivery | Golden images are **GPU-agnostic**; driver + CUDA + serving stack installed on **first boot from official upstreams** | `specs-ds4` wins; `specs-mimo` baked `nvidia-driver-590-server` into FAI image — rejected (ties image to driver/GPU, needs GPU builder) |
-| Desktop session | i3-gaps + dmenu + xrdp + lightdm (default, 32 GB friendly); GNOME + `gnome-remote-desktop` optional profile | i3 is lightweight tiling WM; lightdm for local console on passed-through iGPU; GNOME retained for HW-encode use cases |
-| LLM serving | Docker + NVIDIA Container Toolkit; Ollama baseline container, vLLM optional profile; models on separate data volume mounted at `/data/models` (`/opt/models` symlink for compat) | Merge: mimo's Docker model + ds4's separate-volume + first-boot-install discipline |
-| Dev model | Docker engine only, ephemeral containers, bind mounts, egress-deny. Template 102 (clone source) created at host first boot, converted to PVE template. Per-project VMs 103+ cloned on demand via `devctl` from desktop, created stopped (Spec 07). | Spec 04 (toolchain) + Spec 07 (lifecycle) + Spec 08 (nested dev) |
-| Host networking | Routed: `$PHYS_NIC` DHCP from LAN + private `vmbr0` (192.168.100.1/24); dnsmasq on host serves DHCP/DNS to VMs; host NATs VM egress via MASQUERADE; iptables firewall with per-VM egress policy (desktop=unrestricted, LLM=HTTPS-only, dev=denied, host=HTTPS/DNS/NTP-only) | Replaces bridged design; VMs not directly addressable from LAN; dnsmasq gives predictable IPs without depending on external DHCP |
-| Provisioning model | Answer file + provisioner/first-boot scripts fetched from `popiel/nested_dev` GitHub at install/first boot, pinned to `<REF>` (branch/tag/SHA) | `specs-ds4` discipline wins over mimo's `main`-branch fetch |
-| **Sourcing policy** | GitHub serves **only files authored in this repo** (answer file, provisioner scripts/fragments, `user-data`, first-boot scripts, network fragments). Every third-party artifact (PVE/Ubuntu ISOs, Ubuntu archive packages, `linux-firmware`, NVIDIA driver/CUDA repo, Ollama, iPXE, firmware) is fetched **direct from its official upstream** — never vendored here | From `specs-ds4` 00 §3, retained verbatim |
+### R-00.1 Version pinning
 
-## 4. Artifacts produced
+* **R-00.1.1** Host is Proxmox VE 9.2. All guests are Ubuntu 26.04 LTS.
+* **R-00.1.2** Every third-party input is identified by a version and, where
+  the publisher publishes one, a checksum. A base that moves under a
+  floating tag is not reproducible.
 
-| Artifact | Produced from | Consumed by |
-|---|---|---|
-| `pve_auto.iso` | Official PVE 9.2 ISO + `answer-host.toml` (with `keys/root-password-hash`) + `first-boot.sh` bootstrap (with `keys/personalization-password-hash`) | Host installer |
-| `provision-host.sh` (+ `frag/*.sh`) | `provision/host/` in GitHub at `<REF>` | Host first boot (systemd oneshot) |
-| Guest VMs | Ubuntu official ISO + NoCloud seed assembled by host from GitHub-fetched user-data + the host's persisted personalization hash (Spec 06) | VMs 100/101/102+ |
+### R-00.2 Network shape
 
-## 5. Repository layout (`popiel/nested_dev`, this repo)
+* **R-00.2.1** The host takes a DHCP lease on the LAN. VMs sit on a private
+  `vmbr0` and are **not** addressable from the LAN.
+* **R-00.2.2** The host provides DHCP and DNS for `vmbr0`, with a fixed lease
+  per VM. Fixed addresses are required because the firewall policy, the host
+  trust pin and the SSH config all reference a VM by address.
+* **R-00.2.3** VM egress is NAT'd to the LAN. There is no bridged path from a
+  VM onto the LAN segment.
+* **R-00.2.4** Host management from the LAN is limited to SSH (port 2222) and
+  the web UI (port 8006). Host SSH from inside `vmbr0` is accepted from the
+  desktop only.
+* **R-00.2.5** The host itself reaches only HTTPS, DNS and NTP. A
+  hypervisor with unrestricted egress is a hypervisor that can be used as a
+  pivot into the LAN it was meant to be shielded from.
+* **R-00.2.6** Guest egress is governed by the FORWARD chain, per-guest:
 
-Single source of truth for every provisioning input. Built media (ISOs,
-golden disks) is never versioned — `provision/host/build-iso.sh` produces
-the host ISO into a gitignored `output/`.
+  | Guest | Egress | Rationale |
+  |---|---|---|
+  | vm 100 desktop | unrestricted | Bastion; browses and fetches |
+  | vm 101 llm | 53/80/443 | Installs the driver/CUDA/Docker stack and pulls images and models on first boot |
+  | vm 103 `dev-nested` | 53/80/443 | The trusted builder: fetches from GitHub, the Ubuntu archive and the Proxmox ISO mirror |
+  | vm 104–249 dev | none | Toolchain is baked into template 102 and cloned already-provisioned, so a clone never needs the network |
 
-```
-provision/
-  host/
-    answer-host.toml           # PVE 9.2 installer answer file (Spec 01 §4)
-    build-iso.sh               # host ISO builder (Spec 01 §4)
-    provision-host.sh          # first-boot entry point (Spec 01 §5)
-    refresh-guests.sh          # operator-run template rebuild (Spec 08 §8.2)
-    frag/10-gpu-passthrough.sh # IOMMU + VFIO (Spec 01 §5.1)
-    frag/20-memory-swap.sh     # ZRAM + swap, balloon guidance (Spec 01)
-    frag/25-desktop-control.sh # vmctl user, keypair, sudoers (Spec 07 §3.1)
-    frag/30-create-guests.sh   # NoCloud seeds, qm create 100/101/102 (Spec 06)
-    frag/90-finalize.sh        # screening, networking, firewall (Spec 01 §5.3)
-    vmctl/
-      vmctl-host               # restricted control stub for dev VMs (Spec 07 §3.2)
-      sudoers                  # vmctl sudoers drop-in (Spec 07 §3.3)
-  network/
-    vmbr0-*.conf               # netplan/iptables fragments
-    dnsmasq.conf               # DHCP + DNS for VMs on vmbr0
-    iptables-forwarding.conf   # firewall rule reference
-  personalization.sh           # shared identity (username, UID, repo, ref)
-  ubuntu-release.conf          # shared Ubuntu version + URLs
-desktop/
-  desktop-firstboot.sh        # fetched inside VM 100 on first boot
-  devctl                      # desktop-side dev VM control wrapper (Spec 07 §4.1)
-  user-data/{meta-data,user-data}
-llm/
-  llm-firstboot.sh             # fetched inside VM 101 on first boot
-  user-data/{meta-data,user-data}
-dev/
-  dev-firstboot.sh             # fetched inside VM 102+ on first boot
-  docker/                      # Dockerfiles for lazy-build toolchain
-    Dockerfile.java            # dev-java (Spec 04 §3)
-    Dockerfile.scala           # dev-scala (Spec 04 §3)
-    Dockerfile.sbt             # dev-sbt (Spec 04 §3)
-    Dockerfile.opencode        # dev-opencode (Spec 04 §3)
-    Dockerfile.nested          # dev-nested-build (Spec 08 §5)
-  tools/
-    nested                     # build toolchain wrapper for nested_dev (Spec 08 §6.1)
-    dev-refresh-images         # rebuild all tool images (Spec 08 §6.2)
-    dev-nested-provision.sh    # one-time nested_dev repo setup (Spec 08 §7)
-  user-data/{meta-data,user-data}
-specs/                         # this documentation set (merged)
-keys/                          # gitignored except *.pub and *.asc
-output/                        # gitignored: ISOs, MANIFEST
-```
+* **R-00.2.7** Output-chain restrictions do not constrain guest traffic. A
+  rule that governs host-originated packets leaves guest egress untouched, so
+  a policy that reads "host OUTPUT is restrictive, therefore guests are
+  contained" is wrong.
 
-Repo-authored install- and first-boot-time fetches reference the raw base
+### R-00.3 Storage
 
-```
-https://raw.githubusercontent.com/popiel/nested_dev/<REF>/<path>
-```
+* **R-00.3.1** Guest disks live on `local-lvm` thin provisioning. The host root
+  filesystem is `ext4`.
+* **R-00.3.2** The LLM VM's model volume is a separate disk mounted at
+  `/data/models`, not a directory on the OS disk. Models are the largest
+  dataset in the fleet and re-downloading them on a rebuild is unacceptable.
+* **R-00.3.3** A per-project dev VM may carry a data volume; it is attached at
+  clone time and is not part of the template.
 
-`<REF>` is a branch name, git tag, or commit SHA — set via
-`PERSONALIZATION_REF` in `provision/personalization.sh`. Branch names
-and tags resolve automatically in GitHub raw URLs; the resolved commit
-SHA is recorded in `output/MANIFEST` for reproducibility. Each build
-script must be idempotent and pinned to download hashes (see individual
-specs).
+### R-00.4 Memory
 
-## 6. Build order
+| Profile | Host | Desktop | LLM | Dev |
+|---|---|---|---|---|
+| 32 GB (baseline) | 2 GB hard cap | 8 GB / 4 cores | 16 GB / 6 cores | 8 GB / 4 cores |
+| 64 GB+ | 2 GB hard cap | 8 GB / 4 cores | 24 GB / 8 cores | 8 GB / 4 cores |
 
-1. Edit and push provisioning inputs; set `PERSONALIZATION_REF` to a branch, tag, or SHA.
-2. Spec 01 — build and verify the host install media against the pinned REF
-   (`proxmox-auto-install-assistant verify` + test boot).
-3. Spec 02 — desktop user-data + first-boot scripts (26.04 Desktop, NoCloud seed).
-4. Spec 03 — LLM user-data + first-boot scripts (26.04 Server, NoCloud seed).
-5. Spec 04 — dev user-data + first-boot scripts (26.04 Server, NoCloud seed, Docker only).
-6. Spec 07 — dev fleet lifecycle: vmctl/vmctl scripts, devctl, firewall additions.
-7. Spec 08 — nested dev repo VM: Dockerfile.nested, nested wrapper, dev-refresh-images.
-8. Provision host (host first boot): host ISO + first-boot provisioner creates
-   Desktop (100) and LLM (101) with NoCloud seeds and starts them; creates dev
-   template (102) with NoCloud seed, provisions it once, converts to PVE template.
-9. Desktop first boot: installs devctl + vmctl key; starts working.
-10. First `devctl add nested` creates VM 103; `devctl start 103` provisions it.
-11. Run acceptance tests (all against the same pinned REF).
+* **R-00.4.1** The host is hard-capped so a guest cannot starve the hypervisor.
+* **R-00.4.2** Guests overcommit via ballooning, ZRAM and disk swap. Total
+  guest allocation exceeds physical RAM by design; the host cap is what keeps
+  that safe.
+* **R-00.4.3** The 16 GB small-host profile is a supported scale-down for the
+  LLM VM's memory figure, not a separate topology.
 
-## 7. What was merged / rejected (traceability to predecessors)
+### R-00.5 Guests install from official media; no prebuilt guest images
 
-* Versions: PVE **9.2** + Ubuntu **26.04** everywhere. `specs-ds4` 8.x / 24.04
-  references are superseded; `specs-mimo` `26.04 Resolute` naming retained.
-* IDs: ds4 (`100/101/200–249`) retained; mimo (`100=llm`, `200=desktop`,
-  `9001/9002` templates) rejected. Migration: rename/recreate, no alias.
-* Storage: mimo `local-lvm` default retained; ds4 ZFS kept as Spec 01 variant.
-* Memory: 32 GB baseline (LLM 16 GB, Desktop 8 GB, Dev 8 GB); 16 GB profile
-  retained as scale-down path; 64 GB+ tier for LLM 24 GB. ZRAM + balloon
-  + 4 GB disk swap overcommit.
-* Installer: mimo's 9.2 `prepare-iso --fetch-from` flow + ds4's
-  `late-commands` provisioner drop + systemd oneshot merged into one Spec 01.
-* VFIO: merged — mimo's GRUB + blacklist baseline for the passed-through set
-  plus ds4's `softdep`, audio-function pairing, IOMMU-group abort check, and
-  GeForce `kvm=off,hidden=1` workaround.
-* Image build: ds4 autoinstall + `virt-sysprep` retained; mimo FAI class space
-  and `build-images.sh`/`import-images.sh` rejected (do not implement).
-* Desktop: i3-gaps + dmenu + xrdp + lightdm (default); XFCE+xrdp retained as
-  lightweight alternative; GNOME+grd retained for HW-encode use cases. Chrome
-  via snap on first boot; no dev tools in image.
-* LLM: mimo Docker/Toolkit/container examples + ds4 first-boot-install and
-  `/data/models` volume merged; Ubuntu `nvidia-cuda-toolkit` rejected in favor
-  of NVIDIA-repo `cuda-toolkit-<minor>` for `ubuntu2604`.
-* Discipline: ds4 REF-pinning, sourcing policy, MANIFEST, per-spec acceptance
-  retained; mimo `main`-fetch rejected.
-* New: Spec 04 dev VM closes the `README.md` gap neither predecessor covered.
+* **R-00.5.1** There is no golden qcow2, no `payloads/` directory, and no
+  image-conversion step. Every guest installs unattended from the official
+  Ubuntu ISO with a NoCloud seed (Spec 06).
+* **R-00.5.2** Consequently no guest image carries machine-specific identity —
+  no SSH host keys, no `machine-id`, no baked IP — and no `virt-sysprep` or
+  `zerofree` step exists.
+* **R-00.5.3** The dev template is a *running VM converted to a PVE template*,
+  not a built artifact. It is the only pre-provisioned state in the fleet, and
+  Spec 07 governs its lifecycle.
 
-## 8. Shared acceptance criteria
+### R-00.6 GPU and driver delivery
 
-What all artifacts have in common: installs or boots **without interactive
-input**, every configuration change is traceable to a file in this repo,
-golden images contain no machine-specific identity (SSH host keys,
-machine-id, IP addresses), and rebuilding from scratch against the same
-`<REF>` reproduces the same result.
+* **R-00.6.1** GPU drivers, CUDA, Docker and serving stacks are installed on
+  **first boot** from official upstreams, never baked into a build input. A
+  driver baked into a build input ties the input to one driver version and
+  forces the build to run on the target GPU hardware.
+* **R-00.6.2** The build machine requires no GPU.
 
-Referenced specs each carry their own acceptance section; this doc is the
-aggregate.
+### R-00.7 Sourcing policy
+
+* **R-00.7.1** GitHub serves only files authored in this repository: the answer
+  file, provisioner scripts and fragments, seed templates, first-boot scripts,
+  and network fragments.
+* **R-00.7.2** Every third-party artifact is fetched direct from its official
+  upstream and is never vendored into this repository: PVE and Ubuntu ISOs,
+  Ubuntu archive packages, firmware, the NVIDIA driver and CUDA repositories,
+  container images, and any iPXE or firmware payload.
+* **R-00.7.3** Vendoring would put third-party code under this repository's
+  review and release discipline, and would make its provenance unauditable.
+
+### R-00.8 Pinning and reproducibility
+
+* **R-00.8.1** Every provisioning input is pinned to a single release
+  reference, set once in `provision/personalization.sh` (Spec 05 §R-05.8).
+* **R-00.8.2** The host install media, the provisioner, and every guest's
+  first-boot fetch all use that same reference. A guest that fetches a
+  different tree than the host that created it is not reproducible even though
+  both report the same ref.
+* **R-00.8.3** The resolved commit SHA, plus the versions and checksums of
+  third-party inputs, are recorded in a build manifest outside version control.
+* **R-00.8.4** Every build script is idempotent. Re-running a build produces
+  the same result and does not require cleaning first.
+* **R-00.8.5** Built media is never versioned.
+
+### R-00.9 Credential handling
+
+* **R-00.9.1** No real credential is committed. Seeds and templates carry
+  placeholder tokens that the build substitutes (Spec 05 §R-05.6).
+* **R-00.9.2** The install media is the only carrier of a password hash
+  between the build workstation and the host. Hashes never transit a URL.
+* **R-00.9.3** The host `root` hash and the operator login hash are separate
+  files with disjoint destinations (Spec 05 §R-05.4).
+
+## 5. Build order
+
+1. Edit and push provisioning inputs; set the release reference.
+2. Build the host install media against that reference (Spec 01).
+3. Provision the host: first-boot provisioner creates vm 100, vm 101 and the
+   dev template, converting the template once provisioned (Spec 07).
+4. Desktop first boot installs `devctl` and the control keys (Spec 02).
+5. `devctl add <project>` creates a dev VM; `devctl start` boots it (Spec 07).
+6. Run acceptance tests against the same reference (Spec 09).
+
+Steps 3 and 4 must both complete before step 5: the desktop is the only
+component that can create dev VMs.
+
+## 6. Acceptance
+
+Shared by every artifact in this repository.
+
+* **A-00.1** Every artifact installs or boots with no interactive input.
+* **A-00.2** Every configuration change traces to a file in this repository.
+* **A-00.3** No artifact carries machine-specific identity: no SSH host keys,
+  no `machine-id`, no baked IP address.
+* **A-00.4** No committed file contains a real credential.
+* **A-00.5** Rebuilding from the same reference reproduces the same result,
+  within the nondeterminism the manifest documents.
+* **A-00.6** Every third-party input is version-pinned and, where the publisher
+  supplies one, checksum-verified.
+* **A-00.7** `tests/run.sh` exits 0 on a clean checkout (Spec 09).

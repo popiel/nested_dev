@@ -306,3 +306,170 @@ assert_key_write_creates_ssh_dir_first() {
 @test "devctl requires a shell environment for the guest username" {
     assert_file_contains "$DEVCTL" 'GUEST_USER="${USER:-}"'
 }
+
+# --- D4: the control program must actually be installed ---
+
+@test "D4: frag/25 resolves vmctl-host relative to its own location" {
+    # first-boot.sh extracts the archive's provision/ to /root/provision, so
+    # the repo's provision/host/vmctl/ lands at /root/provision/host/vmctl/.
+    # A hardcoded /root/provision/vmctl/ never exists, and vmctl-host was
+    # therefore never installed: every devctl fleet verb pointed its
+    # ForceCommand at a binary that was not there.
+    assert_file_not_contains "$FRAG25" '/root/provision/vmctl/'
+    assert_file_contains "$FRAG25" 'BASH_SOURCE[0]}")/../vmctl'
+}
+
+@test "D4: frag/25 resolves the vmctl source dir to the directory that has the file" {
+    # Prove the relative path actually lands on the files, using the repo's own
+    # layout rather than asserting on the string that expresses it.
+    [ -f "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" ]
+    resolved="$(cd "${PROJECT_ROOT}/provision/host/frag/../vmctl" && pwd)"
+    [ -f "${resolved}/vmctl-host" ]
+    [ -f "${resolved}/sudoers" ]
+}
+
+@test "D4: a missing vmctl-host aborts frag/25 rather than warning" {
+    # A warning here means a host that provisions "successfully" with no
+    # control program on it. Every devctl fleet verb then fails with a
+    # "command not found" from a forced command, which reads as a
+    # permissions problem rather than a missing binary.
+    assert_file_contains "$FRAG25" 'die "vmctl-host source not found'
+    assert_file_not_contains "$FRAG25" 'WARNING: vmctl-host source not found'
+}
+
+@test "D4: frag/25 defines die() so its fatal path cannot silently succeed" {
+    assert_file_contains "$FRAG25" 'die() {'
+}
+
+# --- D5: the dev guest must receive what dev-firstboot.sh copies ---
+# dev-firstboot.sh installs dev/tools/nested and dev/tools/dev-refresh-images by
+# copying them from ${SCRIPT_DIR}/tools. The seed fetched only
+# dev-firstboot.sh and personalization.sh, so /opt/nested-dev/tools/ never
+# existed and both wrappers were reported missing on every first boot. The
+# java/scala/sbt/opencode wrappers call `nested`, so a half-provisioned dev VM
+# looked fine until a tool was invoked.
+
+@test "D5: the dev seed fetches both dev/tools scripts into the tools directory" {
+    assert_file_contains "$DEV_UD" 'dev/tools/nested -O nested'
+    assert_file_contains "$DEV_UD" 'dev/tools/dev-refresh-images -O dev-refresh-images'
+    assert_file_contains "$DEV_UD" 'mkdir -p /opt/nested-dev/tools'
+}
+
+@test "D5: the tools are fetched at the same reference as the first-boot script" {
+    # One reference for the whole guest. Two references means the script that
+    # installs the wrappers and the wrappers themselves can come from different
+    # commits, invisibly.
+    local fetches
+    fetches="$(grep -oE 'raw\.githubusercontent\.com/[^/]+/[^/]+/[^/]+' "$DEV_UD" | sort -u)"
+    [ -n "$fetches" ]
+    local count
+    count="$(printf '%s\n' "$fetches" | wc -l | tr -d ' ')"
+    [ "$count" -eq 1 ] || {
+        echo "dev seed fetches from $count different references:" >&2
+        printf '%s\n' "$fetches" >&2
+        return 1
+    }
+}
+
+@test "D5: the guest pins its own PERSONALIZATION_REF to the reference it was built from" {
+    # personalization.sh still carries the branch name. A guest that fetched
+    # its Dockerfiles and tools with ${PERSONALIZATION_REF:-main} would resolve
+    # against a moving branch, so the template's images could come from a newer
+    # commit than the script that installed them.
+    assert_file_contains "$DEV_UD" 's/^PERSONALIZATION_REF=.*/PERSONALIZATION_REF=__GITHUB_REF__/'
+}
+
+# --- D6: devctl-host runtime behaviour that a comment cannot guarantee ---
+
+@test "D6: vmctl-host sets a clone's hostname once the guest agent answers" {
+    # A clone inherits the template's hostname, so without this every dev VM in
+    # the fleet calls itself the same thing and the DNS name registered by `add`
+    # never matches the guest's own hostname.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" \
+        'set_hostname_when_agent_ready'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" \
+        'hostnamectl set-hostname'
+}
+
+@test "D6: hostname settling does not block the start verb" {
+    # The agent is not up when `start` returns, so waiting inline would make
+    # every start take the full agent timeout.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" \
+        '( set_hostname_when_agent_ready "$VMID" "$NAME" ) &'
+}
+
+@test "D6: an unanswered guest agent is a warning, not a failed start" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" \
+        'guest agent never answered'
+}
+
+@test "D6: the list verb reads the VM inventory once instead of probing the dev range" {
+    # Probing 103-249 with `qm status` costs two subprocesses per ID (~294
+    # calls) on every `list`, and devctl calls list again for each name lookup.
+    # `add` still scans the range legitimately — it has to find a free ID — so
+    # this is asserted against the list verb alone.
+    local vmctl="${PROJECT_ROOT}/provision/host/vmctl/vmctl-host"
+    local list_block
+    list_block="$(awk '/^    list\)/,/^        ;;$/' "$vmctl")"
+    [ -n "$list_block" ] || { echo "could not isolate the list verb" >&2; return 1; }
+    printf '%s\n' "$list_block" | grep -q 'qm list' || {
+        echo "the list verb does not read qm's inventory" >&2
+        return 1
+    }
+    if printf '%s\n' "$list_block" | grep -qF 'seq $DEV_MIN $DEV_MAX'; then
+        echo "the list verb still probes the whole dev range" >&2
+        return 1
+    fi
+}
+
+@test "D6: the dev range boundaries are enforced on every ID-taking verb" {
+    # The range starts above the static fleet, so an out-of-range ID cannot
+    # reach the desktop, the LLM VM or the template.
+    local v
+    for v in status start shutdown stop log; do
+        assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" \
+            "outside dev range"
+    done
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" \
+        'DEV_MIN=103'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" \
+        'DEV_MAX=249'
+}
+
+# --- D7: credential paths must be stated in one place ---
+
+@test "D7: nested keys-status looks where the build reads, not in a second directory" {
+    # keys-status looked in secrets/, which does not exist. It reported working
+    # credentials as MISSING and told the operator to mkpasswd into a path no
+    # build ever reads. A comment may still name the wrong path; code may not.
+    local nested="${PROJECT_ROOT}/dev/tools/nested"
+    local code
+    code="$(sed 's/[[:space:]]*#.*$//' "$nested")"
+    printf '%s\n' "$code" | grep -qF 'keys/${secret}' || {
+        echo "keys-status does not read keys/\${secret}" >&2
+        return 1
+    }
+    if printf '%s\n' "$code" | grep -qF 'secrets/'; then
+        echo "keys-status still reads a secrets/ path in code" >&2
+        return 1
+    fi
+}
+
+@test "D7: the nested build image sources the hashes from keys/ too" {
+    assert_file_contains "${PROJECT_ROOT}/dev/tools/nested" 'NESTED_DEV}/keys/'
+}
+
+@test "D7: the wrapper's inspect verb does not claim to have validated the answer file" {
+    # It only printed a template. Naming that "verify" is how an operator stops
+    # reading the output.
+    local nested="${PROJECT_ROOT}/dev/tools/nested"
+    assert_file_not_contains "$nested" 'Answer file OK'
+    assert_file_contains "$nested" 'not rendered'
+    assert_file_contains "$nested" 'Validation happens during the build'
+}
+
+@test "D7: devctl's missing-key error names something that exists" {
+    # It pointed at `devctl firstboot-log`, a verb that does not exist.
+    assert_file_not_contains "$DEVCTL" 'firstboot-log'
+    assert_file_contains "$DEVCTL" 'desktop-firstboot.log'
+}

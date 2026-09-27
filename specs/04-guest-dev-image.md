@@ -1,337 +1,266 @@
-# Spec 04 — Guest: Dev VM image (Ubuntu Server 26.04, one project per VM)
+# Spec 04 — Guest: dev VM template and dev tooling
 
-Status: Draft (new; no predecessor — closes the `README.md` gap)
-Pinned versions: Ubuntu Server **26.04 LTS (Resolute Raccoon)**, Proxmox VE **9.2**
-Supersedes: Spec 04 §5.3 (manual `qm clone` block) — replaced by `devctl`
-            lifecycle (Spec 07). Golden image rebuild replaced by template
-            refresh (Spec 08 §8.2).
-Depends on: Spec 01 (host), Spec 05 (personalization), Spec 06 (guest
-            provisioning), Spec 07 (dev fleet lifecycle), Spec 08 (nested dev)
+Status: Draft
+Applies to: vm 102 `dev-template` and every dev VM cloned from it
+Pinned versions: Ubuntu Server **26.04 LTS**, Proxmox VE **9.2**
+Implementation: `dev/user-data/user-data`, `dev/dev-firstboot.sh`,
+`dev/docker/`, `dev/tools/`, `provision/host/frag/30-create-guests.sh`
 
-## 1. Purpose and scope
+## 1. Scope
 
-Produce a golden QEMU disk (`dev-golden.qcow2`) for Proxmox **vm 102+**
-(`dev-<project>`). Per `README.md`, each software dev VM hosts **only one
-software project**, its network is **severally constrained**, and the VM is
-**primarily disk storage + Docker engine** — all dev tasks (AI harness,
-compiles, tests) run in **ephemeral Docker containers, often with
-bind-mounted disk access**.
+The dev template is the machine untrusted code runs on. It carries no GPU, no
+inference stack, and no baked toolchain. It provides an isolated working
+environment per project: a container runtime, a workspace, and a set of
+tool wrappers that build their images on first use.
 
-Neither `specs-mimo/` nor `specs-ds4/` specified this VM. This spec is new and
-normative.
-
-In scope: autoinstall `user-data`, Docker-only first boot, containerized dev
-toolchain (Java 21, Scala, sbt, opencode), ephemeral wrapper-script pattern,
-per-project cloning contract, bind-mount + network-containment conventions,
-build/cleanup. Out of scope: project code itself, LLM serving (Spec 03),
-desktop access (Spec 02), host wiring (Spec 01 §5.3).
+In scope: install seed content, container runtime, workspace and cache
+contracts, the ephemeral-container tool pattern, base image policy, guest
+firewall. Out of scope: when and how dev VMs are created (Spec 07), the
+inference client configuration (Spec 03), the repository build tooling that
+runs inside a dev VM (Spec 08).
 
 ## 2. Decisions
 
-| Decision | Default |
+| Aspect | Choice |
 |---|---|
-| Base OS | Ubuntu Server **26.04 LTS** (same ISO as Spec 03, SHA256 pinned) |
-| GPUs | **None** — no `hostpci` on dev VMs; GPU work goes via Spec 03 APIs |
-| Runtime | Docker CE only (no NVIDIA toolkit, no CUDA, no Ollama in image or first boot) |
-| JDK | **21 LTS** (`eclipse-temurin:21-jre-jammy`) — shared base for all Java/Scala/sbt images |
-| Java/Scala | Coursier-managed inside containers; `dev-java` and `dev-scala` images |
-| sbt | Official `sbtscala/sbt:1.10.7_2.13.15_3` image; `dev-sbt` wrapper |
-| opencode | `node:20-slim` + npm global install; `dev-opencode` wrapper; config mount **read-only** |
-| Workspace | `/work/<project>` on OS disk (or attached `scsi1` per-project volume); bind-mounted into ephemeral containers, never copied into images |
-| Build caches | `~/.sbt`, `~/.ivy2`, `~/.cache/coursier` mounted into containers for incremental builds |
-| Wrapper scripts | `/home/${PERSONALIZATION_USERNAME}/.local/bin/` (§05) in PATH via `.bashrc`; one script per tool |
-| Network | Egress-deny default; allowlist only (Ubuntu archive + pinned upstreams + LLM-VM API peer); ingress SSH only |
-| Account | `popiel` (§05), SSH-key-only; `docker` group membership; guest `root` has no password |
-| OS disk | **40 GB** virtio thin (project data beyond that → per-project `scsi1` volume) |
-| Fleet | Golden `dev-golden.qcow2` cloned per project: `102=dev-<alpha>`, `103=dev-<beta>`, …; `200–249` remain reserved future |
-| Identity | No machine-specific data in golden image |
-| Git config | Global `user.name`/`user.email` per §05; set at first boot for `popiel` |
+| Base | Ubuntu Server 26.04 LTS, official ISO, the same media as Spec 03 |
+| GPU | **None.** No device is passed through; GPU work goes through the LLM VM's API |
+| Runtime | Docker CE only — no CUDA, no NVIDIA toolkit, no serving container |
+| Java | JDK 21 LTS base image, shared by the Java, Scala and sbt images |
+| Java/Scala dependency resolution | Managed inside the container, with the resolution cache bind-mounted so a second run is incremental |
+| opencode | Runs in a container of its own, with the operator's configuration mounted **read-only** |
+| Workspace | `/work`, bind-mounted into every container; project checkouts live here, never in an image |
+| Build caches | Bind-mounted out of the containers that populate them |
+| Tool wrappers | One script per tool in the account's own `PATH`, each building its image on first use |
+| Tool image refresh | An explicit operator-invoked command, never automatic |
+| Network | Ingress SSH only. Egress to DNS, HTTP and HTTPS only. Nothing else |
+| Identity | The account from Spec 05; guest `root` locked; the account is in the container-runtime group |
+| OS disk | 40 GB; larger projects attach their own volume |
+| Template | Proxmox template, never a running VM. Clones are per project (Spec 07) |
+| Console | Serial console, autologin as the account |
 
-## 3. Build inputs
+### 2.1 Why no GPU is passed through
 
-| File | Description |
+A dev VM runs untrusted code, often in a container that a project controls. A
+GPU passed into that VM is a GPU a project's container can drive, and the host
+cannot then account for what runs on it. The dev VM reaches GPU capability
+through the LLM VM's API over the private subnet, where the request is visible
+and the hardware stays in a VM with no untrusted code on it.
+
+## 3. Requirements
+
+### R-04.1 Install
+
+* **R-04.1.1** The template installs unattended from the official Ubuntu
+  Server ISO with the host-assembled NoCloud seed (Spec 06). No image is built
+  for it.
+* **R-04.1.2** The seed carries the account identity, the operator and
+  guest-identity keys, the account's UID and GID, guest `root` locked, the
+  workspace directory, and the minimum packages to reach the network and the
+  guest agent.
+* **R-04.1.3** The account's UID and GID are set before the workspace is
+  created or owned.
+* **R-04.1.4** SSH password authentication is disabled, so the two injected
+  public keys are the only way in.
+* **R-04.1.5** A serial console is enabled and autologs the account, and the VM
+  is created with a serial console socket and no emulated display.
+
+### R-04.2 One template, many dev VMs
+
+* **R-04.2.1** The template is provisioned **once**, then converted to a
+  Proxmox template and never started again directly.
+* **R-04.2.2** Every dev VM is a clone of that template. Dev VMs are therefore
+  identical at creation and differ only by name, address and attached volumes.
+  A per-project tool change is a template change, not a change to one project.
+* **R-04.2.3** The template's final hostname is the dev-VM hostname, not the
+  template's install-time hostname. A clone whose hostname still says it is a
+  template reports the wrong name in every log and every DNS lookup.
+* **R-04.2.4** Clones do not run first-boot configuration again: the unit was
+  disabled in the template (R-04.7.1). A clone is provisioned the moment it is
+  created, not on its first boot.
+
+### R-04.3 Container runtime, and what the account may do with it
+
+* **R-04.3.1** The container runtime is installed at first boot from the
+  vendor's own repository, after any conflicting distribution packages are
+  removed.
+* **R-04.3.2** Container log rotation is bounded and the storage driver is
+  explicit. An unbounded JSON log on a VM that runs long-lived build containers
+  eventually fills a 40 GB disk with logs.
+* **R-04.3.3** The runtime restarts a crashed container's processes rather than
+  leaving the VM in a half-dead state. This is the one place the fleet
+  deliberately trades strict isolation for availability: a dev VM that must be
+  repaired by hand after an OOM kill is a dev VM that gets left broken.
+* **R-04.3.4** The account is a member of the container-runtime group, so the
+  operator can run containers without elevation. The consequence — that
+  membership is effectively root on that guest — is accepted and stated: this
+  is the isolation boundary for untrusted work, not a hardened multi-tenant
+  host.
+* **R-04.3.5** A non-responsive runtime after install is reported as a warning
+  and does not abort provisioning. The image definitions and wrappers are still
+  worth installing, and the next boot can retry.
+
+### R-04.4 The workspace is the only mutable state
+
+* **R-04.4.1** `/work` exists on every dev VM, is owned by the account, and is
+  the bind-mount target for every tool container. A project checkout is made
+  there.
+* **R-04.4.2** No project file is ever copied into a tool image. An image that
+  carries a checkout is an image that is stale the moment the project changes.
+* **R-04.4.3** The current working directory is bind-mounted as the working
+  directory inside the container, so a tool sees the same paths it would
+  outside and its output lands where the operator expects.
+
+### R-04.5 Build caches live outside the containers
+
+* **R-04.5.1** The dependency-resolution caches for the JVM ecosystem and the
+  tool configuration are bind-mounted from the account's home into the
+  containers that use them, and are created and owned by the account at first
+  boot.
+* **R-04.5.2** A cache that is not bind-mounted is lost on every container exit,
+  so the second run of any build re-downloads everything. The first run is
+  slow by design; every later run is not.
+* **R-04.5.3** The tool configuration is mounted **read-only** into the tool
+  container. That container runs the agent a project's build can influence;
+  letting it rewrite the operator's configuration would let a project change
+  how the next run behaves.
+
+### R-04.6 Tool wrappers build their images on first use
+
+* **R-04.6.1** One wrapper exists per tool: Java, Scala, sbt, opencode, and the
+  repository build tool.
+* **R-04.6.2** Each wrapper builds its image on first invocation, then runs the
+  tool in an ephemeral container over the bind-mounted workspace. Tool images
+  are therefore absent from a fresh dev VM by design.
+* **R-04.6.3** Because the images are built on demand, a dev VM's first
+  invocation of each tool is slow. This is traded for a template that stays
+  small and a base-image change that is picked up without re-cloning every dev
+  VM.
+* **R-04.6.4** Image definitions are installed from the **same resolved
+  reference** as the first-boot script, and that reference is recorded in the
+  template. Fetching them from a branch name means the template's tool images
+  and the script that installs them can come from different commits, and the
+  mismatch is invisible.
+* **R-04.6.5** The repository build tool's wrapper requires a checkout at a
+  known path inside the workspace, and says so when it is absent, naming the
+  command that creates it. It does not clone on the operator's behalf.
+* **R-04.6.6** A tool's container runs under the account's identity, and the
+  image is built with that identity, so files produced inside the container are
+  owned by the operator rather than by a numeric uid the operator cannot
+  interpret.
+* **R-04.6.7** The wrappers are on the account's `PATH` for interactive shells.
+  A wrapper installed but not on `PATH` is a wrapper the operator does not have.
+
+### R-04.7 First-boot provenance and completion
+
+* **R-04.7.1** The first-boot unit is disabled on success, so a clone does not
+  re-run it. Its log line announcing completion is the host's signal that the
+  template is safe to convert (R-01.11.6).
+* **R-04.7.2** The first-boot script, the personalization file, and the two
+  repository tool scripts are all present in the guest, at the same reference.
+  A first-boot script that silently cannot find a tool it is supposed to
+  install produces a dev VM that looks provisioned and is not.
+* **R-04.7.3** Base images are pulled at first boot, in parallel, and the
+  resolved digest of each is recorded in the log. A failed pull is a warning:
+  the wrapper that needs that base builds its image and pulls at that point.
+* **R-04.7.4** The base image set is: a JDK 21 LTS image, a slim Node image, a
+  slim Python image, and the tool agent's own image. All four come from their
+  publishers' registries, none from this repository.
+* **R-04.7.5** Refreshing tool images against new base layers is an explicit
+  operator command that rebuilds every tool image and appends the resulting
+  digests to a manifest in the account's own storage. It is never automatic:
+  a silent rebuild changes what a project's build sees without the project
+  changing.
+
+### R-04.8 Guest firewall
+
+* **R-04.8.1** Incoming traffic is denied by default; SSH is the only accepted
+  ingress. A dev VM is not a service.
+* **R-04.8.2** Outgoing traffic is denied by default, with DNS, HTTP and HTTPS
+  accepted. A dev VM that pulls images and packages needs those three and
+  nothing else.
+* **R-04.8.3** The host's forwarding chain enforces the same policy
+  independently, and is the authority (Spec 00 §R-00.2.6). A guest firewall
+  that permits more than the host forwards changes nothing; one that permits
+  less than an operator expects produces a confusing failure, so both are
+  stated.
+* **R-04.8.4** Guest `root` is locked.
+
+### R-04.9 Sizing
+
+* **R-04.9.1** A dev VM receives 8 GB and 4 cores and a single 40 GB OS disk.
+  The memory is deliberately small relative to the desktop and the LLM VM: dev
+  work is a container over a bind-mounted checkout, not an in-guest toolchain.
+* **R-04.9.2** Project data lives under the workspace on that one disk. The
+  clone contract attaches no second disk, so a project that outgrows 40 GB has
+  to be given storage by hand. This is a known gap, not an intended design;
+  see Spec 07 §7.
+* **R-04.9.3** There is no native toolchain on the dev VM's filesystem, and
+  none is installed by any provisioner. A script that installed build tools
+  directly on the guest would defeat the container boundary this spec exists
+  to maintain.
+
+## 4. Invariants
+
+* I-04.1 No dev VM ever has a GPU attached.
+* I-04.2 No toolchain is installed on the dev VM's own filesystem; every tool
+  runs in a container.
+* I-04.3 No tool image contains project files.
+* I-04.4 Every dev VM is a clone of the one template and is created already
+  provisioned.
+* I-04.5 The template is never running.
+* I-04.6 A dev VM's only ingress is SSH and its only egress is DNS, HTTP and
+  HTTPS.
+* I-04.7 A dev VM's login credential is never usable for fleet control.
+
+## 5. Acceptance
+
+| # | Check |
 |---|---|
-| `ubuntu-26.04-live-server-amd64.iso` | Official, same pin as Spec 03 |
-| `dev/user-data/meta-data` | Empty |
-| `dev/user-data/user-data` | Autoinstall (§4) |
-| `dev/dev-firstboot.sh` | Docker + base image pulls + wrapper scripts, fetched at `<REF>` |
-| `dev/docker/Dockerfile.*` | Four Dockerfiles for tool images, fetched from GitHub at first boot |
+| A-04.1 | The template installs unattended and reaches a working login on the serial console with no prompts. |
+| A-04.2 | The account exists with the configured UID, GID, home and shell; guest `root` is locked; SSH password authentication is refused. |
+| A-04.3 | `/work` exists and is owned by the account. No project file is present in any image. |
+| A-04.4 | No NVIDIA, CUDA or serving container is present on the dev VM, and no host PCI device is attached. |
+| A-04.5 | After the template is converted, a fresh clone boots with the first-boot unit already disabled and does not re-run it. |
+| A-04.6 | A fresh clone's hostname is its dev-VM name, not the template's install-time name. |
+| A-04.7 | Each of Java, Scala, sbt, opencode and the repository build tool is invocable by name from an interactive shell. |
+| A-04.8 | The first invocation of each tool builds its image; the second invocation does not rebuild. |
+| A-04.9 | A file written by a tool in the workspace is owned by the account on the host side of the mount. |
+| A-04.10 | The second run of a JVM build reuses the mounted cache and does not re-download dependencies. |
+| A-04.11 | The tool agent's configuration is mounted read-only; a write from inside the container fails. |
+| A-04.12 | The repository build tool reports the clone command when no checkout is present, and does not clone by itself. |
+| A-04.13 | The first-boot log records the resolved digest of each base image, and the guest holds both repository tool scripts. |
+| A-04.14 | The template's installed image definitions resolve to the same reference recorded for the first-boot script. |
+| A-04.15 | Running the refresh command rebuilds every tool image and appends digests to the manifest; no rebuild happens on its own. |
+| A-04.16 | The firewall refuses unsolicited inbound, accepts SSH, and permits only DNS, HTTP and HTTPS outbound. |
+| A-04.17 | The host's forwarding chain independently blocks every other destination from the dev VM. |
+| A-04.18 | The dev VM's account cannot perform any fleet lifecycle operation. |
+| A-04.19 | A dev VM has 8 GB, 4 cores and a 40 GB OS disk, and no device is passed through to it. |
 
-Guest VMs are created by the host at first boot (Spec 06). The host
-fetches `dev/user-data/user-data` from GitHub at the pinned `<REF>`,
-injects the personalization login hash from `/root/.personalization-password-hash`,
-and boots the VM
-with a NoCloud seed containing the assembled user-data.
+## 6. Cross-references
 
-### Container images (Dockerfiles in `dev/docker/`, built lazily by wrapper scripts)
+| Spec | Relationship |
+|---|---|
+| Spec 00 | Topology, memory profiles, egress policy, sourcing and pinning |
+| Spec 01 | Template creation and the conversion gate |
+| Spec 03 | The inference API this VM's workloads call instead of owning a GPU |
+| Spec 05 | Account identity, UID/GID, locked root, key injection |
+| Spec 06 | Seed assembly, placeholder injection, the clone contract |
+| Spec 07 | Clone names, addresses, volumes, lifecycle, the credential matrix |
+| Spec 08 | The repository build tool that runs inside a dev VM |
+| Spec 09 | Seed, first-boot and wrapper static checks |
 
-All three JVM images share `eclipse-temurin:21-jre-jammy` as the base,
-guaranteeing JDK version parity across compilation (sbt) and execution
-(java, scala).
+## 7. Risks
 
-| Image tag | Dockerfile | Base | Entry point | Purpose |
-|---|---|---|---|---|
-| `dev-java` | `Dockerfile.java` | `eclipse-temurin:21-jre-jammy` | `java` | Java 21 runtime |
-| `dev-scala` | `Dockerfile.scala` | `eclipse-temurin:21-jre-jammy` | `scala` | Scala REPL (coursier-installed) |
-| `dev-sbt` | `Dockerfile.sbt` | `eclipse-temurin:21-jre-jammy` | `sbt` | sbt build tool (coursier-installed) |
-| `dev-opencode` | `Dockerfile.opencode` | `node:20-slim` | `opencode` | opencode CLI (npm global install) |
-
-Images are **not** built at first boot. Base images are pulled at first boot;
-tool images are built lazily by wrapper scripts on first use (§5.5). Each
-Dockerfile accepts `ARG PERSONALIZATION_USERNAME` to create a matching user
-inside the container, avoiding bind-mount ownership mismatches.
-
-### Wrapper scripts (in `/home/${PERSONALIZATION_USERNAME}/.local/bin/`)
-
-One script per tool; pattern documented in §5.5.
-
-## 4. `user-data` (representative, 26.04)
-
-User identity values sourced from §05 via `provision/personalization.sh`.
-
-```yaml
-#cloud-config
-autoinstall:
-  version: 1
-  locale: en_US.UTF-8
-  keyboard: {layout: "us"}
-  identity:
-    hostname: dev-template
-    # Placeholders substituted by frag/30 (Spec 05 §5.2) at VM creation time
-    username: __PERSONALIZATION_USERNAME__
-    password: "CHANGE_ME_HASHED"
-    realname: "__PERSONALIZATION_FULLNAME__"
-  ssh:
-    install-server: true
-    allow-pw: false
-  packages:
-    - curl
-    - ca-certificates
-    - gnupg
-    - git
-    - qemu-guest-agent
-  late-commands:
-    # Set UID/GID to 1401 (§05) — must run before any chown on this user
-    - "curtin in-target --target=/target -- usermod -u 1401 ${PERSONALIZATION_USERNAME}"
-    - "curtin in-target --target=/target -- groupmod -g 1401 ${PERSONALIZATION_USERNAME}"
-    - "curtin in-target --target=/target -- sh -c 'mkdir -p /work && chown ${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME} /work'"
-```
-
-Hostname, project volume, and firewall allowlist are set per-clone (§5), not
-in the golden image.
-
-## 5. First boot + per-project provisioning (`dev-firstboot.sh`)
-
-Fetched at `<REF>`; logs to `/var/log/dev-firstboot.log`; self-disables.
-
-1. **Docker CE** — install from `download.docker.com` (official upstream only);
-   `usermod -aG docker ${PERSONALIZATION_USERNAME}` (§05); harden daemon (`overlay2`, `json-file`
-   `10m×3`, `live-restore`); `systemctl enable docker`.
-2. **Workspace** — `mkdir -p /work`, `chown ${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME} /work` (§05). Per-project
-   volumes mounted by the operator (§5.3), not in the golden image.
-3. **Git config** — set global git identity per §05:
-   `git config --global user.name "${PERSONALIZATION_FULLNAME}"` and
-   `git config --global user.email "${PERSONALIZATION_EMAIL}"`.
-4. **Base image pulls** — pull pinned base images in parallel:
-   `eclipse-temurin:21-jre-jammy`, `coursier/jre:21`,
-   `sbtscala/sbt:1.10.7_2.13.15_3`, `node:20-slim`. Log each SHA.
-5. **Install Dockerfiles** — copy `dev/docker/*` to `/opt/dev-docker/` on the
-   VM. These are used by wrapper scripts for lazy image builds.
-6. **Wrapper scripts** — write four scripts to `/home/${PERSONALIZATION_USERNAME}/.local/bin/`:
-   `java`, `scala`, `sbt`, `opencode`. Each checks if its image exists;
-   if not, builds it from `/opt/dev-docker/Dockerfile.*` with
-   `--build-arg PERSONALIZATION_USERNAME=${USER}`. Then runs the ephemeral
-   container (§5.5). `chmod +x`. Add `~/.local/bin` to PATH via `.bashrc` snippet.
-7. **Cache directories** — `mkdir -p ~/.sbt ~/.ivy2 ~/.cache/coursier
-   ~/.config/opencode`; `chown ${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}` (§05) all. These are bind-mounted
-   into containers for build-cache persistence.
-8. **Firewall** — `ufw default deny incoming; default deny outgoing; allow ssh`;
-   allow out 53,80,443 (DNS, HTTP, HTTPS for image pulls and package repos).
-   `echo y | ufw enable`. **Host-level enforcement**: the host's iptables
-   OUTPUT chain drops all outbound from dev VMs by default; `ufw` rules inside
-   the VM are a secondary defense.
-9. **Hostname** — `hostnamectl set-hostname dev-vm`; self-disable
-   `systemctl disable --now dev-firstboot`.
-
-### 5.3 Per-project clone contract (`devctl` from desktop, Spec 07)
-
-Dev VMs are created on demand from the desktop via `devctl`. The host-side
-`vmctl-host` script (Spec 07 §3.2) handles cloning, MAC allocation, dnsmasq
-registration, and inventory. All clones are created **stopped**.
-
-```bash
-# From the desktop:
-devctl add <project-name>          # creates dev-<name>, stopped
-devctl start <name|vmid>           # starts the VM (first-boot runs)
-devctl stop <name|vmid>            # graceful shutdown
-devctl kill <name|vmid>            # force stop
-devctl log <name|vmid>             # tail first-boot log
-devctl ssh <name|vmid> [cmd...]    # SSH to dev VM directly
-devctl list                        # list all dev VMs
-```
-
-The `vmctl-host` script on the host:
-- Clones template 102 → next available VMID (103+).
-- Sets deterministic MAC (`52:54:00:00:02:XX` where XX = vmid & 255).
-- Adds dnsmasq static lease + DNS entry in `/etc/dnsmasq.d/zz-dev.conf`.
-- Appends `/etc/hosts` entry.
-- Updates `/etc/nested-dev/inventory`.
-
-VMIDs 103–249 are the dev range. The dev-template (102) is a PVE template
-and cannot be started directly — this is the hard guarantee that dev VMs are
-never auto-started.
-
-Set unique hostname, regenerate `machine-id`/SSH keys via cloud-init,
-mount `/work/<project>` as per-project data volume, record project→VMID
-mapping in inventory (automated by `vmctl-host`).
-
-### 5.5 Ephemeral-container + wrapper-script pattern
-
-All dev tools (Java, Scala, sbt, opencode) run in **ephemeral Docker
-containers** with the **current working directory bind-mounted** into the
-container at `/work`. The VM itself contains no toolchain — only Docker, git,
-and the wrapper scripts.
-
-**General pattern:**
-
-```bash
-docker run --rm \
-  -v "$(pwd):/work" -w /work \
-  [-v <cache-or-config-mounts>] \
-  <image> <tool> [args...]
-```
-
-Key properties:
-- `--rm`: container is destroyed on exit; no state accumulates inside layers.
-- `-v "$(pwd):/work" -w /work`: the directory you `cd` into on the host is
-  the working directory inside the container. File reads/writes are real-time.
-- `[args...]`: all command-line arguments are passed through to the tool
-  entrypoint unchanged.
-- Cache mounts (`~/.sbt`, `~/.ivy2`, `~/.cache/coursier`) persist across
-  container runs for fast incremental builds.
-- Config mounts (`~/.config/opencode`) are **read-only** (`:ro`) to prevent
-  container-side modifications from drifting host config.
-
-**Wrapper scripts** (`/home/${PERSONALIZATION_USERNAME}/.local/bin/java`, etc.):
-
-Each wrapper checks if its Docker image exists and builds it on first use
-from `/opt/dev-docker/Dockerfile.*`:
-
-`java`:
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-DOCKER_DIR="/opt/dev-docker"
-IMAGE="dev-java"
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "[dev] Building ${IMAGE} (first run)..."
-    docker build --tag "$IMAGE" \
-        --build-arg PERSONALIZATION_USERNAME="${USER}" \
-        -f "${DOCKER_DIR}/Dockerfile.java" "$DOCKER_DIR"
-fi
-exec docker run --rm \
-  -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.cache/coursier:/home/${USER}/.cache/coursier" \
-  "$IMAGE" java "$@"
-```
-
-`scala`:
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-DOCKER_DIR="/opt/dev-docker"
-IMAGE="dev-scala"
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "[dev] Building ${IMAGE} (first run)..."
-    docker build --tag "$IMAGE" \
-        --build-arg PERSONALIZATION_USERNAME="${USER}" \
-        -f "${DOCKER_DIR}/Dockerfile.scala" "$DOCKER_DIR"
-fi
-exec docker run --rm \
-  -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.cache/coursier:/home/${USER}/.cache/coursier" \
-  "$IMAGE" scala "$@"
-```
-
-`sbt`:
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-DOCKER_DIR="/opt/dev-docker"
-IMAGE="dev-sbt"
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "[dev] Building ${IMAGE} (first run)..."
-    docker build --tag "$IMAGE" \
-        --build-arg PERSONALIZATION_USERNAME="${USER}" \
-        -f "${DOCKER_DIR}/Dockerfile.sbt" "$DOCKER_DIR"
-fi
-exec docker run --rm \
-  -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.sbt:/home/${USER}/.sbt" \
-  -v "${HOME}/.ivy2:/home/${USER}/.ivy2" \
-  -v "${HOME}/.cache/coursier:/home/${USER}/.cache/coursier" \
-  "$IMAGE" sbt "$@"
-```
-
-`opencode`:
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-DOCKER_DIR="/opt/dev-docker"
-IMAGE="dev-opencode"
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "[dev] Building ${IMAGE} (first run)..."
-    docker build --tag "$IMAGE" \
-        --build-arg PERSONALIZATION_USERNAME="${USER}" \
-        -f "${DOCKER_DIR}/Dockerfile.opencode" "$DOCKER_DIR"
-fi
-exec docker run --rm \
-  -v "$(pwd):/work" -w /work \
-  -v "${HOME}/.config/opencode:/home/${USER}/.config/opencode:ro" \
-  "$IMAGE" opencode "$@"
-```
-
-No long-lived mutable containers; no toolchain baked into the VM; state
-lives in `/work`, containers are disposable.
-
-## 6. Image rebuild and template refresh
-
-Under NoCloud (Spec 06), guest VMs install from the official Ubuntu ISO + NoCloud
-seed — there are no golden qcow2 files to build. The "image" is the **template
-VM 102**, rebuilt via the provisioning gate sequence (Spec 07 §6):
-
-1. `qm destroy 102` (or operator-run `refresh-guests.sh`).
-2. `frag/30` re-creates VM 102 from ISO + seed at current `PERSONALIZATION_REF`.
-3. Provisioning gate: poll until first-boot completes.
-4. `cloud-init clean` + clear machine-id/SSH host keys.
-5. `qm shutdown` → `qm template 102`.
-
-**Tool image refresh** (all dev VMs): run `dev-refresh-images` (Spec 08 §6.2)
-to rebuild java/scala/sbt/opencode/nested-build images with `--pull`. Digests
-logged to `~/.local/share/dev-images-manifest`.
-
-**Per-project volume** is not part of the image — mounted by the operator or
-`vmctl-host add` at clone time.
-
-## 7. Acceptance
-
-* Unattended install; boot to console via `serial0`; no GPU devices
-  (`lspci | grep -i 'vga\|3d'` empty except virtio).
-* `docker run --rm hello-world` succeeds as `${PERSONALIZATION_USERNAME}` (§05); daemon flags verified.
-* All four tool images exist: `docker images dev-{java,scala,sbt,opencode}`
-  shows correct base tags and entrypoints.
-* Wrapper scripts are executable and on PATH: `which java scala sbt opencode`
-  each returns `/home/${PERSONALIZATION_USERNAME}/.local/bin/<tool>`.
-* Ephemeral container demo: from `/work/<project>`, `java -version` runs in
-  `dev-java` container and prints OpenJDK 21; `sbt --version` runs in
-  `dev-sbt` container; no state remains after exit.
-* Cache persistence: run `sbt compile` twice; second run shows cached
-  dependencies (faster).
-* Egress-deny holds: `curl` to archive/allowlisted endpoints succeeds,
-  arbitrary egress fails; only SSH reachable inbound; PVE `firewall=1` set.
-  Host iptables OUTPUT chain is the authoritative enforcement point.
-* Per-project clone via `devctl add` produces unique hostname/keys/IP; template
-  (102) has no project-specific identity (Spec 07).
-* `git config --global user.name` returns `${PERSONALIZATION_FULLNAME}` (§05);
-  `git config --global user.email` returns `${PERSONALIZATION_EMAIL}`.
-* Rebuild at same REF reproduces (Docker pin + image SHAs recorded in MANIFEST).
+| Risk | Mitigation |
+|---|---|
+| A project's build code gains host-level access to its dev VM | Accepted and stated (R-04.3.4). The dev VM is the boundary; the host and the other guests are not reachable from it |
+| A project's build reaches the GPU | No GPU is passed through (R-04.1.2, §2.1); GPU work goes through the LLM VM's API |
+| Tool images and the script that installs them come from different commits | Both are fetched at one resolved reference, which is recorded (R-04.6.4) |
+| A tool image silently carries a stale checkout | Project files are never copied into an image (R-04.4.2) |
+| Container logs fill the 40 GB disk | Log rotation is bounded (R-04.3.2) |
+| A project outgrows the single 40 GB disk | A known gap: the clone contract attaches no second disk, so storage is added by hand (R-04.9.2, Spec 07 §7) |
+| A native toolchain is installed on the guest by some provisioner | No provisioner installs one, and a script that did would break the container boundary (R-04.9.3) |
+| A first boot that cannot find the tool scripts leaves a half-provisioned VM | The scripts are fetched by the seed at the same reference, and the first-boot log names any that is missing (R-04.7.2) |
+| Automatic base-image refresh changes a project's build without the project changing | Refresh is operator-invoked and logged (R-04.7.5) |
+| A dev VM is used as a proxy out of the private subnet | Egress is limited to three destinations by two independent layers (R-04.8.2, R-04.8.3) |

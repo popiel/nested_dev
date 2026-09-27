@@ -1,456 +1,332 @@
-# Spec 01 — Host: Proxmox VE 9.2 autoinstall install media
+# Spec 01 — Host: Proxmox VE 9.2 install media and first-boot provisioner
 
-Status: Draft (merged)
+Status: Draft
+Applies to: The bare-metal hypervisor host
 Pinned versions: Proxmox VE **9.2**, Ubuntu guests **26.04 LTS**
+Implementation: `provision/host/build-iso.sh`, `provision/host/answer-host.toml`,
+`provision/host/first-boot.sh`, `provision/host/provision-host.sh`,
+`provision/host/frag/`, `provision/network/`
 
-## 1. Purpose and scope
+## 1. Scope
 
-Build a bootable ISO that, when booted against a target server, performs a
-**fully unattended** Proxmox VE 9.2 installation and then, on first boot,
-configures IOMMU/VFIO, memory overcommit, and creates the Desktop (100), LLM
-(101), and Dev (102+) guest definitions ready for golden-image import.
+Builds a bootable ISO that performs a fully unattended Proxmox VE 9.2
+installation, then configures the host on first boot: GPU passthrough, memory
+overcommit, network and firewall, guest control credentials, and the three
+starting guest VMs.
 
-In scope: ISO preparation, answer file, first-boot provisioner design, guest
-VM definitions, memory/storage/network defaults, build/verification.
-Out of scope: guest OS image construction (Specs 02/03/04), VLAN design,
-backup/DR policies.
+In scope: install media, answer file, first-boot bootstrap, the provisioner
+fragment sequence, host network and firewall policy, memory overcommit, build
+and verification. Out of scope: guest OS content (Specs 02/03/04), how the
+login hash and seeds reach a guest (Spec 06), dev VM lifecycle (Spec 07), VLAN
+design, backup and DR policy.
 
-Supersedes: `specs-mimo/host-proxmox.md` (9.2, DHCP/ext4/`main`-fetch) and
-`specs-ds4/01-host-pve-install-media.md` (8.x, static/ZFS/REF-pinned). Merged
-below: mimo's 9.2 flow + 32 GB memory profile; ds4's REF-pinning, fragment
-layout, IOMMU assertions, and guest conventions.
+### Preconditions
 
-## 2. Assumptions
+* Build host: Linux with network access, and the
+  `proxmox-auto-install-assistant` tool from the 9.2 ISO or repository.
+* Target server: x86_64 with VT-d or AMD-Vi enabled; an iGPU with board
+  outputs; one or more discrete NVIDIA GPUs; at least one NIC; 32 GB RAM; SSD
+  or NVMe.
+* LAN `192.168.14.0/24`, DHCP-provided. Private VM subnet `192.168.100.0/24`.
+* The iGPU and each dGPU, together with its companion audio function, sit in
+  **separable IOMMU groups**. Verified at install time by R-01.7.
 
-* Build machine: Linux with network access; `proxmox-auto-install-assistant`
-  from the PVE 9.2 ISO/repo (schema drifts across PVE versions — always run
-  `verify` from the same 9.2 tool before building).
-* All provisioning inputs live in `popiel/nested_dev` and are fetched as
-  `https://raw.githubusercontent.com/popiel/nested_dev/<REF>/...` during
-  install (answer file) and first boot (provisioner). `<REF>` is a branch
-  name, tag, or commit SHA set via `PERSONALIZATION_REF`.
-* Install-time HTTP must be reachable for `--fetch-from https://...`. For
-  air-gapped sites, embed with `--answer-file` instead (see §6).
-* Target server: x86_64, VT-d/AMD-Vi enabled; iGPU with board outputs; one or
-  more discrete NVIDIA GPUs (e.g. 2× GTX 1080); single NIC minimum; 32 GB RAM
-  minimum; SSD/NVMe.
-* **LAN**: `192.168.14.0/24` (DHCP-provided). Host gets a dynamic address in
-  this range via `$PHYS_NIC`. VMs are on a **private subnet**
-  `192.168.100.0/24` (dnsmasq on host). VMs are not directly addressable
-  from the LAN; only reachable via host port forwarding. Fixed VM addresses
-  assigned by dnsmasq static leases: Desktop `192.168.100.100`,
-  LLM `192.168.100.101`, Dev `192.168.100.102+`.
-* The iGPU and each dGPU (+ companion audio functions) must sit in
-  **separable IOMMU groups** (verify before acceptance, §7 R4).
+## 2. Requirements
 
-## 3. Build inputs (file manifest)
+### R-01.1 The installation requires no operator interaction
 
-| File (repo path) | Description |
+* **R-01.1.1** Booting the ISO on a conforming target installs the host with
+  no prompts: no keyboard layout, no disk selection, no password entry, no
+  network configuration. An unattended host that stops for one question makes
+  the whole fleet's provisioning unattended only in the parts that run before
+  the question.
+* **R-01.1.2** The answer file is validated by the 9.2 assistant before the ISO
+  is produced. The tool from the pinned 9.2 release is the authority on schema;
+  the schema is version-sensitive and field names differ between releases.
+* **R-01.1.3** The official PVE ISO is used unmodified, with its checksum
+  pinned in the build script.
+
+### R-01.2 The answer file expresses only what the schema supports
+
+The valid top-level sections are `global`, `network`, `disk-setup`,
+`post-installation-webhook` and `first-boot`.
+
+* **R-01.2.1** The answer file contains **no `late-commands` section.** PVE's
+  autoinstall schema has no such section; a file carrying one fails validation
+  with an unknown-field error and the install does not start.
+* **R-01.2.2** `global` carries the root password hash and root SSH keys and
+  **no non-root user**. There is no identity or users block, so the operator
+  account cannot be declared here and is created after installation
+  (R-01.3).
+* **R-01.2.3** Exactly one of the plaintext or hashed root password fields is
+  present, never both.
+* **R-01.2.4** The keyboard field takes an XKB layout name, not a country
+  code.
+* **R-01.2.5** `first-boot` carries the executable and the ordering. Ordering
+  is `network-online` or later, because the bootstrap fetches the provision
+  tree from the network and a hook that runs before networking is usable fails
+  the install.
+* **R-01.2.6** `first-boot.source` is `from-iso`, never `from-url`. The
+  bootstrap carries the operator login hash; a URL would transit that hash
+  through a proxy log, a cache or a shell history.
+
+### R-01.3 The operator account is created before anything can fail
+
+* **R-01.3.1** The first-boot bootstrap creates the operator account defined by
+  Spec 05 §R-05.3, and grants it `sudo`.
+* **R-01.3.2** The bootstrap **fetches the provision tree last.** Account
+  creation, hash persistence and key installation all complete before the
+  first network fetch is attempted.
+* **R-01.3.3** A failed or unreachable fetch therefore leaves a host with a
+  working operator login. Without this ordering, an outage during provisioning
+  produces a host whose only usable account is `root`, whose password the
+  operator may not hold.
+* **R-01.3.4** Account creation is idempotent and refuses to shadow an
+  existing UID or GID belonging to another account (Spec 05 §R-05.3.3).
+
+### R-01.4 The install target disk is pinned, never probed
+
+* **R-01.4.1** The target disk is declared explicitly in
+  `provision/personalization.sh` and consumed verbatim. The build performs
+  **no target-disk detection.**
+* **R-01.4.2** Exactly one disk is named. The schema permits one disk for
+  `ext4` and `xfs` and rejects more, so a list cannot express a preference
+  order. Multi-disk entries are only meaningful for a pool filesystem, where
+  every listed disk joins one pool — a storage design decision, not a
+  fallback.
+* **R-01.4.3** Because only the intended disk is named and nothing else is
+  listed, the installer has no other candidate and **cannot fall back to and
+  wipe a data or rotating disk.** This is the property that makes the pinning
+  safe, and it is the reason a probe is not merely unnecessary but dangerous:
+  a probe run on the build host reports the build host's disks.
+* **R-01.4.4** If the named disk is absent, the install stops. A device-name
+  mismatch fails the build's target rather than silently installing
+  somewhere else.
+* **R-01.4.5** The build **rejects** a target disk value that is a `/dev/`
+  path, a partition name rather than a whole device, an unquoted or empty
+  entry, or a list of more than one disk — before the multi-gigabyte ISO step,
+  where the failure would otherwise surface as an opaque schema error or at
+  install time.
+* **R-01.4.6** Device names are hardware-specific. The target device list is
+  confirmable on the target machine before installation.
+* **R-01.4.7** Storage-device filtering by serial or model is not used. It
+  cannot express an ordering, it does not fail cleanly when nothing matches,
+  and matching every non-rotational disk brings data SSDs into scope.
+
+### R-01.5 First-boot provisioning runs as a single ordered, idempotent unit
+
+* **R-01.5.1** A systemd oneshot unit runs the provisioner. It logs to
+  `/var/log/pve-firstboot.log` and **disables itself on success.**
+* **R-01.5.2** Fragments run in a fixed order, because later fragments depend
+  on state earlier ones create:
+
+  | Order | Fragment | Establishes |
+  |---|---|---|
+  | 1 | `10-gpu-passthrough` | IOMMU, `vfio-pci` binding, the R-01.7 assertion |
+  | 2 | `20-memory-swap` | ZRAM, swap, ballooning |
+  | 3 | `25-desktop-control` | `vmctl` account, control keypair, guest-identity keypair, inventory, host trust pin |
+  | 4 | `30-create-guests` | Seed assembly, guest VMs 100/101, the template conversion gate |
+  | 5 | `90-finalize` | Repositories, NIC, `vmbr0`, dnsmasq, forwarding, firewall, manifest |
+
+* **R-01.5.3** Every fragment is idempotent. A re-run after a partial failure
+  resumes rather than restarting or corrupting.
+* **R-01.5.4** The unit's own full run at the pinned reference is
+  authoritative; the ISO-embedded bootstrap exists only to create the account,
+  persist the hash, fetch the tree and invoke it. Both reference the same
+  release reference.
+* **R-01.5.5** The unit remains installed and re-runnable. An operator who
+  needs to repair a fragment runs the tree again at the same reference.
+
+### R-01.6 GPU passthrough is bound to the host before any guest is created
+
+* **R-01.6.1** IOMMU is enabled at boot, and the `vfio-pci` driver binds the
+  passthrough set — the iGPU, each dGPU, and each companion audio function.
+* **R-01.6.2** The set is derived from the machine, not hardcoded to one
+  board: an Intel and an AMD iGPU are both handled, and vendor IDs are
+  collected from PCI enumeration.
+* **R-01.6.3** Only devices in the passthrough set have their host driver
+  withheld. A GPU the host retains must keep working; blacklisting by module
+  name alone would take it out along with the passed-through one.
+* **R-01.6.4** The initramfs is regenerated so the binding survives a reboot
+  into the real root filesystem. Without this the host binds correctly on the
+  installer and reverts on first boot — the failure appears only after the
+  fleet has been created.
+* **R-01.6.5** A GPU's companion audio function is passed through with it
+  whenever the two sit in the same IOMMU group; omitting it yields a guest
+  with no audio device for a display the operator expects to make sound on.
+* **R-01.6.6** A virtio GPU is never a passthrough candidate. It is the
+  host's fallback console and belongs to the host.
+* **R-01.6.7** The host is framebuffer-less once the iGPU is passed through.
+  A serial or IPMI console is required and is the documented recovery path.
+* **R-01.6.8** Consumer GeForce parts may refuse to run in a guest with
+  hardware virtualisation exposed. A documented CPU-model override exists for
+  that case (Spec 03 covers guest-side verification).
+
+### R-01.7 Provisioning refuses to create guests on an unsafe IOMMU layout
+
+* **R-01.7.1** Before any guest is created, the host asserts that every
+  passthrough candidate's IOMMU group contains only that device (or that
+  device and its companion audio function).
+* **R-01.7.2** On failure the run **aborts and names the offending group and
+  its members.** It does not proceed, and it does not proceed quietly.
+* **R-01.7.3** The rule is stated in exactly one place in the source and is
+  evaluated for both the GPU and its audio function, rather than being
+  re-derived per call site. Two derivations of "is this group safe" can
+  disagree, and the disagreeing one is the one that passes a bad device
+  through.
+* **R-01.7.4** An absent group directory counts as zero devices and is
+  therefore not separable, rather than being treated as "no problem found".
+
+### R-01.8 The host overcommits memory safely
+
+* **R-01.8.1** The host is hard-capped at 2 GB, so guest allocation cannot
+  starve the hypervisor.
+* **R-01.8.2** Compressed RAM (ZRAM) and disk swap are configured and enabled,
+  and guests have ballooning enabled.
+* **R-01.8.3** Overcommit is not applied to a host at or below the baseline
+  memory profile, where the guest allocation already fits.
+
+### R-01.9 The host provides DNS and DHCP for the private subnet
+
+* **R-01.9.1** dnsmasq serves DHCP and DNS on `vmbr0`, enabled at boot and
+  passing its own configuration test.
+* **R-01.9.2** Every VM has a fixed lease and a DNS entry in both short and
+  fully-qualified form.
+* **R-01.9.3** Upstream DNS is taken from the host's resolver at provision
+  time, and the host then resolves through dnsmasq. Guests never depend on the
+  LAN's resolver being reachable or correct.
+* **R-01.9.4** The LAN-facing NIC is detected rather than assumed, and the
+  host network configuration is written from that detection.
+* **R-01.9.5** IP forwarding is enabled and persisted.
+* **R-01.9.6** `vmbr0` has no physical port. A bridge that includes the LAN
+  NIC would place every VM directly on the LAN segment, which R-00.2.3
+  forbids.
+* **R-01.9.7** The build manifest records the install media's checksum and the
+  resolved release reference.
+
+### R-01.10 The host firewall is deny-by-default and per-guest
+
+* **R-01.10.1** All three filter chains default to DROP, and the ruleset is
+  persisted so it survives a reboot.
+* **R-01.10.2** The policy is:
+
+  | Direction | Policy |
+  |---|---|
+  | Host INPUT | loopback, established, SSH 2222 from LAN, SSH 22 from the desktop only, web UI 8006 from LAN, ICMP echo. Everything else dropped. |
+  | Host OUTPUT | loopback, established, 443, 53, 123. Everything else dropped. |
+  | FORWARD, inter-VM | the desktop may reach any `vmbr0` peer. No guest may reach the desktop, and no guest may reach another guest. |
+  | FORWARD, egress | per R-00.2.6. |
+  | NAT | MASQUERADE for `vmbr0` to the LAN; DNAT from the LAN for the desktop's SSH and RDP and for host SSH on 2222. |
+
+* **R-01.10.3** Host SSH on port 22 is accepted from the desktop's address
+  only. The control channel that creates and starts dev VMs is privileged;
+  accepting host SSH from every guest would make the fleet's containment
+  irrelevant, since any guest could then clone, start and configure a
+  template.
+* **R-01.10.4** The documented remote-access surface is: host SSH on 2222 from
+  the LAN, host web UI on 8006 from the LAN, and desktop SSH or RDP DNAT'd
+  from the LAN.
+
+### R-01.11 The starting guest set is created unattended
+
+* **R-01.11.1** vm 100 (`desktop`) and vm 101 (`llm`) are created and started
+  during provisioning, with the iGPU and dGPU(s) attached respectively, an
+  OS disk sized per Spec 00 §R-00.4, and a NoCloud seed attached (Spec 06).
+* **R-01.11.2** vm 102 (`dev-template`) is created and started, **provisioned
+  once, and then converted to a PVE template** (Spec 07 §6). It is never left
+  as a running VM.
+* **R-01.11.3** A template cannot be started directly. This is the mechanism
+  that guarantees no dev VM is ever auto-started.
+* **R-01.11.4** vm 103 and above are **not** created by host provisioning. They
+  are created on demand from the desktop (Spec 07).
+* **R-01.11.5** Re-running provisioning does not recreate a VM that already
+  exists, and does not restart one that is already running.
+* **R-01.11.6** Before the template is converted, the guest agent answers and
+  the guest's first-boot log reports completion. Conversion proceeds only
+  after that gate, so the template is never captured half-provisioned.
+* **R-01.11.7** If the gate times out, the run logs a warning, leaves the VM
+  running for the operator to finish by hand, and **continues** to the
+  firewall step. The template is not converted from an unprovisioned disk.
+* **R-01.11.8** The per-VM firewall flag is set on the guests whose egress is
+  restricted.
+
+## 3. Build
+
+* **R-01.12.1** The build produces a single bootable ISO in an output
+  directory outside version control.
+* **R-01.12.2** The answer file and the first-boot bootstrap are rendered from
+  committed templates, not hand-edited. A hand-edited value is one no build
+  reproduces.
+* **R-01.12.3** Rendering substitutes every identity, credential and disk
+  token, and the build fails if any token survives. An unsubstituted
+  `__PERSONALIZATION_PASSWORD_HASH__` in the shipped bootstrap is a host with
+  no operator account; an unsubstituted `__ROOT_PASSWORD_HASH__` is a host
+  whose root has no password.
+* **R-01.12.4** A yescrypt hash survives rendering intact. An unescaped `$` in
+  a hash is expanded away by the substitution, producing an install that
+  validates, installs, and leaves nobody able to log in.
+* **R-01.12.5** The bootstrap's staging directory is explicitly writable.
+  The default staging area is the source ISO's own directory, which is mounted
+  read-only, and the build fails there.
+* **R-01.12.6** The build verifies the answer file before invoking the
+  assistant, and tolerates the assistant's absence by reporting that the
+  check was skipped — never by reporting success.
+
+## 4. Invariants
+
+* I-01.1 The install never prompts.
+* I-01.2 The operator account exists on the host before the first network
+  fetch is attempted.
+* I-01.3 The root hash reaches `/etc/shadow` and nowhere else; no file the
+  provisioner can read contains it.
+* I-01.4 Only the pinned target disk can be written by the installer.
+* I-01.5 No guest is created until IOMMU groups are verified separable.
+* I-01.6 The dev template is a PVE template and cannot be started.
+* I-01.7 The host firewall defaults to DROP in all three chains.
+* I-01.8 A re-run of provisioning is safe.
+
+## 5. Acceptance
+
+| # | Check |
 |---|---|
-| Official `proxmox-ve_9.2-1.iso` (downloaded) | Unmodified; pin version + SHA256 in `provision/host/build-iso.sh` |
-| `provision/host/answer-host.toml` | Installer answer file (§4), 9.2 schema; carries the **root** password hash only |
-| `provision/host/first-boot.sh` | First-boot bootstrap template (§4.1), embedded via `--on-first-boot`; carries the personalization password hash and creates the operator account |
-| `provision/host/provision-host.sh` | First-boot entry point (§5) |
-| `provision/host/frag/*.sh` | Fragments: GPU, memory, vmctl, guest creation, finalize |
-| `provision/host/vmctl/vmctl-host` | Restricted control stub for dev VMs (Spec 07) |
-| `provision/host/vmctl/sudoers` | vmctl sudoers drop-in (Spec 07) |
-| `provision/network/*.conf` | `vmbr0`/firewall/dnsmasq fragments applied by provisioner |
-| `keys/root-password-hash` | yescrypt hash for host `root` (gitignored; build input) |
-| `keys/personalization-password-hash` | yescrypt hash for the operator account and every guest (gitignored; build input) |
-| `output/` | Build products + `MANIFEST` (gitignored) |
+| A-01.1 | Boot the ISO on a conforming target. No prompt appears before the reboot. |
+| A-01.2 | The operator account exists and works with the operator key, and `sudo` is passwordless for it. Its shadow hash matches `keys/personalization-password-hash`; host `root`'s is a different hash matching `keys/root-password-hash`. |
+| A-01.3 | With the network unreachable, the operator account still exists and logs in. |
+| A-01.4 | The answer file passes the 9.2 validator. It contains no `late-commands` section, no non-root user field, both not at once for the root password, and `first-boot.source` is `from-iso`. |
+| A-01.5 | `disk-list` names exactly the configured device, and the build rejects each malformed variant in R-01.4.5. |
+| A-01.6 | After reboot: the kernel command line carries the IOMMU flag for the detected CPU vendor, and the passthrough addresses show the `vfio-pci` driver in use while a retained GPU still shows its own. |
+| A-01.7 | A deliberately non-separable IOMMU group aborts provisioning and names the group and its members. |
+| A-01.8 | Memory: ZRAM and swap are active, the host cap is 2 GB, and guests have ballooning enabled. |
+| A-01.9 | `qm list` shows 100 running, 101 running, 102 template, and no other VM. `qm start 102` is refused. |
+| A-01.10 | `vmbr0` holds `192.168.100.1/24` with no physical port. dnsmasq is active, passes its configuration test, and answers for every VM's short and FQDN. The host's resolver is the local dnsmasq. |
+| A-01.11 | All three filter chains default to DROP. INPUT accepts only the ports and sources in R-01.10.2; OUTPUT accepts only 443, 53 and 123. |
+| A-01.12 | From the LAN: host SSH on 2222, host web UI on 8006, desktop SSH and desktop RDP all reachable. Host SSH on 22 is **not** reachable from the LAN. |
+| A-01.13 | Host SSH on 22 **is** reachable from the desktop's address, and refused from another guest's. |
+| A-01.14 | Per R-00.2.6: the desktop and vm 101 reach the LAN; vm 101 cannot reach a port other than 53/80/443; vm 103 reaches 53/80/443; a dev VM on 104 or above reaches nothing. |
+| A-01.15 | No guest other than the desktop can reach another guest. |
+| A-01.16 | The provisioning log is clean of errors, the unit is disabled, and the manifest records the media checksum and the resolved reference. |
+| A-01.17 | Re-running the provisioner makes no destructive change. |
+| A-01.18 | The build fails on an unsubstituted token and on a yescrypt hash mangled by substitution. |
 
-## 4. Answer file — `answer-host.toml` (representative, PVE 9.2)
+## 6. Cross-references
 
-Replace every `CHANGE_ME` before building. `build-iso.sh` renders this
-template, so the values arrive as `__PLACEHOLDER__` substitutions rather than
-hand edits. A root password is still required — `root-password` or
-`root-password-hashed`, never both — but it is the *root* password only; the
-operator account is created by the bootstrap (§4.3).
+| Spec | Relationship |
+|---|---|
+| Spec 00 | Versions, topology, memory and egress policy, sourcing and pinning rules |
+| Spec 05 | Operator identity, the two-hash split, account-creation ordering |
+| Spec 06 | How seeds and the login hash reach a guest; fragment execution order in detail |
+| Spec 07 | `vmctl` account and keypair (fragment 25), the template conversion gate, dev VM creation |
+| Spec 09 | Schema, lint, invariant and placeholder tests covering this spec's requirements |
 
-```toml
-[global]
-keyboard = "en-us"
-country = "us"
-fqdn = "pve-host.CHANGE_ME"
-timezone = "UTC"
-mailto = "CHANGE_ME_admin@example.com"
-# Hashed, not plaintext (§4.3): from keys/root-password-hash. The operator
-# account's password is a different hash and never appears in this file.
-root-password-hashed = "CHANGE_ME_mkpasswd_output"
-root-ssh-keys = ["CHANGE_ME_ssh_ed25519_admin"]
-
-[network]
-source = "from-dhcp"
-# Static alternative (preconfigured):
-# source = "preconfigured"
-# [network.interface]
-# name = "CHANGE_ME_enpXs0"
-# cidr = "192.168.14.10/24"
-# gateway = "192.168.14.1"
-# dns = "192.168.14.1"
-
-[disk-setup]
-filesystem = "ext4"
-disk-list = __TARGET_DISKS__
-# ZFS variant (documented alternative, not default):
-# filesystem = "zfs"
-# [disk-setup.zfs]
-# pool = "rpool"
-# ashift = 12
-# compress = "zstd"
-
-[first-boot]
-source = "from-iso"
-ordering = "network-online"
-```
-
-Notes:
-
-* `[global]`/`[network]`/`[disk-setup]` follow the mimo 9.2 field names
-  (`keyboard`, `disk-list`); `[network.interface]` preconfigured shape follows
-  ds4. Validate the file with the 9.2 `validate-answer` subcommand — the
-  schema is version-sensitive and the tool is the authority.
-* `keyboard` takes an **XKB layout name**, not an ISO country code
-  (`en-us`, not `us`); `country` is the two-letter code.
-* `first-boot.ordering` is one of `before-network`, `network-online`,
-  `fully-up`.
-* `disks`/disk-list: restrict to the OS disk pattern if the server has
-  separate OS vs data disks; never blindly wipe data disks. See §4.2.
-
-### 4.1 No `late-commands` — bootstrap via `--on-first-boot`
-
-There is **no `late-commands` section** in the PVE autoinstall schema. The
-only valid top-level sections are `global`, `network`, `disk-setup`,
-`post-installation-webhook` and `first-boot`. (`late-commands` and its
-`/target/...` chroot semantics are a ds4/cloud-init concept that PVE never
-adopted. Setting it produces a hard validation error: *unknown field
-`late-commands`*.)
-
-Post-install work is instead carried by a script embedded in the ISO at
-build time:
-
-```bash
-prepare-iso /path/to/source.iso \
-  --fetch-from iso \
-  --answer-file /work/answer-host.toml \
-  --on-first-boot /work/first-boot.sh \   # rendered from provision/host/first-boot.sh
-  --tmp /work \                            # required: staging defaults to the
-                                          # source ISO's dir, which is :ro
-  --output /output/proxmox-ve_9.2-1_auto.iso
-```
-
-`provision/host/first-boot.sh` is a template rendered by `build-iso.sh` with
-the same `__PLACEHOLDER__` set as the answer file, and performs four jobs, in
-order:
-
-1. Persist the **personalization** password hash (`__PERSONALIZATION_PASSWORD_HASH__`,
-   from `keys/personalization-password-hash`) to
-   `/root/.personalization-password-hash` for frag/30, which injects it into
-   the guest NoCloud seeds. Mode 600.
-2. Create the personalization account — `${PERSONALIZATION_USERNAME}` with the
-   configured UID/GID, home, `/bin/bash`, `sudo` membership, the rendered
-   `__PERSONALIZATION_PASSWORD_HASH__` applied via `chpasswd -e`, and
-   `keys/host_os_ed25519.pub` as `~/.ssh/authorized_keys`. PVE's schema has no
-   non-root user field (§4.3), so this cannot be expressed in the answer file.
-3. Fetch the `provision/` tree at the pinned `<REF>`.
-4. Install and enable the `pve-firstboot.service` oneshot unit, then run
-   the provisioner directly — the hook already executes *during* the first
-   boot, so merely enabling the unit would defer provisioning to the second
-   boot.
-
-Step 2 runs before step 3 on purpose: the account must exist even if the
-GitHub fetch fails, and the rendered identity is available at that point
-whereas `provision/personalization.sh` is not.
-
-**Why `from-iso` and not `from-url`:** the hash must never transit the
-network or a public repository. `from-iso` keeps it in the installer media,
-the same trust domain as `root-password-hashed` in the answer file. The
-rendered `output/build-work/first-boot.sh` contains the hash in plaintext and
-is therefore as sensitive as `keys/personalization-password-hash`; it is
-gitignored and must not be committed.
-
-The `pve-firstboot.service` unit remains authoritative — it runs the full
-`frag/` tree at the pinned REF. `first-boot` is the bootstrap that installs
-it. Both reference the same `<REF>`.
-
-### 4.2 `disk-list` is a pinned target, configured explicitly
-
-`disk-list` is **not** auto-detectable. The answer file is rendered on the build
-machine and consumed on the target, so any probe of `/dev` during the build can
-only report the *builder's* disks. An earlier revision did exactly that and
-baked `disk-list = ["sda"]` — the build box's disk — into an ISO meant for
-different hardware. `build-iso.sh` therefore has no target-disk detection; the
-disk is declared in `provision/personalization.sh`:
-
-```sh
-PERSONALIZATION_TARGET_DISKS='"nvme0n1"'
-```
-
-**It is a single pinned disk, not an ordered preference.** PVE's schema allows
-exactly one disk for ext4/xfs — `validate-answer` fails with *"make sure to
-define only one disk for ext4 and xfs"* — so there is no list order to encode
-"prefer NVMe, else SSD". Multi-disk `disk-list` is only meaningful for ZFS/RAID,
-where every listed disk joins one pool; that is a storage-design choice, not a
-fallback mechanism. This host runs ext4, so the target is pinned.
-
-The pinning is the fail-safe. Because only the intended disk is named, the
-installer has no other candidate and cannot fall back to and wipe a data or
-spinning disk. If the named disk is absent the install stops. To install on the
-SATA SSD instead, change the value to `"sda"` and rebuild.
-
-`filter` (UDEV `ID_SERIAL`/`ID_MODEL`/`DEVNAME` properties) was considered and
-rejected: `filter-match` is `any`/`all`, a flat boolean with no ordering, so it
-cannot express a preference either; a non-matching filter does not fail cleanly
-(the installer can hang at disk selection); and matching every non-rotational
-disk would put a data SSD in scope. `disk-list` and `filter` are mutually
-exclusive in the schema.
-
-`build-iso.sh` runs `validate_target_disks()` and rejects `/dev/` paths,
-partition names (`nvme0n1p1`, `sda1`), unquoted entries, empty lists, and more
-than one disk, at build time — so a bad value fails before the 1.7 GB ISO step
-rather than as an opaque schema error or at install time.
-
-Names are hardware-specific. Before first boot, confirm them on the target:
-
-```
-proxmox-auto-install-assistant device-info -t disk
-```
-
-### 4.3 No non-root user in the answer file — the bootstrap creates it
-
-The only valid top-level sections are `global`, `network`, `disk-setup`,
-`post-installation-webhook` and `first-boot`, and `[global]`'s identity fields
-are `root-password` / `root-password-hashed` / `root-ssh-keys` and nothing
-else. There is no `identity:` / `users:` block and no `late-commands` to abuse:
-an answer file that carries one fails `validate-answer` outright.
-
-So an unattended install can produce a host with exactly one account, `root`.
-The operator account defined by Spec 05 (`${PERSONALIZATION_USERNAME}`, uid
-1401) is therefore created by the `first-boot` bootstrap (§4.1 step 2), which
-is the schema-supported post-install hook. The same split applies to the
-passwords:
-
-| Credential | Source | Destination |
-|---|---|---|
-| `root` | `keys/root-password-hash` → `root-password-hashed` | `/etc/shadow` on the host, written by the installer |
-| `${PERSONALIZATION_USERNAME}` | `keys/personalization-password-hash` → `__PERSONALIZATION_PASSWORD_HASH__` in the bootstrap | Host account (`chpasswd -e`) and every guest seed via `/root/.personalization-password-hash` |
-
-Keeping the two hashes in separate files makes the separation structural: a
-leak of the login password — the one shared with three VMs — can no longer
-hand out the host's most privileged account.
-
-Note that a Linux user with `sudo` is still not a PVE realm user. Web UI
-access for the operator would need `pve realm add <user>@pam` on the live host;
-that is out of scope for the install media.
-
-## 5. First-boot provisioner — `provision-host.sh` requirements
-
-Runs from the systemd oneshot unit. Fragments run in order; each idempotent,
-logging to `/var/log/pve-firstboot.log`. Unit disables itself on success.
-
-### 5.1 `frag/10-gpu-passthrough.sh` — IOMMU + VFIO
-
-* R1. Kernel cmdline in `/etc/default/grub`:
-  `GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on iommu=pt"` (Intel) or
-  `amd_iommu=on` (AMD), then `update-grub`. Collect `vfio-pci.ids=` from
-  `lspci -nn` for the iGPU + its audio function and each dGPU + audio
-  (e.g. `10de:1b80,10de:10f0,...` — replace with target values).
-* R2. Early binding via `/etc/modprobe.d/vfio.conf`:
-  `options vfio-pci ids=<same> disable_vga=1` plus
-  `softdep i915 pre: vfio-pci`, `softdep nouveau pre: vfio-pci`,
-  `softdep nvidia pre: vfio-pci`; list `vfio vfio_iommu_type1 vfio_pci` in
-  `/etc/modules-load.d/vfio.conf`; blacklist only the passed-through set
-  (`nouveau nvidia i915/amdgpu` entries scoped to passthrough hardware —
-  do not blacklist a GPU retained by the host). `update-initramfs -u -k all`.
-* R3. Framebuffer expectation: when the iGPU is passed, the host is
-  framebuffer-less; keep IPMI/serial as out-of-band console. Document this.
-* R4. Assert IOMMU groups before creating guests:
-  `ls /sys/bus/pci/devices/<addr>/iommu_group/devices` must contain exactly
-  the intended set, else abort with the offending group listed. Do not proceed
-  silently. Consumer-GeForce note: plan `qm set 101 --args '-cpu host,kvm=off,hidden=1'`
-  if the driver refuses the VM (see §8).
-
-Verify after reboot: `lspci -nnk` shows `vfio-pci` on passthrough addresses;
-`dmesg | grep -i vfio` clean.
-
-### 5.2 `frag/20-memory-swap.sh` — 32 GB overcommit (baseline profile)
-
-From `specs-mimo` (absent in ds4):
-
-```bash
-apt-get install -y zram-tools
-# /etc/default/zramswap: ALGO=zstd, PERCENT=50, PRIORITY=100
-systemctl enable --now zramswap
-fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab && swapon -a
-```
-
-Host hard-capped at 2 GB; guests use QEMU ballooning (`balloon: 1`,
-`shares` as needed). On 32 GB hosts this fragment is a no-op beyond ZRAM.
-
-### 5.3 `frag/30-create-guests.sh` — guest definitions (NoCloud seeds)
-
-NoCloud seeds (Spec 06): host fetches user-data templates from GitHub, injects
-the personalization login hash read from `/root/.personalization-password-hash`
-(+ vmctl private key for desktop), builds seed ISOs, and creates VMs with
-official Ubuntu ISO + NoCloud seed attached as cdrom. No golden qcow2 files.
-The root hash is never involved: guest `root` is explicitly locked in the
-seed templates (Spec 05 §5.4).
-
-New fragment: `frag/25-desktop-control.sh` (Spec 07) runs before frag/30 to
-create the `vmctl` user, generate the control keypair, install sudoers, and
-stage the private key for desktop seed injection. Frag/30 reads the staged
-key and embeds it into the desktop seed's `late-commands` as base64.
-
-Guest creation sequence:
-
-* **vm 100 desktop** (iGPU):
-  `qm create 100 --name desktop --memory 8192 --cores 4 --cpu host
-  --scsihw virtio-scsi-single --net0 virtio=52:54:00:00:01:00,bridge=vmbr0
-  --ostype l26 --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
-  --hostpci0 0000:00:02.0,pcie=1,x-vga=0
-  --cdrom0 <ubuntu-desktop-iso>
-  --ide0 "${SEED_DIR}/desktop-user-data,media=cdrom"
-  --boot order=scsi0`
-  Plus audio function as `hostpci1` if in its own group.
-  **Started immediately** (autoinstall + first-boot runs during frag/30 window).
-* **vm 101 llm** (dGPUs):
-  `qm create 101 --name llm --memory 16384 --cores 6 --cpu host
-  --scsihw virtio-scsi-single --net0 virtio=52:54:00:00:01:01,bridge=vmbr0
-  --ostype l26 --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
-  --hostpci0 <DGPU0>,pcie=1 --hostpci1 <DGPU1>,pcie=1
-  --cdrom0 <ubuntu-server-iso>
-  --ide0 "${SEED_DIR}/llm-user-data,media=cdrom"
-  --scsi1 local-lvm:500,size=500G
-  --boot order=scsi0`
-  (size the data volume per host; one `hostpci` per dGPU + paired audio function).
-  GeForce workaround: `qm set 101 --args '-cpu host,kvm=off,hidden=1'`.
-  **Started immediately**.
-* **vm 102 dev-template**:
-  `qm create 102 --name dev-template --memory 8192 --cores 4 --cpu host
-  --scsihw virtio-scsi-single --net0 virtio=52:54:00:00:01:02,bridge=vmbr0,firewall=1
-  --ostype l26 --bios ovmf --machine q35 --vga none --serial0 socket --agent enabled=1
-  --cdrom0 <ubuntu-server-iso>
-  --ide0 "${SEED_DIR}/dev-user-data,media=cdrom"
-  --boot order=scsi0`
-  **Started for provisioning, then converted to template** (Spec 07 §6):
-  provisioning gate (poll `qm guest cmd` + log tail), `cloud-init clean`,
-  clear machine-id/SSH host keys, `qm shutdown`, `qm template`.
-  Template can never be started directly — ensures dev VMs are not auto-started.
-* **vm 103+ dev-\<project\>**: created on demand via `devctl add` (Spec 07),
-  cloned from template 102, **created stopped**. Per-project data volume
-  (`scsi1`) optional at clone time.
-
-Network default (`/etc/network/interfaces` managed by PVE; routed
-architecture):
-
-```
-auto lo
-iface lo inet loopback
-
-auto CHANGE_ME_eno1
-iface CHANGE_ME_eno1 inet dhcp
-
-auto vmbr0
-iface vmbr0 inet static
-    address 192.168.100.1/24
-    bridge-ports none
-    bridge-stp off
-    bridge-fd 0
-```
-
-dnsmasq on host serves DHCP/DNS on `vmbr0` (192.168.100.0/24).
-Host NATs VM egress via MASQUERADE on `$PHYS_NIC`.
-PVE firewall: allow 22/8006 from management subnet only; block inter-VM by
-default; open documented ports per guest spec.
-
-### 5.4 `frag/90-finalize.sh` — screening and networking
-
-* Disable `pve-enterprise` repo, enable `pve-no-subscription` (or mirror).
-* Detect physical NIC (`$PHYS_NIC`); write `/etc/network/interfaces` with
-  `$PHYS_NIC` on DHCP and `vmbr0` as private bridge (`192.168.100.1/24`,
-  no `bridge-ports`).
-* Install and configure `dnsmasq`: static leases for VMs (MAC addresses
-  set in `frag/30`), DNS entries (short + FQDN), upstream DNS from host's
-  `/run/resolv.conf`. Enable as systemd service.
-* Enable IP forwarding (`sysctl net.ipv4.ip_forward=1`, persisted).
-* Apply iptables rules:
-  - **NAT**: DNAT `LAN:22→desktop:22`, `LAN:3389→desktop:3389`,
-    `LAN:2222(192.168.14.*)→host:22`; MASQUERADE `vmbr0→$PHYS_NIC`.
-  - **INPUT**: ACCEPT lo, ESTABLISHED, 2222/lan, 8006/lan, icmp; DROP rest.
-  - **FORWARD**: Desktop→any ALLOW; LLM/Dev→Desktop SSH ALLOW;
-    ESTABLISHED,RELATED ALLOW; DROP rest.
-  - **OUTPUT**: ACCEPT lo, ESTABLISHED, 443, 53, 123; DROP rest.
-* Configure host DNS (`/etc/resolv.conf` → `127.0.0.1`).
-* Write `/etc/hosts` with VM entries (short + FQDN).
-* Write `/etc/hosts`/motd summary; record ISO hash + REF in `output/MANIFEST`.
-* Self-disable unit (`systemctl disable --now pve-firstboot`); reboot or hand
-  to operator.
-
-## 6. Build procedure (PVE 9.2)
-
-```bash
-REF=$(git describe --tags --exact-match 2>/dev/null || echo "main")  # or explicit SHA
-proxmox-auto-install-assistant verify provision/host/answer-host.toml
-proxmox-auto-install-assistant prepare-iso \
-  iso/proxmox-ve_9.2-1.iso \
-  --fetch-from=https://raw.githubusercontent.com/popiel/nested_dev/$REF/provision/host/answer-host.toml \
-  --rng-source=autorandom
-# output: proxmox-ve_9.2-1_auto.iso
-```
-
-Variants: offline `--answer-file=provision/host/answer-host.toml`;
-PXE via `extract-dir` + HTTP/iPXE serving the same answer;
-`--seed-should-lock` to fail closed on resize. Pin ISO SHA256 in
-`provision/host/build-iso.sh`; record REF + hash in `output/MANIFEST`.
-
-## 7. Verification (acceptance) on target hardware
-
-1. Boot ISO; assert **no interactive prompts** until reboot.
-2. SSH in: `/proc/cmdline` has `intel_iommu=on iommu=pt` (or AMD equiv);
-   `lspci -nnk` shows `vfio-pci` on passthrough set; R4 group checks passed.
-3. `free -h` / `zramctl` show ZRAM + swap active (32 GB profile).
-4. `qm list` shows 100 (running), 101 (running), 102 (template). No other VMs.
-   `qm start 102` is rejected by PVE (template).
-5. **Network**:
-   - `ip addr show vmbr0` shows `192.168.100.1/24`.
-   - `systemctl status dnsmasq` active; `dnsmasq --test` clean.
-   - `cat /etc/resolv.conf` shows `nameserver 127.0.0.1`.
-   - `iptables -t nat -L PREROUTING -n` shows DNAT rules.
-   - `iptables -L OUTPUT -n` shows DROP policy with only 443/53/123 allowed.
-   - `ssh -p 2222 root@localhost` reaches host (from LAN).
-   - From LAN: `ssh root@<host-ip>` reaches desktop VM (DNAT).
-   - From LAN: `mstsc <host-ip>:3389` reaches desktop VM (DNAT).
-6. RDP `:3389` reaches vm 100 (Spec 02); `nvidia-smi` in vm 101 lists dGPUs
-   (Spec 03); `qm status 102` shows template; `devctl add test` from desktop
-   creates vm 103 stopped; `devctl start 103` boots it (Spec 07).
-7. `/var/log/pve-firstboot.log` clean; unit disabled.
-8. **Accounts** (Spec 05 §4.1):
-   - `getent passwd ${PERSONALIZATION_USERNAME}` shows uid 1401, gid 1401,
-     home `/home/popiel`, shell `/bin/bash`.
-   - `id ${PERSONALIZATION_USERNAME}` lists `sudo`.
-   - `sudo -n -u ${PERSONALIZATION_USERNAME} sudo -n true` succeeds from a
-     non-root shell (passwordless sudo for the operator key).
-   - `ssh ${PERSONALIZATION_USERNAME}@<host-ip>` works with the operator key
-     only; `sudo -n true` over that session works.
-   - `getent shadow root` and `getent shadow ${PERSONALIZATION_USERNAME}` have
-     *different* hashes, matching `keys/root-password-hash` and
-     `keys/personalization-password-hash` respectively.
-   - `/root/.personalization-password-hash` exists, mode 600, and
-     `/root/.password-hash` does not exist.
-   - In each guest, `passwd -S root` reports `L` and the only unlocked login
-     is the personalization account.
-
-## 8. Known risks / mitigation
+## 7. Risks
 
 | Risk | Mitigation |
 |---|---|
-| iGPU shares IOMMU group with host-critical device | Pre-verify; ACS-override `pve-kernel` toggle or accept limited passthrough (virtual display); else reject host |
-| Consumer GeForce driver fails in VM | `qm set 101 --args '-cpu host,kvm=off,hidden=1'` |
-| dGPU audio function omitted | Always pass audio pair; verify group membership |
-| Answer schema drift (8.x vs 9.x) | Pinned 9.2 ISO + `verify` in CI; this spec's field names are 9.2-only |
-| Host loses console when iGPU passed | Expected headless; IPMI/serial required |
-| GitHub unreachable at install/first boot | `--answer-file` vendored copy / mirrored `--fetch-from`; small logged fetches with retry. Note the account is created *before* the fetch, so a failed fetch still leaves a usable operator login |
-| REF drift between ISO and guests | Single REF for host + all goldens; recorded in MANIFEST |
-| One hash reused for root and the operator account | Separate gitignored files, separate placeholders, static invariants test (§4.3) |
-| Operator assumes a `sudo` user can log into the PVE web UI | Documented non-goal; `pve realm add <user>@pam` is a manual post-install step |
+| iGPU shares an IOMMU group with a host-critical device | Asserted at provisioning time (R-01.7); if it fails, the host must be reconfigured or rejected |
+| Consumer GeForce driver refuses to run in a guest | Documented CPU-model override |
+| Answer schema differs between PVE releases | Pinned 9.2 tool, `verify` in the build, and a build-time validation step |
+| Host loses its console when the iGPU is passed | Expected; serial/IPMI is a stated precondition (R-01.6.7) |
+| GitHub unreachable during provisioning | The operator account already exists (R-01.3.2); a vendored answer file is available for air-gapped install; fetches are small, logged and retried |
+| Host and guests drift to different release references | One reference for the whole fleet, recorded in the manifest (R-00.8.2) |
+| One hash file serves both credentials | Two files, two placeholders, and a test asserting each carrier receives only its own hash |
+| Operator assumes a `sudo` user can reach the PVE web UI | A documented non-goal; realm access is a separate manual step on the live host |

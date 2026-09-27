@@ -1,326 +1,242 @@
 # Spec 05 — Personalization (non-root user identity)
 
-Status: Draft (new; consolidates user identity scattered across Specs 02–04)
+Status: Draft
+Applies to: Host (PVE) and every guest VM in the fleet
 Pinned versions: Ubuntu Server/Desktop **26.04 LTS**, Proxmox VE **9.2**
+Implementation: `provision/personalization.sh`, `provision/host/first-boot.sh`,
+`provision/host/frag/30-create-guests.sh`
 
-## 1. Purpose and scope
+## 1. Scope
 
-Define the **single canonical source** for non-root user identity across all
-VMs and containers in the nested_dev fleet. Every spec and build script
-references this spec (and the shared config file it defines) instead of
-hardcoding user values.
+Defines the single source of non-root user identity for the host and all
+guests. No other spec or script hardcodes a username, full name, email, UID or
+GID.
 
-In scope: username, full name, email, UID/GID, home directory, SSH key
-placement, git identity, login password hash. Out of scope: per-VM
-hostnames, network config, package choices.
+In scope: username, full name, email, UID/GID, home directory, shell, SSH key
+placement, git identity, login password hash, release reference. Out of scope:
+per-VM hostnames, network configuration, package selection.
 
-## 2. User identity
+## 2. Requirements
 
-| Attribute | Value |
+### R-05.1 One canonical identity source
+
+`provision/personalization.sh` defines every identity and repository value as
+a shell variable. It is the only place in the repository where an identity
+value appears literally.
+
+* **R-05.1.1** No build script, first-boot script, seed template, Dockerfile
+  or test file may contain a literal username, full name, email, UID or GID
+  outside `provision/personalization.sh`.
+* **R-05.1.2** The required variables are `PERSONALIZATION_USERNAME`,
+  `PERSONALIZATION_FULLNAME`, `PERSONALIZATION_EMAIL`, `PERSONALIZATION_UID`,
+  `PERSONALIZATION_GID`, `PERSONALIZATION_HOME`, `PERSONALIZATION_REPO`,
+  `PERSONALIZATION_REF` and `PERSONALIZATION_TARGET_DISKS`.
+* **R-05.1.3** `PERSONALIZATION_HOME` is derived from `PERSONALIZATION_USERNAME`
+  rather than restated.
+* **R-05.1.4** A script that consumes an unset required variable **fails with a
+  message naming the variable** and pointing at `personalization.sh`. It does
+  not substitute a default. An unset `PERSONALIZATION_UID` that silently
+  defaulted would give guests an account whose identity no longer matches the
+  host's, and the mismatch surfaces only as a bind-mount permission error much
+  later.
+* **R-05.1.5** `PERSONALIZATION_TARGET_DISKS` is build-host-specific and is
+  permitted to be empty. Every other variable is required.
+
+### R-05.2 The same account on host and in all guests
+
+* **R-05.2.1** The host and all three guest families (desktop, LLM, dev) have
+  an account with the configured username, full name, UID, GID, home and
+  `/bin/bash` shell.
+* **R-05.2.2** The account is a member of `sudo` on the host.
+* **R-05.2.3** The UID is set explicitly rather than inherited from the
+  distro default, so that a container's default UID cannot collide with it.
+* **R-05.2.4** Guests accept the operator's public key
+  (`keys/host_os_ed25519.pub`) as a login credential and disable password
+  authentication for SSH. The account's password hash is still set, because
+  console and RDP access need it; it is simply not accepted over SSH.
+* **R-05.2.5** The account is added to the `docker` group wherever Docker is
+  installed.
+
+### R-05.3 The host account is created after installation, not by the answer file
+
+* **R-05.3.1** The host account is created by the first-boot bootstrap
+  (`provision/host/first-boot.sh`), not by the installer answer file. The PVE
+  answer schema accepts no non-root user, so this is the only mechanism
+  available (Spec 01 §4).
+* **R-05.3.2** Account creation is **idempotent**: re-running it is a no-op.
+* **R-05.3.3** If the configured UID or GID already belongs to a *different*
+  account, creation **aborts**. Creating a second identity for one operator
+  leaves two accounts that both appear to work and neither of which owns the
+  files the other created.
+* **R-05.3.4** The account's home directory is owned by the account, and
+  `~/.ssh` is mode 700 with `authorized_keys` mode 600.
+* **R-05.3.5** The GECOS field carries the configured full name, not the
+  username, so `ls` and mail headers show the person's name.
+* **R-05.3.6** Account creation completes **before** the provision tree is
+  fetched from the network. A failed or unreachable fetch must still leave a
+  usable operator login, because the alternative is a host with no account but
+  `root` that the operator does not have the password for.
+* **R-05.3.7** The bootstrap never creates, re-credentials or otherwise touches
+  the `root` account. See R-05.4.
+
+### R-05.4 Two credentials, two files, disjoint destinations
+
+Two distinct credentials exist and must never be conflated.
+
+| Credential | Reads from | Reaches | Never reaches |
+|---|---|---|---|
+| Host `root` | `keys/root-password-hash` | The host's `/etc/shadow`, written by the installer | Any file the provisioner can read; any guest |
+| `${PERSONALIZATION_USERNAME}` | `keys/personalization-password-hash` | The host account, and the account of every guest | The host's `root` account |
+
+* **R-05.4.1** Both files are gitignored and are read only at build time on the
+  build workstation. Neither is git-tracked.
+* **R-05.4.2** The two hashes are separate files, not one file read twice. A
+  single file makes the login password and the host's most privileged
+  credential the same secret, so any leak of the *login* password — the one
+  shared with three VMs and reachable from a laptop over RDP — is also a leak
+  of host root. A file that leaked is a file nobody can scope.
+* **R-05.4.3** The answer file carries only the root hash. The first-boot
+  bootstrap carries only the login hash. A build that cannot find one hash
+  file **fails naming which file** — "hash not found" alone does not tell the
+  operator which of the two secrets to generate.
+* **R-05.4.4** The login hash travels on the installer media inside the
+  first-boot bootstrap, never as a URL and never through the installer
+  media's own fetch. The media is the same trust domain as the answer file's
+  root hash; a URL would put the login password in a proxy log, a CDN cache or
+  a shell history.
+* **R-05.4.5** The rendered bootstrap is as sensitive as the hash file it
+  contains and is treated the same way: not committed, not distributed
+  separately from the ISO.
+
+### R-05.5 Guest `root` has no password
+
+* **R-05.5.1** `root` is locked in every guest, stated explicitly by every
+  seed rather than relying on the installer's default. A default that is
+  correct today stops being correct the moment someone edits the `identity:`
+  block, and nothing in the seed would object.
+* **R-05.5.2** No seed does anything to guest `root` other than lock it — no
+  `chpasswd`, no `usermod -p`, no unlock-then-relock.
+* **R-05.5.3** The account from R-05.2 is the only unlocked login in a guest.
+
+### R-05.6 Identity is injected, never committed
+
+* **R-05.6.1** Seed templates and the bootstrap carry placeholder tokens, never
+  a real value. A committed hash is published to the repository and shipped in
+  every ISO ever built from it.
+* **R-05.6.2** The renderer fails the build if a placeholder token survives
+  substitution. A surviving token ships a guest with no login hash, no
+  operator key, or a UID that is literally `__PERSONALIZATION_UID__`.
+* **R-05.6.3** A pre-commit hook and a static test both reject a real password
+  hash appearing in any committed template.
+
+### R-05.7 Git identity is configured only where it is used
+
+* **R-05.7.1** The dev guest sets the configured `user.name` and `user.email`
+  as the account's global git config. The desktop and LLM guests do not.
+
+### R-05.8 The release reference is declared once
+
+* **R-05.8.1** `PERSONALIZATION_REPO` and `PERSONALIZATION_REF` are defined in
+  `provision/personalization.sh`. No script carries a literal repository or
+  ref.
+* **R-05.8.2** `PERSONALIZATION_REF` may be a branch name, a tag or a full
+  40-character commit SHA. Branch names and tags resolve automatically in
+  fetch URLs.
+* **R-05.8.3** Resolution of a ref to a commit SHA is **defined once** in
+  `provision/personalization.sh`. Two definitions of the same lookup can
+  disagree, and the two consumers would then fetch different trees while
+  reporting the same ref in their manifests.
+* **R-05.8.4** Resolving a ref **never fails**: it returns successfully with an
+  empty string when the ref is unresolvable, `git` is absent, or the network
+  is down. Callers run under `set -euo pipefail`, where a non-zero return
+  aborts a provisioning run in progress. Whether an unresolved ref is fatal is
+  the caller's decision, not the resolver's.
+* **R-05.8.5** A full 40-hex input is passed through without a `git` call.
+* **R-05.8.6** When a ref names both a branch and a tag, the branch wins.
+* **R-05.8.7** The resolved commit SHA is recorded in the build manifest, so a
+  build is traceable to a specific tree even when the ref was a moving branch.
+* **R-05.8.8** A ref is used unchanged for the host install media, the
+  provisioner, and every guest's first-boot fetch. Guests must not fetch a
+  different tree than the host that created them.
+
+### R-05.9 Public keys are the exception to the secrecy rules
+
+* **R-05.9.1** `keys/host_os_ed25519.pub` is committed. It is a public key.
+* **R-05.9.2** Guests and the host are provisioned from that file, not from
+  the host's `authorized_keys`. Reading the host's file would silently
+  propagate a key an operator added by hand to every VM in the fleet.
+* **R-05.9.3** Keypairs whose private halves must never exist in the
+  repository are generated on the host at install time (Spec 07).
+
+### R-05.10 Forking
+
+* **R-05.10.1** A fork owner personalizes the deployment by editing
+  `provision/personalization.sh` and nothing else.
+* **R-05.10.2** Because R-05.1 forbids literals elsewhere, that single edit
+  changes the identity of the host account and all guests, including UID, GID
+  and the git identity.
+
+## 3. Invariants
+
+* I-05.1 `provision/personalization.sh` is the only file containing a literal
+  identity value.
+* I-05.2 The root hash and the login hash have disjoint destinations. Nothing
+  the provisioner runs can read the root hash.
+* I-05.3 No committed file contains a real password hash.
+* I-05.4 Neither hash file is git-tracked.
+* I-05.5 `resolve_ref_to_sha` is defined in exactly one file.
+* I-05.6 The host account exists even if the provision-tree fetch fails.
+
+## 4. Acceptance
+
+| # | Check |
 |---|---|
-| Username | `popiel` |
-| Full name | `T. Alexander Popiel` |
-| Email | `tapopiel@gmail.com` |
-| UID | `1401` (set explicitly at install time; avoids collision with container default UIDs) |
-| GID | `1401` |
-| Home | `/home/popiel` |
-| Shell | `/bin/bash` |
-| Host privileges | Member of `sudo`; `keys/host_os_ed25519.pub` installed in `~/.ssh/authorized_keys` |
-| SSH | Key-only in guests (`install-server: true`, `allow-pw: false`); password login also works for the host account |
-| Docker group | Added at first boot where Docker is installed |
-| Repo | `popiel/nested_dev` (GitHub `<user>/<repo>`) |
-| Tag | `host_os_v0.1` (release tag for build manifests and first-boot refs) |
+| A-05.1 | `provision/personalization.sh` defines every variable in R-05.1.2; `PERSONALIZATION_HOME` is derived, not restated. |
+| A-05.2 | A search for the configured username, full name and email across `provision/`, `desktop/`, `llm/`, `dev/` returns only `provision/personalization.sh` and references to it. |
+| A-05.3 | Every seed template carries `__PERSONALIZATION_USERNAME__`, `__PERSONALIZATION_FULLNAME__`, `__PERSONALIZATION_UID__` and `__PERSONALIZATION_GID__`; none carries a literal identity value. |
+| A-05.4 | `PERSONALIZATION_UID` unset makes each consumer fail naming the variable. |
+| A-05.5 | On the installed host: `id ${PERSONALIZATION_USERNAME}` shows the configured UID and a `sudo` group; `getent passwd` shows the configured GID, home and `/bin/bash`; GECOS is the full name. |
+| A-05.6 | The host account's `~/.ssh` is 700, `authorized_keys` is 600, home is owned by the account, and `authorized_keys` contains the operator public key. |
+| A-05.7 | The host account's shadow entry equals `keys/personalization-password-hash`; host `root`'s shadow entry is a *different* hash and equals `keys/root-password-hash`. |
+| A-05.8 | The rendered answer file contains the root hash and no trace of the login hash; the rendered bootstrap contains the login hash and no token or value for the root hash. |
+| A-05.9 | Removing either hash file produces a build error naming that specific file. |
+| A-05.10 | Re-running the host account block is a no-op; a UID already owned by another account aborts rather than creating a second identity. |
+| A-05.11 | The account is created before the provision fetch: a fetch pointed at an unreachable host still leaves a working operator login. |
+| A-05.12 | In every guest, `passwd -S root` reports `L`, and the account from R-05.2 is the only unlocked login. No seed contains any other root-credential operation. |
+| A-05.13 | The rendered answer file and the rendered bootstrap contain no surviving `__PLACEHOLDER__` token. |
+| A-05.14 | Both hash files exist, are gitignored and are not git-tracked; no committed template matches a real-hash pattern. |
+| A-05.15 | `resolve_ref_to_sha` is defined in exactly one script, and behaves per R-05.8.4–R-05.8.6 for branch, tag, 40-hex, unresolvable, absent `git`, and `git` exiting non-zero. |
+| A-05.16 | `keys/host_os_ed25519.pub` is git-tracked. |
+| A-05.17 | A pre-commit hook and a static test both reject a real hash in any seed template. |
 
-The same account exists on the **host** (PVE) and in **all three guests**. The
-PVE web UI is *not* covered: a Linux `sudo` user is not a PVE realm user, and
-granting UI access needs a separate `pve realm add <user>@pam` on the host.
-That is deliberately out of scope here.
+## 5. Cross-references
 
-## 3. Canonical config file
+| Spec | Uses personalization for |
+|---|---|
+| Spec 01 | Host account creation in the first-boot bootstrap; root hash in the answer file |
+| Spec 02 | Desktop seed identity, first-boot `chown`/`loginctl`, SSH examples |
+| Spec 03 | LLM seed identity, first-boot `chown` |
+| Spec 04 | Dev seed identity, first-boot `chown`/`usermod`/`git config`, wrapper paths |
+| Spec 06 | Host-mediated injection of the login hash and keys into guest seeds |
+| Spec 07 | Guest-identity and `vmctl` keypair generation; host trust pin |
+| Spec 08 | `nested keys-status` reporting on both hashes |
 
-`provision/personalization.sh` — sourced by all build scripts and
-first-boot scripts. Contains shell variables for every value above.
+## 6. Files
 
-```bash
-# provision/personalization.sh — shared user identity variables
-# Source this file in all build scripts and first-boot scripts.
-# Canonical source: specs/05-personalization.md
-
-PERSONALIZATION_USERNAME="popiel"
-PERSONALIZATION_FULLNAME="T. Alexander Popiel"
-PERSONALIZATION_EMAIL="tapopiel@gmail.com"
-PERSONALIZATION_UID="1401"
-PERSONALIZATION_GID="1401"
-PERSONALIZATION_HOME="/home/${PERSONALIZATION_USERNAME}"
-
-# Repository and release reference
-# Set to a branch name, tag, or full commit SHA:
-#   "main"              — track tip of main branch (latest changes)
-#   "some-tag"          — pinned to a specific tag
-#   "abc123def456..."   — pinned to an exact commit SHA (most reproducible)
-PERSONALIZATION_REPO="popiel/nested_dev"
-PERSONALIZATION_REF="main"
-```
-
-Scripts source it with:
-```bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-. "${SCRIPT_DIR}/../provision/personalization.sh"  # adjust relative path
-```
-
-## 4. Per-VM user provisioning
-
-All three guest VMs (Desktop §02, LLM §03, Dev §04) create the same
-non-root account via cloud-init `identity:` block:
-
-```yaml
-identity:
-  hostname: <vm-specific>
-  username: __PERSONALIZATION_USERNAME__
-  password: "CHANGE_ME_HASHED"
-  realname: "__PERSONALIZATION_FULLNAME__"
-```
-
-The `user-data` YAML files carry the placeholder names; `frag/30` substitutes
-the real values at guest-creation time. The autoinstall `identity:` block does
-not support a `uid` field, so the UID/GID are set via `late-commands`:
-
-```yaml
-late-commands:
-  - "curtin in-target --target=/target -- usermod -u 1401 __PERSONALIZATION_USERNAME__"
-  - "curtin in-target --target=/target -- groupmod -g 1401 __PERSONALIZATION_USERNAME__"
-  # Guest root has no password at all (§5.4)
-  - "curtin in-target --target=/target -- passwd -l root"
-```
-
-Each guest first-boot script sources `provision/personalization.sh` and
-uses the variables for `chown`, `usermod`, `loginctl`, `getent`, and
-`git config` calls.
-
-### 4.1 The host account
-
-PVE's autoinstall schema cannot create a non-root user: `[global]` accepts
-only `root-password` / `root-password-hashed` and `root-ssh-keys`, and there is
-no `late-commands` section. The host account is therefore created by the
-first-boot bootstrap (`provision/host/first-boot.sh`, embedded in the ISO via
-`--on-first-boot`), which is the schema-supported replacement for the removed
-`late-commands`.
-
-`build-iso.sh` renders the identity and the hash into that bootstrap as
-`__PERSONALIZATION_USERNAME__`, `__PERSONALIZATION_FULLNAME__`,
-`__PERSONALIZATION_UID__`, `__PERSONALIZATION_GID__`,
-`__PERSONALIZATION_HOME__`, `__ADMIN_PUBKEY__` and
-`__PERSONALIZATION_PASSWORD_HASH__`, and the bootstrap then:
-
-1. `groupadd -g ${PERSONALIZATION_GID}` / `useradd -u ${PERSONALIZATION_UID}
-   -g ${PERSONALIZATION_GID} -d ${PERSONALIZATION_HOME} -s /bin/bash -c
-   "${PERSONALIZATION_FULLNAME}" ${PERSONALIZATION_USERNAME}` — idempotent, and
-   it refuses to proceed if the UID or GID already belongs to a different
-   account rather than creating a second identity for one operator.
-2. Applies the hash verbatim with `chpasswd -e` (an already-encrypted
-   password, so no plaintext ever touches disk and the host gets the identical
-   yescrypt string the guests receive).
-3. `usermod -aG sudo`, then installs `keys/host_os_ed25519.pub` as
-   `~/.ssh/authorized_keys` (600, `~/.ssh` 700, home `chown`ed to the account).
-
-It runs **before** the provision tree is fetched, so the host still has an
-operator account if the GitHub fetch fails.
-
-## 5. Password hashes
-
-Two credentials, two files, both gitignored and read only at build time:
-
-| File | Credential | Used by |
+| File | Purpose | Committed |
 |---|---|---|
-| `keys/personalization-password-hash` | Login password for `${PERSONALIZATION_USERNAME}` | The host account (§4.1) and all three guests, via `CHANGE_ME_HASHED` |
-| `keys/root-password-hash` | PVE `root` on the host | The answer file's `root-password-hashed`, and nowhere else |
+| `provision/personalization.sh` | Identity and ref variables; `resolve_ref_to_sha` | Yes |
+| `keys/host_os_ed25519.pub` | Operator public key, trusted on host and all guests | Yes |
+| `keys/personalization-password-hash` | yescrypt hash of the login password (host account + all guests) | No |
+| `keys/root-password-hash` | yescrypt hash of the PVE `root` password (host only) | No |
+| `/root/.personalization-password-hash` | On-host copy of the login hash for the seed renderer, mode 600 | Runtime only |
+| `.githooks/pre-commit` | Rejects a real hash in a seed template | Yes |
 
-They are deliberately separate files: while one file fed both, every leak of
-the account's login password would have been a leak of the host's most
-privileged credential too. `keys/root-password-hash` never enters the
-first-boot bootstrap, and `frag/30` never sees it.
+### Non-normative note — why the two hashes are separate files
 
-The `user-data` YAML files contain only the placeholder `CHANGE_ME_HASHED`;
-the real hash is injected at build time.
-
-### 5.1 Generating the hashes
-
-```bash
-# Login password for the personalization account (host + all guests)
-mkpasswd -m yescrypt > keys/personalization-password-hash
-# Separate break-glass password for PVE root on the host only
-mkpasswd -m yescrypt > keys/root-password-hash
-# Paste or type the password when prompted; the hash is written to the file.
-chmod 600 keys/personalization-password-hash keys/root-password-hash
-```
-
-### 5.2 Runtime injection (host-mediated)
-
-The host reads `keys/personalization-password-hash` at ISO build time and
-embeds it in the first-boot bootstrap, which is carried by the installer media
-(`source = "from-iso"`, never a URL). During the first boot the bootstrap
-creates the host account from it (§4.1) and persists it to
-`/root/.personalization-password-hash`. At guest VM creation time (Spec 06),
-the host's `frag/30-create-guests.sh` reads that file and injects the hash into
-fetched user-data templates:
-
-```bash
-PASS_HASH="$(cat /root/.personalization-password-hash)"
-sed -e "s|CHANGE_ME_HASHED|${PASS_HASH}|g" \
-    "${TEMPLATE_DIR}/user-data/user-data" > "${WORK_DIR}/user-data"
-```
-
-The root hash takes the other path: `build-iso.sh` substitutes it into
-`answer-host.toml`'s `root-password-hashed`, and the installer writes it
-directly to `/etc/shadow`. It is never persisted to a file the provisioner
-can read.
-
-### 5.3 Git hook
-
-`.githooks/pre-commit` blocks commits where any `user-data/user-data`
-file contains a real hash instead of `CHANGE_ME_HASHED`. Enable with:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-`tests/static/invariants.bats` additionally asserts that neither hash file is
-git-tracked, that no committed host template contains a hash, and that the
-renamed `keys/personalization-password-hash` path is the only one referenced.
-
-### 5.4 Root has no password, anywhere but the host
-
-| Account | Password |
-|---|---|
-| Host `root` | `keys/root-password-hash` (via the answer file) |
-| Host `${PERSONALIZATION_USERNAME}` | `keys/personalization-password-hash` |
-| Guest `${PERSONALIZATION_USERNAME}` | same hash, injected at guest creation |
-| Guest `root` | **none** — each seed runs `passwd -l root` |
-
-subiquity already leaves guest `root` locked, but the seeds say so explicitly
-rather than depending on that default, so a later change to the `identity:`
-block cannot quietly introduce a guest root credential.
-
-### 5.5 File layout
-
-| File | Purpose | Committed? |
-|---|---|---|
-| `keys/personalization-password-hash` | yescrypt hash of the login password (host account + all guests) | No (gitignored) |
-| `keys/root-password-hash` | yescrypt hash of the PVE `root` password (host only) | No (gitignored) |
-| `/root/.personalization-password-hash` | On-host copy for `frag/30`, 600 | No (runtime) |
-| `keys/host_os_ed25519.pub` | Operator public key from the build machine, trusted on the host and on every guest | Yes (public key only) |
-| `*/user-data/user-data` | Contains `CHANGE_ME_HASHED` placeholder | Yes |
-| `.githooks/pre-commit` | Blocks real hashes in user-data | Yes |
-
-### 5.5 Install-time generated credentials
-
-Two keypairs are generated on the host at first boot rather than committed,
-because the private halves must never exist in the repo (Spec 07):
-
-| Keypair | Private half | Public half trusted by |
-|---|---|---|
-| vmctl control | desktop `~/.ssh/pvehost_vmctl` | host `vmctl` account (`ForceCommand`-restricted) |
-| guest identity | desktop `~/.ssh/nested-dev-id` | host root (pinned to the desktop address) + all guests |
-
-`keys/host_os_ed25519.pub` is the exception: it is a public key, so it is
-committed, and `first-boot.sh` copies it out of the fetched repo tarball into
-`/root/provision/keys/` because `keys/` is not part of the provision tree.
-`frag/30` then injects it into every guest seed as
-`ssh_authorized_keys`, so the operator key works on the host and all guests.
-
-## 6. Git identity (dev VM only)
-
-Set at first boot in the Dev VM (Spec 04 §5 step 3):
-
-```bash
-git config --global user.name "${PERSONALIZATION_FULLNAME}"
-git config --global user.email "${PERSONALIZATION_EMAIL}"
-```
-
-Only the Dev VM configures git; Desktop and LLM VMs do not.
-
-## 7. Fork and tagging protocol
-
-### 7.1 Forking
-
-Each user forks the repo and customizes `provision/personalization.sh`
-with their own identity. No other files need editing for personalization —
-the build scripts source the shared config, and `build-iso.sh` renders it into
-the host first-boot bootstrap at build time, because the host account has to
-exist before the provision tree (which carries the config) can be fetched.
-
-### 7.2 Tag format
-
-Tags mark a known-good set of ISOs. Format: `host_os_v<major>.<minor>`
-
-| Tag | Meaning |
-|---|---|
-| `host_os_v0.1` | First release — initial host + guest images |
-| `host_os_v0.2` | Incremental update (e.g. new package, config change) |
-| `host_os_v1.0` | Stable baseline for production use |
-
-Tags are **immutable** — once an ISO is built from a tagged commit, that
-commit is never modified. A new tag is created for any change that affects
-the built images.
-
-### 7.3 Tagging workflow
-
-1. Make changes, commit, verify builds.
-2. Update `PERSONALIZATION_REF` in `provision/personalization.sh`:
-   ```bash
-   PERSONALIZATION_REF="some-tag"   # or a branch name, or a full SHA
-   ```
-3. Commit and push.
-4. If using a tag, create and push it:
-   ```bash
-   git tag some-tag
-   git push origin some-tag
-   ```
-5. Build the host ISO — the manifest records the REF and resolved SHA.
-
-### 7.4 What the REF controls
-
-- Host `build-iso.sh` sets `REF="${PERSONALIZATION_REF}"` — resolved to
-  a commit SHA via `git ls-remote`, recorded in the host ISO's `MANIFEST`.
-- Raw GitHub URLs use the REF directly (branch names and tags resolve
-  automatically); the SHA is for logging and reproducibility.
-- First-boot script headers reference the REF as the fetch point.
-
-## 8. Cross-references
-
-| Spec | How it uses personalization |
-|---|---|
-| Spec 01 (Host) | Host account creation in the first-boot bootstrap (§4.1), root hash in the answer file |
-| Spec 02 (Desktop) | cloud-init identity, first-boot `chown`/`loginctl`, SSH examples |
-| Spec 03 (LLM) | cloud-init identity, first-boot `chown`, serial autologin |
-| Spec 04 (Dev) | cloud-init identity, first-boot `chown`/`usermod`/`git config`, wrapper paths |
-
-All three guest specs' `Decisions` tables include an `Account` row that says
-"`popiel` (§05)" instead of repeating the full identity.
-
-## 9. Acceptance
-
-* `provision/personalization.sh` defines all variables; no hardcoded
-  `popiel` / `T. Alexander Popiel` / `tapopiel@gmail.com` in any build
-  script or first-boot script.
-* Every VM's cloud-init `identity.username` matches
-  `${PERSONALIZATION_USERNAME}`.
-* `grep -r 'popiel\|T\. Alexander\|tapopiel' provision/ desktop/ llm/`
-  returns only the shared config file and references to it.
-* `keys/personalization-password-hash` and `keys/root-password-hash` both
-  exist, are gitignored, and neither is git-tracked; `user-data` files contain
-  only `CHANGE_ME_HASHED`.
-* The two hashes are never interchangeable: the answer file carries only
-  `__ROOT_PASSWORD_HASH__`, the first-boot bootstrap only
-  `__PERSONALIZATION_PASSWORD_HASH__`.
-* On the installed host: `id ${PERSONALIZATION_USERNAME}` shows uid 1401 and a
-  `sudo` group; `getent shadow` shows its password hash equal to
-  `keys/personalization-password-hash`; `~/.ssh/authorized_keys` holds
-  `keys/host_os_ed25519.pub`; `getent shadow root` shows the *other* hash.
-* In every guest, root is locked (`passwd -S root` reports `L`) and the
-  personalization account is the only login.
-* `keys/host_os_ed25519.pub` is git-tracked.
-* `.githooks/pre-commit` is present and executable.
-* `PERSONALIZATION_REPO` and `PERSONALIZATION_REF` are defined in
-  `provision/personalization.sh`; no hardcoded refs in any build script.
-* `PERSONALIZATION_REF` matches the intended branch, tag, or SHA.
+A single file serving both credentials makes the login password and host
+`root` the same secret. That password is the one typed into three VMs and
+accepted over RDP from a laptop on the LAN, so the blast radius of its
+exposure is already wide. Sharing a file with host root means that wide blast
+radius terminates in the host's most privileged account, and no scoping of the
+leak is possible after the fact.
