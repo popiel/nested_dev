@@ -22,7 +22,7 @@ acceptance tables in each spec.
 |---|---|
 | Framework | `bats` |
 | Entry point | One script runs everything; a fast mode runs the static layer only |
-| Windows entry point | A wrapper runs the same suite inside WSL, because the same tests are about 50× slower under MSYS process emulation |
+| Windows entry point | A wrapper runs the same suite inside WSL, because MSYS process emulation makes it roughly two orders of magnitude slower |
 | Layers | Static (lint, config, invariants) and unit (functions and files) |
 | Style | Assertions read the repository's own files; a pure function is invoked and checked |
 | Speed | No test may require a hypervisor, a network, or a real guest |
@@ -225,9 +225,9 @@ acceptance tables in each spec.
 * **R-09.7.5** Records accumulate across runs, and a report compares each run
   against the previous one, listing tests that became meaningfully slower.
 * **R-09.7.6** A slowdown is only reported when it is both relatively and
-  absolutely significant. A percentage alone turns ordinary jitter in a
-  sub-20ms test into a large apparent regression, which trains the reader to
-  ignore the list.
+  absolutely significant. A percentage alone turns ordinary scheduling jitter
+  in a very fast test into a large apparent regression, which trains the reader
+  to ignore the list.
 * **R-09.7.7** A run is not compared against a partial previous run, which would
   make every surviving test look like a regression.
 * **R-09.7.8** A result line that carries no measurement — a file-level error,
@@ -263,7 +263,11 @@ acceptance tables in each spec.
 | 09 | all | Source guards, lint coverage of extension-less scripts and of the harness itself, dead-code detection |
 | 09 | `timing.bats` | Timing record parsing, report totals, regression thresholds, suite-list set equality and label uniqueness, fast-mode coverage, result-block accounting, skip handling, unrunnable and unparseable suites, wrapper and setup-script contracts, `AGENTS.md` accuracy |
 
-**Totals: 248 tests** — 30 static, 218 unit, across 11 files.
+The map names the suite that owns each area, not the tests within it. The set
+of suites is asserted against the files on disk (R-09.1b.1), so this table
+cannot silently fall behind the tree. Test counts are deliberately absent: they
+go stale on every commit that adds a test, and a stale count in a specification
+is worse than no count, because it reads as a claim.
 
 ## 5. Invariants
 

@@ -1,7 +1,8 @@
 # AGENTS.md — working notes for coding agents on this repository
 
-Read this before running the test suite. The obvious command is roughly 50× too
-slow on Windows, and it fails in a way that looks like a hang.
+Read this before running the test suite. The obvious command is far too slow on
+Windows — a different order of magnitude, not a slightly longer wait — and it
+fails in a way that looks like a hang.
 
 ## How to run the tests
 
@@ -9,7 +10,7 @@ slow on Windows, and it fails in a way that looks like a hang.
 
 ```bash
 bash tests/run-wsl.sh                    # whole suite
-bash tests/run-wsl.sh --fast             # static only (lint, configs, invariants)
+bash tests/run-wsl.sh --fast             # static layer only
 bash tests/run-wsl.sh tests/unit/gpu-detect.bats
 bash tests/run-wsl.sh tests/unit/frag10-iommu.bats tests/unit/frag25-vmctl.bats
 bash tests/run-wsl.sh --slowest 20       # longer slow-test table
@@ -27,21 +28,29 @@ Both exit non-zero when any test fails.
 
 ### Do not run `bats` directly, and do not run `tests/run.sh` from git-bash or PowerShell
 
-Under git-bash/MSYS every process spawn costs about 65ms, and `bats` forks
-several times per test. Measured on this machine:
+The cost is process creation, not the tests. `bats` spawns several processes
+per test, and a POSIX-emulation layer makes each spawn two to three orders of
+magnitude more expensive than native Linux. So the per-test overhead that WSL
+absorbs in milliseconds becomes tens or hundreds of milliseconds under
+git-bash/MSYS, and a suite that takes well under a minute natively can exceed
+any practical tool timeout.
 
-| | 30-test `--fast` subset | full 248-test suite |
-|---|---|---|
-| git-bash / MSYS | ~4 min | ~15 min, exceeds a 10 min tool timeout |
-| WSL2, repo on `/mnt/c` | 13s | 34s |
+The consequence for an agent: **the number to reason about is the multiplier,
+not the wall time.** Anything whose cost is dominated by process spawns is
+roughly two orders of magnitude slower under MSYS than under WSL, and gets
+relatively worse as the suite grows. A run launched from an MSYS shell is not
+slow in an interesting way — it is a different order of magnitude, and the
+failure mode is a timeout that looks like a hang.
 
-The suite does finish under MSYS, but it takes long enough that a tool timeout
-kills it first. If a test command is about to be launched from an MSYS shell,
-use `bash tests/run-wsl.sh` instead.
+If a test command is about to be launched from an MSYS shell, use
+`bash tests/run-wsl.sh` instead. The wrapper targets the live repository on
+`/mnt/c`, so it measures the code you actually edited.
 
-WAL is about a quarter of the WSL run: the report attributes most of the
-remainder to harness time, not to test bodies. Optimising an individual test
-will not move that number.
+The cost scales with the number of tests, so it gets worse over time as the
+suite grows. Do not try to claw the time back by optimising individual tests:
+`bash tests/timing.sh report` attributes the wall time, and the harness share
+rather than the in-test share is what dominates. The lever is the environment,
+or fewer larger suites — not faster test bodies.
 
 Bypassing the entry points also loses the timing record and the per-test
 failure diagnostics, so the result is not equivalent even where it is fast.
@@ -97,7 +106,7 @@ a change in **in tests** as a real performance regression.
 
 Records accumulate across runs, so `report` compares each run against the one
 before it and lists tests that got meaningfully slower (both ≥50% and ≥100ms, to
-keep sub-20ms jitter from looking like a regression). Pass
+keep jitter in a very fast test from looking like a regression). Pass
 `--regression-pct` / `--regression-min-ms` to change those thresholds.
 
 `tests/.timing/` is gitignored on purpose: it is per-machine measurement, not

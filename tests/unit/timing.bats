@@ -825,6 +825,33 @@ BATS
     assert_file_contains "$f" 'timing.sh'
 }
 
+@test "the docs declare no test counts" {
+    # A count of the existing tests is a claim that goes stale on the very next
+    # commit that adds one, and a stale count in documentation reads as truth.
+    # The suite's own size is available from `tests/run.sh`; the docs should not
+    # duplicate it.
+    local root="${BATS_TEST_DIRNAME}/../.." f
+    for f in "$root/AGENTS.md" "$root/specs/09-test-automation.md"; do
+        if grep -nE 'Totals:|\*\*[0-9]+ tests|[0-9]+ tests\*\*|across [0-9]+ files' "$f"; then
+            echo "$(basename "$f") states a test count; remove it" >&2
+            return 1
+        fi
+    done
+}
+
+@test "the docs compare MSYS and WSL by ratio, not by measurement" {
+    # Wall-clock figures for this repository on one workstation are not
+    # transferable: they depend on the machine, the filesystem and the suite's
+    # size at the time. The durable statement is the multiplier.
+    local f="${BATS_TEST_DIRNAME}/../../AGENTS.md"
+    # A table cell carrying a duration, e.g. "| WSL2, repo on /mnt/c | 13s |".
+    if grep -nE '^\|.*\| *[0-9]+ *(s|ms|min) *\|' "$f"; then
+        echo "AGENTS.md reports a wall-clock measurement; state the ratio instead" >&2
+        return 1
+    fi
+    assert_file_contains "$f" 'orders of magnitude'
+}
+
 @test "timing records are excluded from version control" {
     run git -C "${BATS_TEST_DIRNAME}/../.." check-ignore tests/.timing/current.tsv
     [ "$status" -eq 0 ]
