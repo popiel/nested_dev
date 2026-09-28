@@ -23,6 +23,30 @@ load '../lib/helpers'
     [ "$fail" -eq 0 ]
 }
 
+@test "shellcheck passes on the test harness scripts" {
+    # The sweep above excludes tests/ wholesale, because .bats files are not
+    # shell. These four are ordinary shell scripts, though, and nothing else
+    # would ever look at them.
+    require_command shellcheck
+    local fail=0
+    local script full_path
+    for script in tests/run.sh tests/run-wsl.sh tests/timing.sh tests/wsl-setup.sh; do
+        full_path="${PROJECT_ROOT}/${script}"
+        [ -f "$full_path" ] || {
+            echo "MISSING: $script" >&2
+            fail=1
+            continue
+        }
+        run shellcheck -x -s bash -e SC1091,SC2034,SC2016 "$full_path"
+        if [ "$status" -ne 0 ]; then
+            echo "FAIL: $script" >&2
+            echo "$output" >&2
+            fail=1
+        fi
+    done
+    [ "$fail" -eq 0 ]
+}
+
 @test "shellcheck passes on extension-less bash scripts" {
     require_command shellcheck
     local fail=0

@@ -8,7 +8,15 @@
 *.iml
 .*.swp
 .*.swo
+# An unanchored `lib/` rule matches tests/lib/ too, which would silently exclude
+# tests/lib/helpers.bash — the file every test file loads. Re-include it
+# explicitly; the negations must follow the rule they override.
 lib/
+!/tests/lib/
+!/tests/lib/**
+
+# Per-test timing records written by tests/run.sh (tests/timing.sh)
+/tests/.timing/
 /templates/gen
 target/
 */log/*

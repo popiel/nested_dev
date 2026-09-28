@@ -64,13 +64,32 @@ fi'
     # The contract that frag/30's private copy violated: under `set -euo
     # pipefail` a missing git used to fail the command substitution and abort
     # guest provisioning part-way, leaving a half-created fleet behind.
-    # A PATH with no git at all is the honest way to simulate that.
-    setup_mock_path
-    rm -f "${FIXTURES_DIR}/mock-bin/git"
-    PATH="${FIXTURES_DIR}/mock-bin:/usr/bin:/bin"
-    run resolve_ref_to_sha "popiel/nested_dev" "main"
-    [ "$status" -eq 0 ]
-    [ -z "$output" ]
+    #
+    # The simulated PATH has to be built from a directory that is known to hold
+    # no git. Naming /usr/bin here, as this test used to, does not simulate
+    # anything on a real Linux host, where git IS installed in /usr/bin: the
+    # call then reached the network and returned a real SHA. That is how the
+    # test passed on Git Bash, where git lives in /mingw64/bin, and then failed
+    # under WSL and on any Linux CI runner. Asserting the precondition makes a
+    # broken simulation report as a broken test instead of a mystery failure.
+    # Everything that narrows PATH runs in a subshell: teardown calls
+    # cleanup_mocks, which needs rm, so a PATH left narrowed here would fail
+    # teardown with "rm: command not found" and mask the real result.
+    (
+        local empty="${BATS_TEST_TMPDIR}/no-git-bin"
+        mkdir -p "$empty"
+        PATH="$empty"
+
+        run command -v git
+        [ -z "$output" ] || {
+            echo "precondition failed: git is still reachable on the simulated PATH" >&2
+            return 1
+        }
+
+        run resolve_ref_to_sha "popiel/nested_dev" "main"
+        [ "$status" -eq 0 ]
+        [ -z "$output" ]
+    )
 }
 
 @test "resolve_ref_to_sha survives a failing git without tripping set -e" {

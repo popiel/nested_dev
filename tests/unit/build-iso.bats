@@ -192,12 +192,29 @@ SCRIPT
     assert_not_contains "$output" "unknown"
 }
 
-@test "spec 01 documents that late-commands does not exist" {
-    # The spec previously prescribed a section the PVE tool rejects, which is
-    # how the invalid answer file survived review.
+@test "spec 01 forbids the late-commands section PVE does not support" {
+    # The spec previously prescribed a section the PVE autoinstall schema does
+    # not accept, which is how an invalid answer file survived review.
+    #
+    # Assert the requirement itself rather than one sentence's wording: matching
+    # a literal phrase made this test fail purely because the spec was rewritten
+    # to be behaviour-focused, even though the prohibition is still normative
+    # (R-01.2.1) and still covered by acceptance A-01.4.
     local spec="${PROJECT_ROOT}/specs/01-host-pve-install-media.md"
-    assert_contains "$(cat "$spec")" 'No `late-commands`'
-    assert_contains "$(cat "$spec")" '--on-first-boot'
+
+    # The prohibition has to be stated as a prohibition, not just mentioned.
+    assert_file_matches "$spec" 'no `late-commands`'
+
+    # The first-boot requirement has to name the supported mechanism. The spec
+    # expresses this through the answer file's own keys, which is where an
+    # operator implementing it would look.
+    assert_file_contains "$spec" 'first-boot.source'
+    assert_file_contains "$spec" 'from-iso'
+    assert_file_contains "$spec" 'from-url'
+
+    # The acceptance criteria must still check the answer file against the
+    # validator, which is what actually caught the bad section.
+    assert_file_contains "$spec" 'A-01.4'
 }
 
 @test "write_manifest heredoc performs no artifact-dependent substitution" {

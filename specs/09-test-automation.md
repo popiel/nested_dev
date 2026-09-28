@@ -2,7 +2,8 @@
 
 Status: Draft
 Applies to: everything in this repository
-Implementation: `tests/run.sh`, `tests/static/`, `tests/unit/`, `tests/lib/`,
+Implementation: `tests/run.sh`, `tests/run-wsl.sh`, `tests/wsl-setup.sh`,
+`tests/timing.sh`, `tests/static/`, `tests/unit/`, `tests/lib/`,
 `tests/fixtures/`, `.pre-commit-config.yaml`
 
 ## 1. Scope
@@ -21,9 +22,11 @@ acceptance tables in each spec.
 |---|---|
 | Framework | `bats` |
 | Entry point | One script runs everything; a fast mode runs the static layer only |
+| Windows entry point | A wrapper runs the same suite inside WSL, because the same tests are about 50× slower under MSYS process emulation |
 | Layers | Static (lint, config, invariants) and unit (functions and files) |
 | Style | Assertions read the repository's own files; a pure function is invoked and checked |
 | Speed | No test may require a hypervisor, a network, or a real guest |
+| Timing | Every run records per-test duration and separates time inside tests from harness overhead |
 | Optional tools | A test whose tool is absent reports a skip, never a pass and never a failure |
 | Credentials | Tests never need a real hash or key; they use fixtures |
 | Gating | The pre-commit hook runs the fast layer; the full suite runs before a release reference is pinned |
@@ -46,6 +49,60 @@ acceptance tables in each spec.
 * **R-09.1.5** Nothing in the suite requires a hypervisor, a network
   connection, or a booted guest. A test that did would make the suite
   unrunnable by anyone without the fleet.
+* **R-09.1.6** The entry point accepts named test files and runs only those. A
+  developer fixing one area must be able to run that area without paying for
+  the rest of the suite.
+* **R-09.1.7** The entry point prints a machine-readable result block of
+  `key=value` pairs, so that a wrapper can report the outcome without parsing
+  human-readable prose.
+* **R-09.1.8** The block reports passes, failures and skips as three distinct
+  counts, and the three sum to the number of tests that ran. A skip is a test
+  that did not run, and reporting it as a pass claims coverage the run never
+  had.
+* **R-09.1.9** The tally is derived independently of the timing record, and the
+  two are cross-checked. Two derivations of the same run that disagree mean one
+  of them is wrong, and a single source of truth cannot detect its own error.
+* **R-09.1.10** A suite that fails before recording any result is reported as
+  failed, not as a pass. A tally derived only from per-test lines calls a suite
+  that never ran clean, because nothing recorded a failure.
+* **R-09.1.11** The entry point always reaches its result block. A problem
+  encountered while summarising a suite is reported, and never aborts the run:
+  a run's outcome is the one thing that must survive whatever went wrong.
+
+### R-09.1a On Windows the suite runs inside WSL
+
+* **R-09.1a.1** A Windows host runs the suite through a wrapper that executes it
+  in WSL, passing the same flags and the same named files. Running the suite
+  directly under a POSIX-emulation shell is not supported, because process
+  creation there costs enough to make the suite unusable.
+* **R-09.1a.2** The wrapper installs its own prerequisites without `sudo`, into
+  the invoking user's home directory, and the wrapper detects when they are
+  absent and says how to install them.
+* **R-09.1a.3** The wrapper refuses to run when the required tools resolve to
+  binaries on the Windows filesystem. Those tools would appear to work while
+  reintroducing exactly the cost the wrapper exists to avoid.
+* **R-09.1a.4** The wrapper propagates the suite's exit status, and reports the
+  pass, fail and skip counts and where the timing records were written.
+* **R-09.1a.5** Paths are converted to WSL form with forward slashes, because
+  the Windows command line consumes backslashes as escapes before the Linux
+  command ever sees them.
+
+### R-09.1b The suite list is asserted, not trusted
+
+* **R-09.1b.1** Every test file in the tree is named by the entry point's suite
+  list. A `.bats` file the entry point never mentions is never executed, and
+  never fails.
+* **R-09.1b.2** The suite list is compared against the files on disk as a set,
+  not counted. A count can be satisfied by one duplicate entry and one omission
+  at the same time.
+* **R-09.1b.3** Suite labels are unique, because a label is the key a timing
+  record is filed under. Two files sharing one label merge their records, and
+  the report then describes a test that does not exist.
+* **R-09.1b.4** Every static suite is reachable from the fast mode, so a check
+  added to the static layer cannot go unrun by the pre-commit path.
+* **R-09.1b.5** A check that enumerates the tree asserts that its enumeration
+  found something. An enumeration that silently matches nothing reports
+  success, which is the failure mode a coverage check cannot have.
 
 ### R-09.2 The static layer asserts properties of the repository
 
@@ -151,6 +208,39 @@ acceptance tables in each spec.
   spec says so by naming the spec and the requirement. An unstated gap reads as
   a covered one.
 
+### R-09.7 Every run measures itself
+
+* **R-09.7.1** Every suite is invoked in a mode that reports how long each test
+  took, and every run leaves a per-test record on disk.
+* **R-09.7.2** The record identifies each test by suite and name, not by its
+  position, so a test can be compared across runs even when tests are inserted
+  above it.
+* **R-09.7.3** A report separates **time inside test bodies** from **harness
+  time** — the wall time not attributed to any test body, which is the
+  framework's own per-test setup plus each invocation's startup. The two differ
+  by orders of magnitude on some hosts, and a report that only showed total
+  duration would send effort at the wrong target.
+* **R-09.7.4** The harness share is reported per suite, so the cost of process
+  setup can be distinguished from the cost of the tests themselves.
+* **R-09.7.5** Records accumulate across runs, and a report compares each run
+  against the previous one, listing tests that became meaningfully slower.
+* **R-09.7.6** A slowdown is only reported when it is both relatively and
+  absolutely significant. A percentage alone turns ordinary jitter in a
+  sub-20ms test into a large apparent regression, which trains the reader to
+  ignore the list.
+* **R-09.7.7** A run is not compared against a partial previous run, which would
+  make every surviving test look like a regression.
+* **R-09.7.8** A result line that carries no measurement — a file-level error,
+  for instance — is recorded as unmeasured rather than being reported as fast.
+* **R-09.7.9** Timing records are excluded from version control. They are
+  per-machine measurement, not source.
+* **R-09.7.10** Recording timing never changes the suite's result. A failure in
+  the timing tooling is reported as a warning and the suites still run.
+* **R-09.7.11** A skipped test's elapsed time is measured and included in the
+  suite's total. The skip reason is written after the measurement, so a summary
+  that matches the measurement only at end-of-line silently drops every skipped
+  test's time and reports a suite as faster than the sum of its own tests.
+
 ## 4. Coverage map
 
 | Spec | Test file | Covers |
@@ -170,9 +260,10 @@ acceptance tables in each spec.
 | 06 | `invariants.bats` | Placeholder inventory completeness |
 | 07 | `frag25-vmctl.bats` | Forced-command restriction, real shell, control-program installation, dev range, hostname settling, credential-path agreement, error text |
 | 08 | `first-boot-user.bats` | Credential paths used by the build and by the operator-facing check |
-| 09 | all | Source guards, lint coverage of extension-less scripts, dead-code detection |
+| 09 | all | Source guards, lint coverage of extension-less scripts and of the harness itself, dead-code detection |
+| 09 | `timing.bats` | Timing record parsing, report totals, regression thresholds, suite-list set equality and label uniqueness, fast-mode coverage, result-block accounting, skip handling, unrunnable and unparseable suites, wrapper and setup-script contracts, `AGENTS.md` accuracy |
 
-**Totals: 187 tests** — 29 static, 158 unit, across 10 files.
+**Totals: 248 tests** — 30 static, 218 unit, across 11 files.
 
 ## 5. Invariants
 
@@ -182,8 +273,43 @@ acceptance tables in each spec.
 * I-09.4 A missing required tool is a named failure before any test runs.
 * I-09.5 Every shipped defect has a named regression test.
 * I-09.6 Uncovered requirements are named in §6, not left implied.
+* I-09.7 Every test file present in the tree is named by the entry point, so a
+  test that is written but never invoked cannot pass unnoticed.
+* I-09.8 A run's reported result is identical whether or not timing is recorded.
+* I-09.9 A test that asserts something about the tree first asserts that it
+  found what it was looking for.
+* I-09.10 A run's outcome is reported even when a suite could not be measured or
+  could not run.
 
-## 6. Known gaps
+## 6. Acceptance
+
+| ID | Criterion |
+|---|---|
+| A-09.1 | `tests/run.sh` with no arguments runs the static and unit layers and exits zero. |
+| A-09.2 | `tests/run.sh --fast` runs the static layer only, and names the mode it ran. |
+| A-09.3 | `tests/run.sh tests/unit/gpu-detect.bats` runs that file alone and reports one suite. |
+| A-09.4 | A run in which one assertion fails prints that suite's full TAP output, including the assertion that failed, and exits non-zero. |
+| A-09.5 | With a required tool absent, the run stops before any test executes and names the tool. |
+| A-09.6 | With an optional tool absent, its checks report a skip and the run still passes. |
+| A-09.7 | The run ends with a `key=value` result block whose keys are stable, and whose counts match the suites that ran. |
+| A-09.8 | `bash tests/run-wsl.sh --setup` installs `bats` and `shellcheck` into the user's home and needs no `sudo`. |
+| A-09.9 | The wrapper exits with the suite's status: non-zero when a test fails. |
+| A-09.10 | The wrapper reports the pass, fail and skip counts, and the location of the timing records. |
+| A-09.11 | Every run leaves one record line per test, and `tests/timing.sh report` prints totals, per-suite harness share, and the slowest tests. |
+| A-09.12 | A test that finishes inside its body much faster than its suite's wall time is reported with the difference attributed to harness time, not to the test. |
+| A-09.13 | A test that grows substantially between two consecutive runs is named in the report; a test whose change is only jitter is not. |
+| A-09.14 | `tests/.timing/` is not tracked by version control. |
+| A-09.15 | Every `.bats` file in the tree is named in the entry point's suite list. |
+| A-09.16 | The four harness shell scripts pass `shellcheck`. |
+| A-09.17 | A suite containing skipped tests reports them as skipped rather than passed, and its pass, fail and skip counts sum to its test count. |
+| A-09.18 | The reported test count equals the number of rows the timing record holds for that run. |
+| A-09.19 | A suite's reported in-test time is at least the sum of the times its own tests report, including its skipped ones. |
+| A-09.20 | A test file present in the tree but absent from the suite list, or a suite label used twice, fails the suite rather than passing. |
+| A-09.21 | A new file under `tests/static/` that is not reachable from `--fast` fails the suite. |
+| A-09.22 | A test file the framework cannot parse is reported with the framework's own error text, counted as a failed suite, and the run still prints its result block. |
+| A-09.23 | A suite that exits non-zero without recording a failed test is counted as a failed suite, and the run exits non-zero. |
+
+## 7. Known gaps
 
 | Gap | Consequence |
 |---|---|
@@ -192,10 +318,11 @@ acceptance tables in each spec.
 | No test asserts a guest's final hostname after a clone beyond the source of the mechanism | The mechanism is asserted; the guest's response is not |
 | No test covers the inference container's runtime behaviour | Spec 03 §R-03.5 is verified on hardware only |
 | `nvidia` driver and CUDA versions are not pinned to a digest | A first boot can install a different combination on a new release; the log records what it got, but nothing constrains it |
-| The suite has no timing or performance budget | The `list` regression (D-09) was found by reading, not by a benchmark, and would pass every test even if reintroduced |
+| Timing records are not committed, so regressions are only visible per machine | A slowdown introduced on one workstation is invisible to everyone else. Comparing records across machines would need a shared store and a normalised baseline, because the harness share depends on the host |
+| Harness overhead is measured, not reduced | The per-test cost is the framework's, and the report makes its share visible. Cutting it further means running fewer, larger suites, which trades away the ability to run one area in isolation |
 | No test asserts that specs' acceptance tables match the test suite | A requirement can be added to a spec with no test, and this spec will not notice |
 
-## 7. Cross-references
+## 8. Cross-references
 
 | Spec | Relationship |
 |---|---|
