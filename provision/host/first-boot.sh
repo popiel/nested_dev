@@ -12,11 +12,25 @@
 #   1. Persist the personalization password hash to
 #      /root/.personalization-password-hash for frag/30, which injects it into
 #      the guest NoCloud seeds.
-#   2. Create the personalization account on the host. PVE's autoinstall schema
-#      has no non-root user field (only root-password / root-password-hashed in
-#      [global]), so this is the only place it can be created.
+#   2. Create the personalization account on the host and grant it the sudo
+#      group. PVE's autoinstall schema has no non-root user field (only
+#      root-password / root-password-hashed in [global]), so this is the only
+#      place it can be created.
 #   3. Fetch the provision/ tree at the pinned REF.
-#   4. Install the pve-firstboot.service oneshot unit.
+#   4. Install the pve-firstboot.service oneshot unit, then run the provisioner.
+#
+# This script is deliberately thin: it creates an account and gets out of the
+# way. Everything else — package management, repository repair, the sudo
+# package, GPU configuration, guest creation — lives in provision/host/frag/,
+# which arrives in step 3 and can be corrected by pushing a commit, rather than
+# by editing a script baked into an ISO that has to be rebuilt and re-burned to
+# reach a host that is already installed.
+#
+# It carries no package-manager calls for the same reason. It used to install
+# sudo itself, along with an inline copy of the PVE no-subscription repository
+# repair, which on a host without a subscription meant apt failing here — before
+# the tree was fetched, so frag/05 could not run — and the same repair duplicated
+# in two files. frag/05 and frag/06 now do both, once.
 #
 # SECURITY: this rendered file contains the personalization password hash in
 # plaintext and is therefore as sensitive as keys/personalization-password-hash
@@ -99,6 +113,29 @@ fi
 # Apply the hash verbatim: chpasswd -e takes an already-encrypted password, so
 # the same yescrypt string the guests receive is what the host account gets.
 printf '%s:%s\n' "$USER_NAME" '__PERSONALIZATION_PASSWORD_HASH__' | chpasswd -e
+
+# --- 2b. Grant the sudo group --------------------------------------------
+# `usermod -aG sudo` needs the group to exist, and it does not come from this
+# script — but creating a group needs only `groupadd` from the always-present
+# shadow-utils, not a working package manager.
+#
+# The `sudo` *package* is deliberately not installed here. It used to be, along
+# with an inline repair for the PVE enterprise repository, which on a host
+# without a subscription meant apt-get update failing here — before the provision
+# tree was fetched, so frag/05 could not run and repair it. That put roughly
+# forty lines of repository logic in this file, duplicated against
+# frag/05-apt-repos.sh, where the two copies could disagree and the symptom would
+# be a 401 that appeared to come back on its own.
+#
+# The package is installed by frag/06-sudo.sh instead, in the tree, once. The
+# ordering this is careful about is not weakened by the move: the operator
+# account, its password and its SSH key are all in place before the fetch is
+# attempted, and the answer file independently installs that same operator key
+# on root — so root is the *easiest* login on a box where the fetch failed, not
+# an inaccessible last resort. There is no window in which the operator is
+# locked out.
+getent group sudo >/dev/null 2>&1 || groupadd -r sudo
+
 # Administrative access on the host, and password-less SSH with the operator key.
 usermod -aG sudo "$USER_NAME"
 mkdir -p "${USER_HOME}/.ssh"

@@ -49,6 +49,21 @@ find_audio_companion() {
     echo "$audio_addr"
 }
 
+iommu_group_member_bdfs() {
+    # The BDFs in a group, one per line, as the kernel actually publishes them.
+    #
+    # Counts directory *entries*, and does not match on file type. sysfs exposes
+    # the members of a group as symlinks pointing at device directories:
+    #   .../iommu_group/devices/0000:01:00.1 -> ../../../0000:01:00.1
+    # so `find -type f` matches nothing and reports every real group as empty.
+    # That silently disabled the separability rule, and the unit test did not
+    # catch it because the mock was built from regular files — the one shape
+    # -type f does match.
+    local group_path="$1"
+    [ -d "$group_path" ] || return 0
+    find "$group_path" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null || true
+}
+
 iommu_group_device_count() {
     # Number of devices in an IOMMU group directory. Echoes 0 when the directory
     # does not exist, so callers need no separate existence test.
@@ -56,24 +71,83 @@ iommu_group_device_count() {
     # the separability rule is testable without a live /sys (tests/unit/frag10-iommu.bats).
     local group_path="$1"
     [ -d "$group_path" ] || { echo 0; return 0; }
-    find "$group_path" -maxdepth 1 -type f | wc -l
+    find "$group_path" -mindepth 1 -maxdepth 1 -printf 'x\n' 2>/dev/null | wc -l
+}
+
+iommu_group_members() {
+    # The BDFs in a group, space separated, for a diagnostic line.
+    local group_path="$1"
+    [ -d "$group_path" ] || return 0
+    iommu_group_member_bdfs "$group_path" | tr '\n' ' '
+    echo
+}
+
+iommu_group_number() {
+    # The group number a device belongs to, or the empty string when the device
+    # has none. The link is a symlink into /sys/kernel/iommu_groups/N, so two
+    # devices share a group exactly when this returns the same value.
+    local link="/sys/bus/pci/devices/0000:${1}/iommu_group"
+    [ -L "$link" ] || { echo ""; return 0; }
+    basename "$(readlink -f "$link")"
+}
+
+pci_bdf_short() {
+    # A PCI address as bus:device.function, with any PCI domain dropped.
+    #
+    # sysfs names group members in full — 0000:01:00.0 — while lspci reports
+    # them short — 01:00.0. Comparing the two needs the domain removed from one
+    # side. It is removed rather than assumed to be "0000:" because a host whose
+    # PCI domain is not zero would otherwise have every member look unrecognised
+    # and the rule would reject a perfectly separable group. The domain is a
+    # property of the machine, not of this rule.
+    local b="${1##*/}"
+    if [[ "$b" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$ ]]; then
+        printf '%s\n' "${b:5}"
+    else
+        printf '%s\n' "$b"
+    fi
 }
 
 iommu_group_is_separable() {
-    # The R4 rule, on its own: a group holding more than one device cannot be
-    # handed to VFIO without dragging the other devices along, so the GPU stops
-    # working. This is the only statement of the rule; check_iommu_group_
-    # separable and main() both go through it.
-    [ "$(iommu_group_device_count "$1")" -le 1 ]
+    # The R4 rule, in one place. This is the only statement of it;
+    # check_iommu_group_separable and main() both go through it.
+    #
+    #   $1  the group directory
+    #   $2  the BDF being handed to VFIO
+    #   $3+ BDFs permitted to share the group with it
+    #
+    # R-01.7.1 allows exactly two shapes: the device alone, or the device
+    # together with its companion audio function. A count cannot express that —
+    # the audio companion is itself a second device, so "more than one device"
+    # and "unsafe" are different conditions. The previous version compared the
+    # count against 1, which contradicts R-01.6.5; it only ever agreed with the
+    # spec on real hardware because it counted zero devices for every group.
+    local group_path="$1" bdf="$2"
+    shift 2
+    local member allowed allowed_bdf
+    while IFS= read -r member; do
+        [ -n "$member" ] || continue
+        # The device itself is always expected.
+        [ "$(pci_bdf_short "$member")" = "$(pci_bdf_short "$bdf")" ] && continue
+        allowed=false
+        for allowed_bdf in "$@"; do
+            [ "$(pci_bdf_short "$member")" = "$(pci_bdf_short "$allowed_bdf")" ] \
+                && { allowed=true; break; }
+        done
+        [ "$allowed" = true ] || return 1
+    done < <(iommu_group_member_bdfs "$group_path")
+    return 0
 }
 
 check_iommu_group_separable() {
     # BDF entry point: maps a PCI address to its IOMMU group directory, then
-    # applies the rule. main() calls this rather than re-deriving the group
-    # size, so the rule has exactly one implementation.
+    # applies the rule. main() calls this rather than re-deriving group
+    # membership, so the rule has exactly one implementation.
     local pci_addr="$1"
+    shift
     iommu_group_is_separable \
-        "/sys/bus/pci/devices/0000:${pci_addr}/iommu_group/devices"
+        "/sys/bus/pci/devices/0000:${pci_addr}/iommu_group/devices" \
+        "$pci_addr" "$@"
 }
 
 iommu_flag_for_vendor() {
@@ -108,42 +182,97 @@ main() {
         exit 0
     fi
 
-    # --- Collect audio companion functions via IOMMU groups ---
+    # --- Judge each candidate on its own IOMMU group ---
+    #
+    # Separability is a property of a device, not of the host, so one unsafe
+    # candidate does not make the others unsafe. The previous version exited on
+    # the first non-separable group, which meant a single dGPU sharing a group
+    # with a PCIe root port took down the run — including the iGPU that sat
+    # alone in its own perfectly separable group, and every fragment after it.
+    # On a host with an iGPU plus two dGPUs that produced no passthrough at all
+    # and no guests, for a device that was never the problem.
+    #
+    # Unsafe candidates are dropped from the set and reported, which is what
+    # "does not proceed quietly" asks for: the device is not passed through, and
+    # the log says which group stopped it and what else was in it.
+    PASSTHROUGH_IDS=()
+    PASSTHROUGH_NAMES=()
+
     for name_entry in "${GPU_NAMES[@]}"; do
         PCI_ADDR=$(echo "$name_entry" | awk '{print $1}')
         GPU_GROUP_PATH="/sys/bus/pci/devices/0000:${PCI_ADDR}/iommu_group/devices"
-        [ -d "$GPU_GROUP_PATH" ] || continue
+        GPU_VD=$(lspci -n -s "$PCI_ADDR" | awk '{print $3}')
+        GPU_DESC=$(echo "$name_entry" | cut -d' ' -f2-)
 
-        if ! check_iommu_group_separable "$PCI_ADDR"; then
-            GROUP_DEVICES=$(find "$GPU_GROUP_PATH" -maxdepth 1 -type f -printf '%f ')
-            log "ERROR: IOMMU group for $PCI_ADDR contains $(iommu_group_device_count "$GPU_GROUP_PATH") devices: $GROUP_DEVICES"
-            log "  Group is NOT separable — aborting to prevent broken passthrough."
-            log "  Fix: enable ACS override in BIOS/firmware, or use a different host."
-            exit 1
+        # A device with no group directory is not in any IOMMU group, so nothing
+        # can be assigned to it. The running kernel has no IOMMU for it.
+        if [ ! -d "$GPU_GROUP_PATH" ]; then
+            log "SKIP: $PCI_ADDR ($GPU_DESC) has no IOMMU group; it cannot be passed through."
+            log "  Check: grep -o '[^ ]*iommu[^ ]*' /proc/cmdline ; dmesg | grep -i DMAR"
+            continue
         fi
 
-            AUDIO_ADDR=$(find_audio_companion "$PCI_ADDR")
-            if [ -n "$AUDIO_ADDR" ]; then
-                AUDIO_VD=$(lspci -n -s "$AUDIO_ADDR" | awk '{print $3}')
-                if ! check_iommu_group_separable "$AUDIO_ADDR"; then
-                    log "ERROR: Audio companion $AUDIO_ADDR for GPU $PCI_ADDR is in a shared IOMMU group ($(iommu_group_device_count "/sys/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices") devices)"
-                    log "  Abort — audio function must be in the same group as its GPU or isolated."
-                    exit 1
-                fi
-            AUDIO_IN_SET=false
-            for id in "${GPU_IDS[@]}"; do
-                if [ "$id" = "$AUDIO_VD" ]; then
-                    AUDIO_IN_SET=true
-                    break
-                fi
-            done
-            if [ "$AUDIO_IN_SET" = false ]; then
-                GPU_IDS+=("${AUDIO_VD}")
-                log "Added audio companion $AUDIO_ADDR ($AUDIO_VD) for GPU $PCI_ADDR"
+        # The companion audio function is part of the group shape R-01.7.1
+        # permits, so it has to be identified before the group is judged.
+        # Judging first and explaining afterwards made the normal pairing of a
+        # GPU with its own audio function look like the unsafe case.
+        AUDIO_ADDR=$(find_audio_companion "$PCI_ADDR")
+        AUDIO_VD=""
+        ALLOWED_IN_GROUP=()
+        if [ -n "$AUDIO_ADDR" ]; then
+            AUDIO_VD=$(lspci -n -s "$AUDIO_ADDR" | awk '{print $3}')
+            if [ -n "$AUDIO_VD" ] && [ "$(iommu_group_number "$PCI_ADDR")" = "$(iommu_group_number "$AUDIO_ADDR")" ]; then
+                ALLOWED_IN_GROUP=("$AUDIO_ADDR")
             fi
+        fi
+
+        if ! check_iommu_group_separable "$PCI_ADDR" ${ALLOWED_IN_GROUP[@]+"${ALLOWED_IN_GROUP[@]}"}; then
+            log "SKIP: $PCI_ADDR ($GPU_DESC) is not in a separable IOMMU group."
+            log "  Group $(iommu_group_number "$PCI_ADDR") holds: $(iommu_group_members "$GPU_GROUP_PATH")"
+            log "  Permitted would be: $PCI_ADDR${ALLOWED_IN_GROUP[0]:+ and its companion audio function ${ALLOWED_IN_GROUP[0]}}"
+            log "  The extra devices would follow it into the guest, so it is left to the host."
+            log "  Fix: enable an ACS override in firmware to split the group, then re-run."
+            continue
+        fi
+
+        # A companion in a group of its own has to be safe there on its own.
+        if [ -n "$AUDIO_ADDR" ] && [ -z "${ALLOWED_IN_GROUP[0]:-}" ]; then
+            AUDIO_GROUP_PATH="/sys/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices"
+            if [ -d "$AUDIO_GROUP_PATH" ] \
+                && ! check_iommu_group_separable "$AUDIO_ADDR"; then
+                log "SKIP: audio companion $AUDIO_ADDR for $PCI_ADDR is not separable on its own."
+                log "  Group $(iommu_group_number "$AUDIO_ADDR") holds: $(iommu_group_members "$AUDIO_GROUP_PATH")"
+                continue
+            fi
+        fi
+
+        PASSTHROUGH_IDS+=("${GPU_VD}")
+        PASSTHROUGH_NAMES+=("$PCI_ADDR $GPU_VD $GPU_DESC")
+
+        if [ -n "$AUDIO_ADDR" ]; then
+            PASSTHROUGH_IDS+=("${AUDIO_VD}")
+            PASSTHROUGH_NAMES+=("$AUDIO_ADDR $AUDIO_VD audio companion for $PCI_ADDR")
+            log "Added audio companion $AUDIO_ADDR ($AUDIO_VD) for GPU $PCI_ADDR"
         else
             log "No audio companion found for GPU $PCI_ADDR"
         fi
+    done
+
+    GPU_IDS=("${PASSTHROUGH_IDS[@]}")
+
+    if [ ${#GPU_IDS[@]} -eq 0 ]; then
+        log "ERROR: no display device is in a separable IOMMU group — nothing can be passed through."
+        for name_entry in "${GPU_NAMES[@]}"; do
+            PCI_ADDR=$(echo "$name_entry" | awk '{print $1}')
+            log "  $PCI_ADDR: group $(iommu_group_number "$PCI_ADDR")$(iommu_group_number "$PCI_ADDR" || echo ' (none)')"
+        done
+        log "  Every candidate shares a group with a device it may not take. Aborting."
+        exit 1
+    fi
+
+    log "Passthrough set (${#GPU_IDS[@]} device(s)):"
+    for entry in "${PASSTHROUGH_NAMES[@]}"; do
+        log "  $entry"
     done
 
     # Build comma-separated vfio-pci.ids
@@ -151,16 +280,47 @@ main() {
     log "vfio-pci.ids: $VFIO_IDS"
 
     # --- 1. GRUB cmdline ---
+    #
+    # Decided by comparing the tokens this run wants against the tokens already
+    # present, not by asking whether IOMMU was ever switched on. The previous
+    # test was `grep -q intel_iommu=on`, and it short-circuited the whole block:
+    # on a host where the flag was already set but the passthrough set had since
+    # changed — a device dropped as non-separable, a set narrowed to the iGPU —
+    # vfio-pci.ids in GRUB was left holding the stale device list, so the
+    # kernel bound devices the provisioner had decided to leave alone. That is
+    # the one edit where being idempotent by flag-presence is worse than not
+    # being idempotent at all.
     GRUB_FILE="/etc/default/grub"
-    if grep -q "intel_iommu=on\|amd_iommu=on" "$GRUB_FILE"; then
-        log "GRUB IOMMU already configured"
-    else
-        sed -i "s|GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"|GRUB_CMDLINE_LINUX_DEFAULT=\"\1 ${IOMMU_FLAG} iommu=pt\"|" "$GRUB_FILE"
-        if ! grep -q "vfio-pci.ids" "$GRUB_FILE"; then
-            sed -i "s|GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"|GRUB_CMDLINE_LINUX_DEFAULT=\"\1 vfio-pci.ids=${VFIO_IDS} disable_vga=1\"|" "$GRUB_FILE"
+    GRUB_LINE_RE='^GRUB_CMDLINE_LINUX_DEFAULT="'
+    WANT_TOKENS=("${IOMMU_FLAG}" "iommu=pt" "vfio-pci.ids=${VFIO_IDS}" "disable_vga=1")
+
+    grub_has_token() {
+        grep -q -- " $1" "$GRUB_FILE" 2>/dev/null
+    }
+
+    GRUB_CHANGED=false
+    for token in "${WANT_TOKENS[@]}"; do
+        if ! grub_has_token "$token"; then
+            sed -i "s|${GRUB_LINE_RE}\(.*\)\"|${GRUB_LINE_RE}\1 ${token}\"|" "$GRUB_FILE"
+            GRUB_CHANGED=true
         fi
+    done
+
+    # Drop any vfio-pci.ids that disagrees with this run's set, so a device the
+    # provisioner excluded is not still bound by the boot configuration.
+    STALE_IDS=$(sed -n "s|.*[[:space:]]vfio-pci\.ids=\([^ ]*\).*|\1|p" "$GRUB_FILE" | head -1)
+    if [ -n "$STALE_IDS" ] && [ "$STALE_IDS" != "$VFIO_IDS" ]; then
+        log "Replacing stale vfio-pci.ids '${STALE_IDS}' with '${VFIO_IDS}'"
+        sed -i "s|vfio-pci\.ids=${STALE_IDS}|vfio-pci.ids=${VFIO_IDS}|" "$GRUB_FILE"
+        GRUB_CHANGED=true
+    fi
+
+    if [ "$GRUB_CHANGED" = true ]; then
         update-grub
         log "GRUB updated"
+        log "  A reboot is required before the passthrough set takes effect."
+    else
+        log "GRUB already matches the passthrough set"
     fi
 
     # --- 2. modprobe early binding ---
@@ -211,11 +371,15 @@ EOF
     log "initramfs updated"
 
     # --- 6. GeForce workaround (consumer NVIDIA) ---
-    for name_entry in "${GPU_NAMES[@]}"; do
-        PCI_ADDR=$(echo "$name_entry" | awk '{print $1}')
-        VD=$(lspci -n -s "$PCI_ADDR" | awk '{print $3}')
+    # Only for NVIDIA parts actually in the passthrough set. It walked every
+    # detected GPU, so on a host where the dGPUs were left to the host because
+    # their group was unsafe, it still logged that a workaround was coming — and
+    # frag/30 applies it to a guest that will never receive that GPU.
+    for entry in "${PASSTHROUGH_NAMES[@]}"; do
+        PCI_ADDR=$(echo "$entry" | awk '{print $1}')
+        VD=$(echo "$entry" | awk '{print $2}')
         if echo "$VD" | grep -qi "^10de:"; then
-            log "NVIDIA device detected at $PCI_ADDR — will apply kvm=off,hidden=1 at VM creation"
+            log "NVIDIA device $PCI_ADDR is in the passthrough set — will apply kvm=off,hidden=1 at VM creation"
         fi
     done
 

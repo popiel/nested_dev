@@ -74,13 +74,35 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 
 * **R-01.3.1** The first-boot bootstrap creates the operator account defined by
   Spec 05 §R-05.3, and grants it `sudo`.
+* **R-01.3.1a** **The `sudo` package is installed by the provision tree, not by
+  the bootstrap.** Granting administrative access needs both the `sudo` group
+  and the binary, and a PVE installation that omits the package provides
+  neither. The bootstrap creates the *group* with `groupadd` — which needs no
+  package manager — and `frag/06-sudo.sh` installs the package once the tree has
+  arrived.
+  This is ordering, not convenience: on a host without a subscription the
+  enterprise repository answers 401, so an `apt-get install sudo` attempted
+  before `frag/05-apt-repos.sh` repairs the repository fails on the repository
+  and reports nothing about sudo. The bootstrap runs before the tree is fetched,
+  so it cannot reach the repair at all.
+* **R-01.3.1b** **The bootstrap makes no package-manager calls.** Every
+  `apt`/`apt-get`/`dpkg` invocation lives in `provision/host/frag/`. Beyond the
+  ordering above, this keeps a fix that does not need the ISO reachable by
+  pushing a commit to the pinned REF, instead of rebuilding and re-burning the
+  installer media for a host that is already installed. A duplicated repair in
+  two files is specifically what this forbids.
+* **R-01.3.1c** **A host whose provisioning failed is still administrable.**
+  This is what makes R-01.3.1a safe. The answer file installs the operator's own
+  SSH key on `root` (`root-ssh-keys`, Spec 05 §R-05.3), so the operator logs in
+  as `root` with the same key they use everywhere else. Root is the *easiest*
+  login on a box where provisioning failed, not an inaccessible last resort —
+  which is why moving the sudo package out of the bootstrap closes no window.
 * **R-01.3.2** The bootstrap **fetches the provision tree last.** Account
   creation, hash persistence and key installation all complete before the
   first network fetch is attempted.
 * **R-01.3.3** A failed or unreachable fetch therefore leaves a host with a
   working operator login. Without this ordering, an outage during provisioning
-  produces a host whose only usable account is `root`, whose password the
-  operator may not hold.
+  produces a host whose only usable account is `root`.
 * **R-01.3.4** Account creation is idempotent and refuses to shadow an
   existing UID or GID belonging to another account (Spec 05 §R-05.3.3).
 
@@ -176,6 +198,20 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   through.
 * **R-01.7.4** An absent group directory counts as zero devices and is
   therefore not separable, rather than being treated as "no problem found".
+  IOMMU being off in the running kernel is not a passing result, and the run
+  aborts naming the device whose group is missing.
+* **R-01.7.5** **The group membership is counted from the entries the group
+  actually contains.** The kernel publishes a group's members as links to
+  device directories, so a count that selects only regular files reports every
+  group as empty. Such a count satisfies the shape of R-01.7.1 while asserting
+  nothing, and the failure is invisible on hardware: a mock built from plain
+  files matches it exactly, so the assertion passes in the test suite and
+  never fires on a host.
+* **R-01.7.6** The separability rule is **exercised against a group built the
+  way the kernel builds one**, not a convenient stand-in. Where a fixture has
+  to stand in for `sysfs`, it reproduces the structure the rule depends on, so
+  a change to the counting expression cannot pass the tests and fail on the
+  host.
 
 ### R-01.8 The host overcommits memory safely
 
@@ -249,6 +285,19 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   firewall step. The template is not converted from an unprovisioned disk.
 * **R-01.11.8** The per-VM firewall flag is set on the guests whose egress is
   restricted.
+* **R-01.11.9** **A host that cannot create a guest says so before any download
+  or allocation is attempted.** The bridge named on each guest's network
+  interface and the storage named on each guest's disks are asserted first, and
+  a missing one **aborts with the prerequisite named.** The guest set is created
+  as a single unit, so a host that fails the check produces **no VMs at all** —
+  and an assertion made only by the create call turns one wrong name into
+  exactly that outcome, reported as a bare low-level error after the install
+  media has been downloaded.
+* **R-01.11.10** The check **does not infer which network interface to bridge or
+  which disk to allocate.** An absent bridge is reported for the operator to
+  create, because automatically adopting an interface can take the host's only
+  network path down — the same reason R-01.4.1 forbids target-disk detection.
+  The names the check verifies are the same names the guests are created with.
 
 ## 3. Build
 

@@ -35,8 +35,13 @@ detect_gpu_pci() {
                 local audio_group="/sys/bus/pci/devices/0000:${audio_addr}/iommu_group/devices"
                 local gpu_group="/sys/bus/pci/devices/0000:${addr}/iommu_group/devices"
                 if [ -d "$audio_group" ] && [ -d "$gpu_group" ]; then
-                    if ! diff -q <(find "$audio_group" -maxdepth 1 -type f -printf '%f\n' | sort) \
-                                 <(find "$gpu_group" -maxdepth 1 -type f -printf '%f\n' | sort) >/dev/null 2>&1; then
+                    # Count directory entries, not regular files: sysfs exposes
+                    # group members as symlinks to device directories, so
+                    # `find -type f` yields empty output for BOTH groups, the diff
+                    # below compares "" with "", reports them identical, and the
+                    # audio companion is never added to the passthrough set.
+                    if ! diff -q <(find "$audio_group" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) \
+                                 <(find "$gpu_group" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) >/dev/null 2>&1; then
                         # Separate IOMMU group — include audio in passthrough
                         local audio_in_set=false
                         for existing_id in "${ids[@]}"; do
@@ -70,6 +75,48 @@ download_iso() {
     log "Downloading $(basename "$dest")..."
     wget -q --show-progress -O "$dest" "$url" 2>&1 | tee -a /var/log/pve-firstboot.log
     log "Downloaded: $(sha256sum "$dest" | awk '{print $1}')"
+}
+
+# --- Prerequisites -------------------------------------------------------
+#
+# All three guests are created inside one `set -euo pipefail` main(), so a
+# single failing `qm create` aborts the fragment and leaves the host with zero
+# VMs and a log whose last useful line is a `qm` error most operators do not
+# read. These checks name the missing prerequisite instead.
+#
+# Nothing here guesses at hardware. The installer is configured with
+# `source = "from-dhcp"`, which gives the host a working address but not
+# necessarily a Linux bridge, and picking a physical NIC automatically would be
+# the same class of mistake as the disk probe R-01.4.1 prohibits: it can take
+# the host's only network path down. So a missing bridge is reported, not
+# improvised.
+
+preflight_guest_prerequisites() {
+    local bridge="$1" storage="$2"
+    local failed=0
+
+    if ! ip link show "$bridge" >/dev/null 2>&1; then
+        log "ERROR: bridge '$bridge' does not exist on this host."
+        log "  Every guest is created with --net0 ...,bridge=${bridge}, so qm create will"
+        log "  reject all three and this fragment will abort before creating any VM."
+        log "  The installer's 'source = \"from-dhcp\"' setting does not create a bridge."
+        log "  Create it for the NIC you actually want to bridge, then re-run:"
+        log "    qm start 0; pvesh get /nodes/$(hostname)/network --output-format json"
+        log "    pvesh create /nodes/$(hostname)/network --name ${bridge} --type bridge"
+        failed=1
+    fi
+
+    if ! pvesm status --storage "$storage" >/dev/null 2>&1; then
+        log "ERROR: storage '${storage}' is not available on this host."
+        log "  Guests allocate their disks from ${storage} (--scsi0 ${storage}:...,size=...)."
+        log "  Check what the installer created with: pvesm status"
+        failed=1
+    fi
+
+    if [ "$failed" -ne 0 ]; then
+        die "guest prerequisites are not met — refusing to start creating VMs"
+    fi
+    log "Guest prerequisites OK: bridge=${bridge}, storage=${storage}"
 }
 
 # --- Main execution (guarded for source-testability) ---
@@ -112,6 +159,18 @@ main() {
     FREE_DISK_GB=$(df -BG --output=avail /var/lib/vz | tail -1 | tr -d ' G')
 
     log "Host: ${TOTAL_MEM_GB} GB RAM, ${CPU_CORES} cores, ${FREE_DISK_GB} GB free"
+
+    # --- Bridge and storage, single-sourced ---
+    # The preflight below checks these names, so they must be the same strings
+    # the qm create calls use. Declared once and interpolated everywhere,
+    # otherwise the check can pass against a bridge no guest actually uses.
+    GUEST_BRIDGE="vmbr0"
+    GUEST_STORAGE="local-lvm"
+
+    # Checked before the ISO downloads, which take several minutes, so a host
+    # that cannot create a guest says so immediately rather than after a
+    # long download followed by an opaque qm error.
+    preflight_guest_prerequisites "$GUEST_BRIDGE" "$GUEST_STORAGE"
 
     # --- Detect GPUs for passthrough ---
     IGPU_IDS=$(detect_gpu_pci "8086")
@@ -261,7 +320,7 @@ main() {
             --cores "$DESKTOP_CORES" \
             --cpu host \
             --scsihw virtio-scsi-single \
-            --net0 virtio=52:54:00:00:01:00,bridge=vmbr0 \
+            --net0 virtio=52:54:00:00:01:00,bridge=${GUEST_BRIDGE} \
             --ostype l26 \
             --bios ovmf \
             --machine q35 \
@@ -271,7 +330,7 @@ main() {
             ${DESKTOP_HOSTPCI:+"$DESKTOP_HOSTPCI"} \
             --cdrom0 "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}" \
             --ide0 "${SEED_DIR}/desktop-seed.iso,media=cdrom" \
-            --scsi0 local-lvm:40,size=40G \
+            --scsi0 ${GUEST_STORAGE}:40,size=40G \
             --boot order=scsi0
 
         qm start 100
@@ -300,7 +359,7 @@ main() {
             --cores "$LLM_CORES" \
             --cpu host \
             --scsihw virtio-scsi-single \
-            --net0 virtio=52:54:00:00:01:01,bridge=vmbr0 \
+            --net0 virtio=52:54:00:00:01:01,bridge=${GUEST_BRIDGE} \
             --ostype l26 \
             --bios ovmf \
             --machine q35 \
@@ -310,8 +369,8 @@ main() {
             ${LLM_HOSTPCI:+"$LLM_HOSTPCI"} \
             --cdrom0 "${ISO_DIR}/${UBUNTU_SERVER_ISO}" \
             --ide0 "${SEED_DIR}/llm-seed.iso,media=cdrom" \
-            --scsi0 local-lvm:80,size=80G \
-            --scsi1 local-lvm:${DATA_VOL_SIZE},size=${DATA_VOL_SIZE}G \
+            --scsi0 ${GUEST_STORAGE}:80,size=80G \
+            --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE},size=${DATA_VOL_SIZE}G \
             --boot order=scsi0
 
         if [ -n "$DGPU_IDS" ]; then
@@ -336,7 +395,7 @@ main() {
                 --cores "$DEV_CORES" \
                 --cpu host \
                 --scsihw virtio-scsi-single \
-                --net0 virtio=52:54:00:00:01:02,bridge=vmbr0,firewall=1 \
+                --net0 virtio=52:54:00:00:01:02,bridge=${GUEST_BRIDGE},firewall=1 \
                 --ostype l26 \
                 --bios ovmf \
                 --machine q35 \
@@ -345,7 +404,7 @@ main() {
                 --agent enabled=1 \
                 --cdrom0 "${ISO_DIR}/${UBUNTU_SERVER_ISO}" \
                 --ide0 "${SEED_DIR}/dev-seed.iso,media=cdrom" \
-                --scsi0 local-lvm:40,size=40G \
+                --scsi0 ${GUEST_STORAGE}:40,size=40G \
                 --boot order=scsi0
 
             qm start 102

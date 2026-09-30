@@ -62,8 +62,14 @@ load '../lib/helpers'
 }
 
 @test "frag/30 contains OS disk sizes from decision table" {
-    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'local-lvm:40,size=40G'
-    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'local-lvm:80,size=80G'
+    # The substance is the size, so assert the size against whatever storage id
+    # the fragment uses. Naming the storage here would re-couple this test to
+    # the storage variable, and the variable exists so the preflight and the
+    # guests cannot disagree about it.
+    assert_file_matches "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" \
+        '^\s*--scsi0 \$\{GUEST_STORAGE\}:40,size=40G'
+    assert_file_matches "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" \
+        '^\s*--scsi0 \$\{GUEST_STORAGE\}:80,size=80G'
 }
 
 @test "frag/30 contains RAM/core sizes from decision table" {

@@ -107,6 +107,51 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
         'printf '"'"'%s\n'"'"' "$ADMIN_PUBKEY" > "${USER_HOME}/.ssh/authorized_keys"'
 }
 
+@test "the bootstrap installs no packages, and defers the sudo package to the tree" {
+    # This used to assert the opposite: that the bootstrap ran
+    # `apt-get install -y sudo` before `usermod -aG sudo`, and aborted if it
+    # failed.
+    #
+    # That ordering was defending against a lockout that cannot happen here. The
+    # answer file installs the operator's own SSH key on root
+    # (answer-host.toml, root-ssh-keys), so on a host where provisioning failed
+    # the operator logs in as root with the same key they use everywhere else.
+    # Root is the easiest login on the box, not an inaccessible last resort.
+    #
+    # Meanwhile the arrangement was actively harmful: on a host without a PVE
+    # subscription, `apt-get update` fails with 401 before the provision tree is
+    # fetched, so frag/05 could not repair the repository, so the bootstrap
+    # needed its own forty-line copy of that repair. Duplicated logic in two
+    # files, kept in agreement by a test that only fails after the drift ships.
+    #
+    # The contract now: this script creates the group (groupadd needs no package
+    # manager), the tree installs the package.
+    run grep -nE '^[[:space:]]*apt-get' "$FIRSTBOOT"
+    [ -z "$output" ] || {
+        echo "the bootstrap calls apt-get:" >&2
+        echo "$output" >&2
+        return 1
+    }
+
+    # The group grant must still happen here, before the fetch, so the account is
+    # administrative the moment the tree lands.
+    local group_line grant_line
+    group_line=$(grep -n '^[^#]*groupadd -r sudo' "$FIRSTBOOT" | head -1 | cut -d: -f1)
+    grant_line=$(grep -n '^[^#]*usermod -aG sudo' "$FIRSTBOOT" | head -1 | cut -d: -f1)
+    [ -n "$group_line" ] || { echo "the bootstrap never creates the sudo group" >&2; return 1; }
+    [ -n "$grant_line" ] || { echo "the bootstrap never grants sudo membership" >&2; return 1; }
+    [ "$group_line" -lt "$grant_line" ] || {
+        echo "the group is created at line $group_line, after the usermod at $grant_line" >&2
+        return 1
+    }
+}
+
+@test "the sudo group exists independently of the sudo binary" {
+    # `command -v sudo` only proves the package installed. usermod resolves a
+    # group, and the drop-in directory is a separate thing again.
+    assert_file_contains "$FIRSTBOOT" 'getent group sudo >/dev/null 2>&1 || groupadd -r sudo'
+}
+
 @test "the account's .ssh is created with restrictive modes and correct ownership" {
     assert_file_contains "$FIRSTBOOT" 'chmod 700 "${USER_HOME}/.ssh"'
     assert_file_contains "$FIRSTBOOT" 'chmod 600 "${USER_HOME}/.ssh/authorized_keys"'
