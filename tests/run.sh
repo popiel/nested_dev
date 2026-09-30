@@ -6,7 +6,11 @@
 #   tests/run.sh --fast          # static only, for pre-commit
 #   tests/run.sh tests/unit/gpu-detect.bats              # one suite
 #   tests/run.sh tests/unit/*.bats                       # several suites
+#   tests/run.sh --list          # print label:path for every suite, run nothing
+#   tests/run.sh --list --fast   # print what --fast would run
 #
+# The suite list is built by directory inspection (see build_suites below),
+# not maintained by hand: adding tests/<tier>/<name>.bats adds the suite.
 # Every suite runs as `bats -T --formatter tap` and is handed to tests/timing.sh,
 # so each run leaves a per-test timing record under tests/.timing/ and prints a
 # report splitting time inside test bodies from bats' own per-test overhead.
@@ -26,15 +30,99 @@ usage() {
 
 # --- Arguments ---
 FAST=0
+LIST_ONLY=0
 FILES=()
 for arg in "$@"; do
     case "$arg" in
         --fast) FAST=1 ;;
+        --list) LIST_ONLY=1 ;;
         -h|--help) usage; exit 0 ;;
         -*) echo "ERROR: unknown option: $arg" >&2; usage >&2; exit 2 ;;
         *) FILES+=("$arg") ;;
     esac
 done
+
+cd "$ROOT_DIR"
+
+# --- Suite list ---
+# Built by directory inspection, not maintained by hand. Every *.bats directly
+# inside tests/static, tests/unit and tests/e2e is a suite; the label is the
+# filename without extension. Tiers run in a fixed order (static, then unit,
+# then e2e); files sort alphabetically within a tier.
+#
+# Consequences, all deliberate:
+# - Adding a suite is adding the file. There is no registration step to
+#   forget, and no second list that can disagree with the tree.
+# - Only top-level *.bats in those three directories is collected, so scratch
+#   work belongs in a subdirectory (or outside tests/) rather than next to
+#   the suites.
+# - Labels must be unique across tiers: they key the timing records, so two
+#   suites sharing a basename would merge their histories under one name. The
+#   builder refuses to run until that is fixed, rather than misattributing.
+build_suites() {
+    local tier file label entry i dupes
+    ALL_SUITES=()
+    for tier in static unit e2e; do
+        for file in "tests/$tier"/*.bats; do
+            [ -e "$file" ] || continue
+            label="$(basename "$file" .bats)"
+            ALL_SUITES+=("$label:$file")
+        done
+    done
+    if [ "${#ALL_SUITES[@]}" -gt 0 ]; then
+        dupes="$(printf '%s\n' "${ALL_SUITES[@]}" | cut -d: -f1 | sort | uniq -d)"
+        [ -z "$dupes" ] || {
+            echo "ERROR: duplicate suite labels (timing records would merge): $dupes" >&2
+            exit 2
+        }
+    fi
+    STATIC_SUITES=()
+    # Indexed loop rather than "${ALL_SUITES[@]}": expanding an empty array
+    # under `set -u` aborts on bash 3.x, which macOS still ships.
+    i=0
+    while [ "$i" -lt "${#ALL_SUITES[@]}" ]; do
+        entry="${ALL_SUITES[$i]}"
+        case "${entry#*:}" in
+            tests/static/*) STATIC_SUITES+=("$entry") ;;
+        esac
+        i=$((i + 1))
+    done
+}
+
+build_suites
+
+SUITES=()
+if [ "${#FILES[@]}" -gt 0 ]; then
+    # Explicit files win over --fast: the caller asked for something specific.
+    for f in "${FILES[@]}"; do
+        if [ ! -f "$f" ]; then
+            echo "ERROR: no such test file: $f" >&2
+            exit 2
+        fi
+        # Label from the basename, the same rule build_suites uses, so timing
+        # keys agree whether a suite was named explicitly or ran as part of
+        # the full set.
+        SUITES+=("$(basename "$f" .bats):$f")
+    done
+    RUN_LABEL="subset"
+elif [ "$FAST" -eq 1 ]; then
+    SUITES=("${STATIC_SUITES[@]}")
+    RUN_LABEL="static"
+else
+    SUITES=("${ALL_SUITES[@]}")
+    RUN_LABEL="full"
+fi
+
+if [ "$LIST_ONLY" -eq 1 ]; then
+    # Before the dependency check: listing needs no tools, and its output is
+    # machine-readable, so the [ok]/[--] chatter must not pollute it.
+    i=0
+    while [ "$i" -lt "${#SUITES[@]}" ]; do
+        printf '%s\n' "${SUITES[$i]}"
+        i=$((i + 1))
+    done
+    exit 0
+fi
 
 # --- Dependency check ---
 MISSING=""
@@ -64,56 +152,6 @@ for cmd in $OPTIONAL_CMDS; do
         echo "  [--] $cmd not found (some tests will skip)"
     fi
 done
-
-cd "$ROOT_DIR"
-
-# --- Suite list ---
-# label:path. The label is what the timing record keys on, so keep it stable.
-ALL_SUITES=(
-    "lint:tests/static/lint.bats"
-    "configs:tests/static/configs.bats"
-    "invariants:tests/static/invariants.bats"
-    "guest-seeds:tests/static/guest-seeds.bats"
-    "personalization:tests/unit/personalization.bats"
-    "resolve-ref:tests/unit/resolve-ref.bats"
-    "gpu-detect:tests/unit/gpu-detect.bats"
-    "frag10-iommu:tests/unit/frag10-iommu.bats"
-    "frag05-apt-repos:tests/unit/frag05-apt-repos.bats"
-    "frag06-sudo:tests/unit/frag06-sudo.bats"
-    "provision-host-lock:tests/unit/provision-host-lock.bats"
-    "control-tools:tests/unit/control-tools.bats"
-    "frag30-guest-create:tests/unit/frag30-guest-create.bats"
-    "nested-keys-status:tests/unit/nested-keys-status.bats"
-    "build-iso:tests/unit/build-iso.bats"
-    "provision-e2e:tests/e2e/provision.bats"
-    "timing:tests/unit/timing.bats"
-)
-STATIC_SUITES=(
-    "lint:tests/static/lint.bats"
-    "configs:tests/static/configs.bats"
-    "invariants:tests/static/invariants.bats"
-    "guest-seeds:tests/static/guest-seeds.bats"
-)
-
-SUITES=()
-if [ "${#FILES[@]}" -gt 0 ]; then
-    # Explicit files win over --fast: the caller asked for something specific.
-    for f in "${FILES[@]}"; do
-        if [ ! -f "$f" ]; then
-            echo "ERROR: no such test file: $f" >&2
-            exit 2
-        fi
-        # Label from the basename so the timing key matches the built-in labels.
-        SUITES+=("$(basename "$f" .bats):$f")
-    done
-    RUN_LABEL="subset"
-elif [ "$FAST" -eq 1 ]; then
-    SUITES=("${STATIC_SUITES[@]}")
-    RUN_LABEL="static"
-else
-    SUITES=("${ALL_SUITES[@]}")
-    RUN_LABEL="full"
-fi
 
 echo ""
 echo "=== nested_dev test suite ==="

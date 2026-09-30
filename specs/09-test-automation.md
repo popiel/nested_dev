@@ -265,7 +265,7 @@ acceptance tables in each spec.
 | 07 | `provision.bats` (e2e) | Control-program installation, forced-command account as created |
 | 08 | `nested-keys-status.bats` | Operator credential check looks in `keys/`, executed against fixture credentials |
 | 09 | all | Source guards, lint coverage of extension-less scripts and of the harness itself, dead-code detection |
-| 09 | `timing.bats` | Timing record parsing, report totals, regression thresholds, suite-list set equality and label uniqueness, fast-mode coverage, result-block accounting, skip handling, unrunnable and unparseable suites, wrapper and setup-script contracts, `AGENTS.md` accuracy |
+| 09 | `timing.bats` | Timing record parsing, report totals, regression thresholds, builder-vs-tree set equality, label uniqueness, fast-mode coverage, result-block accounting, skip handling, unrunnable and unparseable suites, wrapper and setup-script contracts, `AGENTS.md` accuracy |
 
 The map names the suite that owns each area, not the tests within it. The set
 of suites is asserted against the files on disk (R-09.1b.1), so this table

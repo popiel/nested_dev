@@ -459,40 +459,15 @@ EOF
     }
 }
 
-@test "every .bats file in the repo is run by run.sh" {
-    # The other direction: a new test file that run.sh never invokes would
-    # silently never execute. Match on the path alone — run.sh writes suite
-    # entries as "label:tests/unit/name.bats", so requiring a quote immediately
-    # before the path would not match anything.
-    #
-    # BATS_TEST_DIRNAME is tests/unit, so the static/, unit/ and e2e/ globs have
-    # to be resolved from tests/, one level up. Globbing from tests/unit matched
-    # nothing, ls failed on stderr, and this test passed with an empty input
-    # list — it was checking nothing at all.
-    local file missing="" seen=0
-    while IFS= read -r file; do
-        [ -n "$file" ] || continue
-        seen=$((seen + 1))
-        grep -qF "$file" "${BATS_TEST_DIRNAME}/../run.sh" || missing="${missing} $file"
-    done < <(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats unit/*.bats e2e/*.bats)
-    [ "$seen" -gt 0 ] || {
-        echo "found no test files to check; the glob is wrong" >&2
-        return 1
-    }
-    [ -z "$missing" ] || {
-        echo "test files never invoked by run.sh:$missing" >&2
-        return 1
-    }
-}
-
-@test "run.sh's ALL_SUITES list is exactly the repo's test files" {
-    # Compared as sets, not counted. A count can be satisfied by a duplicate
-    # entry plus a missing one, and a duplicated label silently merges two
-    # files' timing records under one name in the report.
-    local run_sh="${BATS_TEST_DIRNAME}/../run.sh" listed actual
-    listed="$(sed -n '/^ALL_SUITES=(/,/^)/p' "$run_sh" \
-        | grep -oE '[a-z0-9-]+:tests/(static|unit|e2e)/[a-z0-9-]+\.bats' \
-        | sed 's/^[^:]*://' | sort)"
+@test "every suite file in the repo is run by run.sh" {
+    # The suite list is built by directory inspection, so this compares the
+    # builder's output against the tree rather than a second maintained list
+    # against the first: a .bats file the builder never finds would silently
+    # never execute. Compared as sets, not counted. Only top-level *.bats in
+    # the suite tiers is collected, so scratch work belongs in a subdirectory,
+    # not next to the suites.
+    local listed actual
+    listed="$(bash "${BATS_TEST_DIRNAME}/../run.sh" --list | cut -d: -f2- | sort)"
     actual="$(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats unit/*.bats e2e/*.bats \
         | sed 's|^|tests/|' | sort)"
     [ -n "$actual" ] || {
@@ -500,19 +475,21 @@ EOF
         return 1
     }
     if [ "$listed" != "$actual" ]; then
-        echo "ALL_SUITES does not match the repo's test files:" >&2
+        echo "run.sh --list does not match the repo's test files:" >&2
         diff <(printf '%s\n' "$actual") <(printf '%s\n' "$listed") >&2 || true
         return 1
     fi
 }
 
 @test "run.sh's suite labels are unique" {
-    local run_sh="${BATS_TEST_DIRNAME}/../run.sh" dupes
-    dupes="$(sed -n '/^ALL_SUITES=(/,/^)/p' "$run_sh" \
-        | grep -oE '"[a-z0-9-]+:tests/' | tr -d '":/' \
+    # Labels key the timing records: two suites sharing a basename across tiers
+    # would merge their histories under one name. The builder refuses to run
+    # until that is fixed; this pins the property without requiring a run.
+    local dupes
+    dupes="$(bash "${BATS_TEST_DIRNAME}/../run.sh" --list | cut -d: -f1 \
         | sort | uniq -d)"
     [ -z "$dupes" ] || {
-        echo "duplicate suite labels in ALL_SUITES: $dupes" >&2
+        echo "duplicate suite labels: $dupes" >&2
         return 1
     }
 }
@@ -588,23 +565,20 @@ STUB
 }
 
 @test "every static suite is reachable from --fast" {
-    # A new tests/static/*.bats that is missing from STATIC_SUITES would be
-    # silently skipped by the pre-commit path, which is how a check goes stale
-    # without anything failing.
-    local run_sh="${BATS_TEST_DIRNAME}/../run.sh" listed actual missing=""
-    listed="$(sed -n '/^STATIC_SUITES=(/,/^)/p' "$run_sh" \
-        | grep -oE 'tests/static/[a-z0-9-]+\.bats' | sort)"
-    actual="$(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats | sed 's|^|tests/|' | sort)"
+    # --fast runs the static tier, selected by directory rather than by a
+    # second maintained list. A static suite the fast path skipped would go
+    # stale without anything failing.
+    local listed actual missing=""
+    listed="$(bash "${BATS_TEST_DIRNAME}/../run.sh" --list --fast | cut -d: -f2- | sort)"
+    actual="$(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats \
+        | sed 's|^|tests/|' | sort)"
     [ -n "$actual" ] || {
         echo "found no static suites to check; the glob is wrong" >&2
         return 1
     }
-    while IFS= read -r file; do
-        [ -n "$file" ] || continue
-        printf '%s\n' "$listed" | grep -qxF "$file" || missing="${missing} $file"
-    done <<< "$actual"
-    [ -z "$missing" ] || {
-        echo "static suites missing from STATIC_SUITES, so --fast skips them:$missing" >&2
+    [ "$listed" = "$actual" ] || {
+        echo "--fast does not cover tests/static:" >&2
+        diff <(printf '%s\n' "$actual") <(printf '%s\n' "$listed") >&2 || true
         return 1
     }
 }
