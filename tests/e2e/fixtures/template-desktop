@@ -1,0 +1,26 @@
+#cloud-config
+# Canned desktop user-data for the end-to-end test. Carries every placeholder
+# frag/30 substitutes, so each substitution expression is exercised and the
+# "no surviving placeholder" check has something to catch.
+hostname: e2e-desktop
+manage_etc_hosts: true
+users:
+  - name: __PERSONALIZATION_USERNAME__
+    gecos: __PERSONALIZATION_FULLNAME__
+    uid: __PERSONALIZATION_UID__
+    gid: __PERSONALIZATION_GID__
+    groups: [adm, sudo]
+    lock_passwd: false
+    passwd: CHANGE_ME_HASHED
+    ssh_authorized_keys:
+      - __ADMIN_PUBKEY__
+      - __GUEST_ID_PUBKEY__
+write_files:
+  - path: /home/__PERSONALIZATION_USERNAME__/.ssh/vmctl_ed25519
+    content: __VMCTL_PRIV_B64__
+    encoding: b64
+  - path: /home/__PERSONALIZATION_USERNAME__/.ssh/guest_id_ed25519
+    content: __GUEST_ID_PRIV_B64__
+    encoding: b64
+runcmd:
+  - echo "built from __GITHUB_REF__"

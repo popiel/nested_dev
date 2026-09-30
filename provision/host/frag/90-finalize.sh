@@ -5,21 +5,21 @@
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+ROOT="${PVE_ROOT:-}"
+# /proc is a kernel interface, not a provisioner output. Overridable for the
+# end-to-end test, which supplies a fixture meminfo.
+PROC="${PVE_PROC:-/proc}"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
 
 log "=== Finalize ==="
 
-# --- Disable enterprise repo, enable no-subscription ---
-if [ -f /etc/apt/sources.list.d/pve-enterprise.list ]; then
-    mv /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pve-enterprise.list.disabled
-    log "Disabled pve-enterprise repo"
-fi
-
-if [ ! -f /etc/apt/sources.list.d/pve-no-subscription.list ]; then
-    echo "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription" \
-        > /etc/apt/sources.list.d/pve-no-subscription.list
-    log "Enabled pve-no-subscription repo"
-fi
+# NOTE: repository selection is owned by frag/05-apt-repos.sh, which runs
+# before any fragment that calls apt. This fragment used to carry its own copy
+# — move the enterprise list aside and write a hardcoded `bookworm`
+# no-subscription line — and on a trixie host where frag/05 had already run it
+# was dead code, while on a host where frag/05 had not run it wrote a
+# repository for the wrong distribution. One owner, in one place.
 
 # ============================================================
 # 1. Detect physical NIC
@@ -35,7 +35,8 @@ fi
 # ============================================================
 # 2. Write network config — routed architecture
 # ============================================================
-cat > /etc/network/interfaces <<EOF
+mkdir -p "${ROOT}/etc/network"
+cat > "${ROOT}/etc/network/interfaces" <<EOF
 auto lo
 iface lo inet loopback
 
@@ -71,7 +72,8 @@ if ! dpkg -l dnsmasq 2>/dev/null | grep -q '^ii'; then
 fi
 
 # Write dnsmasq config (static leases + DNS for VMs)
-cat > /etc/dnsmasq.d/nested_dev.conf <<'DNSMASQ_EOF'
+mkdir -p "${ROOT}/etc/dnsmasq.d"
+cat > "${ROOT}/etc/dnsmasq.d/nested_dev.conf" <<'DNSMASQ_EOF'
 # dnsmasq config for nested_dev — served on vmbr0 (192.168.100.0/24)
 interface=vmbr0
 bind-interfaces
@@ -103,7 +105,7 @@ resolv-file=/run/resolv.conf
 DNSMASQ_EOF
 
 # Disable dnsmasq's own resolv.conf management (we provide upstream via resolv-file)
-sed -i 's|^#resolv-file=.*|resolv-file=/run/resolv.conf|' /etc/dnsmasq.conf 2>/dev/null || true
+sed -i 's|^#resolv-file=.*|resolv-file=/run/resolv.conf|' "${ROOT}/etc/dnsmasq.conf" 2>/dev/null || true
 
 systemctl enable --now dnsmasq
 log "dnsmasq configured and started"
@@ -111,7 +113,8 @@ log "dnsmasq configured and started"
 # ============================================================
 # 4. Enable IP forwarding
 # ============================================================
-cat > /etc/sysctl.d/99-nested-dev.conf <<'SYSCTL_EOF'
+mkdir -p "${ROOT}/etc/sysctl.d"
+cat > "${ROOT}/etc/sysctl.d/99-nested-dev.conf" <<'SYSCTL_EOF'
 # Enable IPv4 forwarding for routed VM network
 net.ipv4.ip_forward = 1
 SYSCTL_EOF
@@ -254,7 +257,7 @@ log "iptables rules saved"
 # ============================================================
 # Point host resolver at dnsmasq (127.0.0.1) for VM name resolution
 # dnsmasq forwards external queries to upstream DNS from /run/resolv.conf
-cat > /etc/resolv.conf <<'RESOLV_EOF'
+cat > "${ROOT}/etc/resolv.conf" <<'RESOLV_EOF'
 # Managed by frag/90-finalize.sh — host uses dnsmasq for DNS
 # dnsmasq resolves VM names and forwards external queries upstream
 nameserver 127.0.0.1
@@ -264,7 +267,7 @@ log "Host DNS configured to use dnsmasq (127.0.0.1)"
 # ============================================================
 # 8. Write /etc/hosts with VM entries
 # ============================================================
-cat > /etc/hosts <<'HOSTS_EOF'
+cat > "${ROOT}/etc/hosts" <<'HOSTS_EOF'
 127.0.0.1       localhost
 127.0.1.1       lychee-host.wolfskeep.com lychee-host
 
@@ -285,15 +288,16 @@ log "Hostname set to lychee-host.wolfskeep.com"
 # 10. Dev VM control (vmctl)
 # ============================================================
 # Ensure dnsmasq dev drop-in exists
-if [ ! -f /etc/dnsmasq.d/zz-dev.conf ]; then
-    echo "# Per-project dev VMs — added by vmctl-host on demand" > /etc/dnsmasq.d/zz-dev.conf
+if [ ! -f "${ROOT}/etc/dnsmasq.d/zz-dev.conf" ]; then
+    mkdir -p "${ROOT}/etc/dnsmasq.d"
+    echo "# Per-project dev VMs — added by vmctl-host on demand" > "${ROOT}/etc/dnsmasq.d/zz-dev.conf"
     log "dnsmasq dev drop-in created"
 fi
 
 # Ensure inventory exists
-if [ ! -f /etc/nested-dev/inventory ]; then
-    mkdir -p /etc/nested-dev
-    cat > /etc/nested-dev/inventory <<'EOF'
+if [ ! -f "${ROOT}/etc/nested-dev/inventory" ]; then
+    mkdir -p "${ROOT}/etc/nested-dev"
+    cat > "${ROOT}/etc/nested-dev/inventory" <<'EOF'
 # VMID  NAME  HOSTNAME  IP  MAC  STATUS  PROJECT
 100  desktop  lychee  192.168.100.100  52:54:00:00:01:00  running  desktop
 101  llm  lychee-llm  192.168.100.101  52:54:00:00:01:01  running  llm
@@ -305,25 +309,25 @@ fi
 # ============================================================
 # 10. Record build info
 # ============================================================
-mkdir -p /root/output
-cat > /root/output/MANIFEST <<EOF
+mkdir -p "${ROOT}/root/output"
+cat > "${ROOT}/root/output/MANIFEST" <<EOF
 # nested_dev host build manifest
 # REF: __GITHUB_REF__
 # Built: $(date -Is)
 # PVE version: $(pveversion 2>/dev/null || echo "unknown")
 # CPU: $(lscpu | awk '/Model name/{print $0}')
-# RAM: $(awk '/MemTotal/{printf "%.0f GB", $2/1024/1024}' /proc/meminfo)
+# RAM: $(awk '/MemTotal/{printf "%.0f GB", $2/1024/1024}' "${PROC}/meminfo")
 # Disks: $(lsblk -dno NAME,SIZE,ROTA | grep -v loop | tr '\n' '; ')
 # GPUs: $(lspci | grep -iE 'vga|3d' | tr '\n' '; ')
 # Network: routed (PHYS_NIC=$PHYS_NIC, vmbr0=192.168.100.1/24)
 # DNS: dnsmasq on 127.0.0.1
 EOF
-log "Manifest written to /root/output/MANIFEST"
+log "Manifest written to ${ROOT}/root/output/MANIFEST"
 
 # ============================================================
 # 11. MOTD
 # ============================================================
-cat > /etc/motd <<'EOF'
+cat > "${ROOT}/etc/motd" <<'EOF'
 
 ========================================
   lychee-host — Proxmox VE 9.2

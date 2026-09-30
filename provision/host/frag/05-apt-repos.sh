@@ -3,13 +3,14 @@
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
 die() { log "FATAL: $*"; exit 1; }
 
 # Overridable so the functions can be exercised without touching /etc; unset on a
 # normal run, which is what keeps this a plain drop-in fragment.
-: "${ENTERPRISE_LIST:=/etc/apt/sources.list.d/pve-enterprise.list}"
-: "${NOSUB_LIST:=/etc/apt/sources.list.d/pve-no-subscription.list}"
+ROOT="${PVE_ROOT:-}"
+: "${ENTERPRISE_LIST:=${ROOT}/etc/apt/sources.list.d/pve-enterprise.list}"
+: "${NOSUB_LIST:=${ROOT}/etc/apt/sources.list.d/pve-no-subscription.list}"
 
 # The suite is read out of the enterprise file rather than hardcoded, so this
 # does not have to be edited when PVE moves to a new Debian release — and

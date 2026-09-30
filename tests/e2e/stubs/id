@@ -1,0 +1,3 @@
+#!/bin/bash
+# tests/e2e/stubs/id — nobody exists on the fixture host; see getent.
+exit 1

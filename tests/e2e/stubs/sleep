@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/sleep — time does not pass on the fixture host. frag/30's
+# provisioning gate polls with sleeps; stubbing them out turns the 600s
+# timeout into immediate polling without changing the polling logic.
+exit 0

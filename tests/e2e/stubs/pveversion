@@ -1,0 +1,3 @@
+#!/bin/bash
+# tests/e2e/stubs/pveversion — the fixture host runs PVE 9.2.
+echo "pve-manager/9.2-1 (running kernel: 7.0.2-6-pve)"

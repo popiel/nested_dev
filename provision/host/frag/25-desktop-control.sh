@@ -5,21 +5,23 @@
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+ROOT="${PVE_ROOT:-}"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
 die() { log "FATAL: $*"; exit 1; }
 
 log "=== desktop-control setup ==="
 
 # --- Inventory directory ---
-mkdir -p /etc/nested-dev
-if [ ! -f /etc/nested-dev/inventory ]; then
-    cat > /etc/nested-dev/inventory <<'EOF'
+mkdir -p "${ROOT}/etc/nested-dev"
+if [ ! -f "${ROOT}/etc/nested-dev/inventory" ]; then
+    cat > "${ROOT}/etc/nested-dev/inventory" <<'EOF'
 # VMID  NAME  HOSTNAME  IP  MAC  STATUS  PROJECT
 100  desktop  lychee  192.168.100.100  52:54:00:00:01:00  running  desktop
 101  llm  lychee-llm  192.168.100.101  52:54:00:00:01:01  running  llm
 102  dev-template  lychee-dev-template  192.168.100.102  52:54:00:00:01:02  template  dev-template
 EOF
-    log "Inventory created at /etc/nested-dev/inventory"
+    log "Inventory created at ${ROOT}/etc/nested-dev/inventory"
 else
     log "Inventory already exists"
 fi
@@ -50,7 +52,7 @@ else
 fi
 
 # --- Generate control keypair ---
-VMCTL_KEY_DIR="/root/.nested-dev/vmctl"
+VMCTL_KEY_DIR="${ROOT}/root/.nested-dev/vmctl"
 mkdir -p "$VMCTL_KEY_DIR"
 if [ ! -f "${VMCTL_KEY_DIR}/vmctl_ed25519" ]; then
     ssh-keygen -t ed25519 -f "${VMCTL_KEY_DIR}/vmctl_ed25519" -N "" \
@@ -63,14 +65,14 @@ else
 fi
 
 # --- authorized_keys with ForceCommand restriction ---
-mkdir -p /home/vmctl/.ssh
-chmod 700 /home/vmctl/.ssh
+mkdir -p "${ROOT}/home/vmctl/.ssh"
+chmod 700 "${ROOT}/home/vmctl/.ssh"
 PUB_KEY=$(cat "${VMCTL_KEY_DIR}/vmctl_ed25519.pub")
-cat > /home/vmctl/.ssh/authorized_keys <<AUTH_EOF
+cat > "${ROOT}/home/vmctl/.ssh/authorized_keys" <<AUTH_EOF
 command="/usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ${PUB_KEY}
 AUTH_EOF
-chmod 600 /home/vmctl/.ssh/authorized_keys
-chown -R vmctl:vmctl /home/vmctl/.ssh
+chmod 600 "${ROOT}/home/vmctl/.ssh/authorized_keys"
+chown -R vmctl:vmctl "${ROOT}/home/vmctl/.ssh"
 log "authorized_keys written (ForceCommand → vmctl-host)"
 
 # --- sudoers: only vmctl-host via root, no password ---
@@ -82,20 +84,24 @@ log "authorized_keys written (ForceCommand → vmctl-host)"
 # channel pointing at a binary that was never installed.
 VMCTL_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../vmctl" && pwd)"
 VMCTL_SUDOERS_SRC="${VMCTL_SRC_DIR}/sudoers"
-VMCTL_SUDOERS_DST="/etc/sudoers.d/vmctl"
+VMCTL_SUDOERS_DST="${ROOT}/etc/sudoers.d/vmctl"
+mkdir -p "$(dirname "$VMCTL_SUDOERS_DST")"
 if [ -f "$VMCTL_SUDOERS_SRC" ]; then
-    cp "$VMCTL_SUDOERS_SRC" "$VMCTL_SUDOERS_DST"
+    install -m 440 "$VMCTL_SUDOERS_SRC" "$VMCTL_SUDOERS_DST"
 else
-    cat > "$VMCTL_SUDOERS_DST" <<'SUDOERS_EOF'
+    # install(1) rather than cp + chmod: it creates the destination fresh, so a
+    # re-run over the existing mode-440 file does not fail trying to truncate a
+    # file it cannot write.
+    install -m 440 /dev/stdin "$VMCTL_SUDOERS_DST" <<'SUDOERS_EOF'
 vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host
 SUDOERS_EOF
 fi
-chmod 440 "$VMCTL_SUDOERS_DST"
 log "sudoers drop-in written"
 
 # --- Copy vmctl-host script ---
 VMCTL_HOST_SRC="${VMCTL_SRC_DIR}/vmctl-host"
-VMCTL_HOST_DST="/usr/local/sbin/vmctl-host"
+VMCTL_HOST_DST="${ROOT}/usr/local/sbin/vmctl-host"
+mkdir -p "$(dirname "$VMCTL_HOST_DST")"
 if [ -f "$VMCTL_HOST_SRC" ]; then
     cp "$VMCTL_HOST_SRC" "$VMCTL_HOST_DST"
     chmod 755 "$VMCTL_HOST_DST"
@@ -107,7 +113,7 @@ against a forced command that does not exist"
 fi
 
 # --- Staging path for frag/30 (desktop seed injection) ---
-STAGED_KEY="/root/.nested-dev/vmctl-priv-staged"
+STAGED_KEY="${ROOT}/root/.nested-dev/vmctl-priv-staged"
 cp "${VMCTL_KEY_DIR}/vmctl_ed25519" "$STAGED_KEY"
 chmod 600 "$STAGED_KEY"
 log "Private key staged for desktop seed injection"
@@ -118,7 +124,7 @@ log "Private key staged for desktop seed injection"
 # trusted by the host OS and by every guest, so the desktop can administer the
 # whole deployment. Distinct from vmctl, which is a restricted forced-command
 # credential with no shell access.
-GUEST_ID_KEY_DIR="/root/.nested-dev/guest-id"
+GUEST_ID_KEY_DIR="${ROOT}/root/.nested-dev/guest-id"
 DESKTOP_IP="192.168.100.100"
 mkdir -p "$GUEST_ID_KEY_DIR"
 if [ ! -f "${GUEST_ID_KEY_DIR}/guest_id_ed25519" ]; then
@@ -135,13 +141,13 @@ fi
 # address (issued as a dnsmasq dhcp-host lease for MAC 52:54:00:00:01:00 in
 # provision/network/dnsmasq.conf and frag/90-finalize.sh) so that a leaked copy
 # of the key is only usable from the desktop VM. The forwarding options match
-# the vmctl entry. tests/unit/frag25-vmctl.bats asserts this stays in sync with
-# dnsmasq.conf — if the desktop address ever changes, update both or host
-# access from the desktop silently breaks while the key is still present.
+# the vmctl entry. tests/e2e/provision.bats asserts the pin lands in
+# root's authorized_keys — if the desktop address ever changes, update both or
+# host access from the desktop silently breaks while the key is still present.
 GUEST_ID_PUB=$(cat "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub")
-ROOT_AUTH_KEYS="/root/.ssh/authorized_keys"
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
+ROOT_AUTH_KEYS="${ROOT}/root/.ssh/authorized_keys"
+mkdir -p "${ROOT}/root/.ssh"
+chmod 700 "${ROOT}/root/.ssh"
 touch "$ROOT_AUTH_KEYS"
 chmod 600 "$ROOT_AUTH_KEYS"
 # grep on the key body only, so re-running does not append a duplicate entry.
@@ -155,14 +161,15 @@ fi
 
 # Stage the guest identity private half for frag/30 (desktop seed injection).
 # Re-staged on every run; frag/30 shreds it once the seeds are built.
-GUEST_ID_STAGED="/root/.nested-dev/guest-id-priv-staged"
+GUEST_ID_STAGED="${ROOT}/root/.nested-dev/guest-id-priv-staged"
 cp "${GUEST_ID_KEY_DIR}/guest_id_ed25519" "$GUEST_ID_STAGED"
 chmod 600 "$GUEST_ID_STAGED"
 log "Guest identity private key staged for desktop seed injection"
 
 # --- dnsmasq dev drop-in (empty header; vmctl-host appends entries) ---
-if [ ! -f /etc/dnsmasq.d/zz-dev.conf ]; then
-    echo "# Per-project dev VMs — added by vmctl-host on demand" > /etc/dnsmasq.d/zz-dev.conf
+if [ ! -f "${ROOT}/etc/dnsmasq.d/zz-dev.conf" ]; then
+    mkdir -p "${ROOT}/etc/dnsmasq.d"
+    echo "# Per-project dev VMs — added by vmctl-host on demand" > "${ROOT}/etc/dnsmasq.d/zz-dev.conf"
     log "dnsmasq dev drop-in created"
 fi
 

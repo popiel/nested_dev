@@ -1,0 +1,2 @@
+# /etc/fstab (fixture): no swap entry; frag/20 must add one.
+UUID=e2e-root-uuid / ext4 errors=remount-ro 0 1

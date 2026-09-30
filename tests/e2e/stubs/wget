@@ -1,0 +1,41 @@
+#!/bin/bash
+# tests/e2e/stubs/wget — every network fetch the provisioner makes, answered
+# locally.
+#
+# Three call shapes exist: the first-boot tarball (`-qO <dest> <codeload url>`),
+# the Ubuntu ISOs (`-q --show-progress -O <dest> <releases url>`), and the
+# NoCloud user-data templates (`-q <url> -O <dest>`). Anything else is a new
+# network dependency, and failing loudly here is the tripwire that says so.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+TARBALL="${E2E_TARBALL:?E2E_TARBALL not set}"
+TEMPLATEDIR="${E2E_TEMPLATES:?E2E_TEMPLATES not set}"
+printf 'wget %s\n' "$*" >> "$STATE/wget-journal"
+dest=""
+url=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-O" ]; then dest="$a"; prev=""; continue; fi
+  case "$a" in
+    -O) prev="-O" ;;
+    -qO) prev="-O" ;;
+    -O*) dest="${a#-O}" ;;
+    -*) ;;
+    *) if [ -z "$url" ]; then url="$a"; fi ;;
+  esac
+done
+[ -n "$dest" ] || { echo "e2e wget stub: no -O destination in: $*" >&2; exit 1; }
+[ -n "$url" ] || { echo "e2e wget stub: no URL in: $*" >&2; exit 1; }
+case "$url" in
+  *codeload.github.com*)
+    cp "$TARBALL" "$dest" ;;
+  *releases.ubuntu.com*)
+    : > "$dest" ;;
+  *raw.githubusercontent.com*user-data/user-data)
+    guest="$(basename "$(dirname "$(dirname "$url")")")"
+    case "$guest" in
+      desktop|llm|dev) cp "$TEMPLATEDIR/$guest" "$dest" ;;
+      *) echo "e2e wget stub: unknown guest '$guest' in $url" >&2; exit 1 ;;
+    esac ;;
+  *)
+    echo "e2e wget stub: unexpected URL '$url'" >&2; exit 1 ;;
+esac

@@ -169,9 +169,9 @@ load '../lib/helpers'
     # tree reads as a missing file at build time, or worse as a second,
     # differently-named secret.
     #
-    # Scoped to the source tree and the operator docs: this test and
-    # tests/unit/first-boot-user.bats necessarily name the old paths in their
-    # negative assertions, and specs/09 quotes them in documenting the rename.
+    # Scoped to the source tree and the operator docs: the negative assertions
+    # below necessarily name the old paths, and specs/09 quotes them in
+    # documenting the rename.
     local result
     for dir in provision desktop llm dev; do
         result=$(grep -rn 'keys/password-hash\|/root/\.password-hash' \
@@ -202,7 +202,7 @@ load '../lib/helpers'
                PERSONALIZATION_UID PERSONALIZATION_GID; do
         assert_file_contains "$frag30" "$var"
     done
-    assert_file_contains "$frag30" 'not set — check /root/provision/personalization.sh'
+    assert_file_contains "$frag30" 'not set — check ${ROOT}/root/provision/personalization.sh'
     assert_file_contains "$frag30" \
         'Personalization password hash not found: ${PERSONALIZATION_HASH_FILE}'
 }

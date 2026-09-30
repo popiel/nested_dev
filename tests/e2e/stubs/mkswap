@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/mkswap — records, formats nothing.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'mkswap %s\n' "$*" >> "$STATE/journal"
+exit 0

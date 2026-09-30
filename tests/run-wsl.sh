@@ -10,7 +10,7 @@
 #   tests/run-wsl.sh                                  # whole suite
 #   tests/run-wsl.sh --fast                           # static only
 #   tests/run-wsl.sh tests/unit/gpu-detect.bats       # one suite
-#   tests/run-wsl.sh tests/unit/frag10-iommu.bats tests/unit/frag25-vmctl.bats
+#   tests/run-wsl.sh tests/unit/frag10-iommu.bats tests/unit/control-tools.bats
 #   tests/run-wsl.sh --setup                          # install WSL test tooling
 #   tests/run-wsl.sh --distro Ubuntu-24.04 --slowest 20
 #

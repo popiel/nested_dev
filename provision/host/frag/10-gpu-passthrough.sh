@@ -4,7 +4,12 @@
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+ROOT="${PVE_ROOT:-}"
+# Kernel interfaces, not provisioner outputs. Pointed at a fixture tree by the
+# end-to-end test; the one production reader is the host's own kernel.
+SYSFS="${PVE_SYSFS:-/sys}"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
 
 # --- Functions for testability ---
 
@@ -86,7 +91,7 @@ iommu_group_number() {
     # The group number a device belongs to, or the empty string when the device
     # has none. The link is a symlink into /sys/kernel/iommu_groups/N, so two
     # devices share a group exactly when this returns the same value.
-    local link="/sys/bus/pci/devices/0000:${1}/iommu_group"
+    local link="${SYSFS}/bus/pci/devices/0000:${1}/iommu_group"
     [ -L "$link" ] || { echo ""; return 0; }
     basename "$(readlink -f "$link")"
 }
@@ -146,7 +151,7 @@ check_iommu_group_separable() {
     local pci_addr="$1"
     shift
     iommu_group_is_separable \
-        "/sys/bus/pci/devices/0000:${pci_addr}/iommu_group/devices" \
+        "${SYSFS}/bus/pci/devices/0000:${pci_addr}/iommu_group/devices" \
         "$pci_addr" "$@"
 }
 
@@ -200,7 +205,7 @@ main() {
 
     for name_entry in "${GPU_NAMES[@]}"; do
         PCI_ADDR=$(echo "$name_entry" | awk '{print $1}')
-        GPU_GROUP_PATH="/sys/bus/pci/devices/0000:${PCI_ADDR}/iommu_group/devices"
+        GPU_GROUP_PATH="${SYSFS}/bus/pci/devices/0000:${PCI_ADDR}/iommu_group/devices"
         GPU_VD=$(lspci -n -s "$PCI_ADDR" | awk '{print $3}')
         GPU_DESC=$(echo "$name_entry" | cut -d' ' -f2-)
 
@@ -237,7 +242,7 @@ main() {
 
         # A companion in a group of its own has to be safe there on its own.
         if [ -n "$AUDIO_ADDR" ] && [ -z "${ALLOWED_IN_GROUP[0]:-}" ]; then
-            AUDIO_GROUP_PATH="/sys/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices"
+            AUDIO_GROUP_PATH="${SYSFS}/bus/pci/devices/0000:${AUDIO_ADDR}/iommu_group/devices"
             if [ -d "$AUDIO_GROUP_PATH" ] \
                 && ! check_iommu_group_separable "$AUDIO_ADDR"; then
                 log "SKIP: audio companion $AUDIO_ADDR for $PCI_ADDR is not separable on its own."
@@ -275,6 +280,27 @@ main() {
         log "  $entry"
     done
 
+    # --- Publish the accepted device set for frag/30 ---
+    #
+    # frag/30 attaches passthrough devices to guests, and it must attach exactly
+    # this set — no more, no less. It used to run its own detection, which
+    # listed every GPU on the host regardless of what this fragment decided: on
+    # a host where the dGPUs were left to the host because their group was
+    # unsafe, frag/30 still handed both 1080s to the LLM guest, which the kernel
+    # had never bound to vfio-pci.
+    #
+    # One full BDF per line. frag/30 dies when this file is missing or empty
+    # rather than guessing, so a skipped or failed frag/10 cannot silently
+    # become guests without the devices they were built around.
+    PASSTHROUGH_LIST="${ROOT}/var/lib/pve-firstboot/passthrough-devices"
+    mkdir -p "$(dirname "$PASSTHROUGH_LIST")"
+    : > "$PASSTHROUGH_LIST"
+    for entry in "${PASSTHROUGH_NAMES[@]}"; do
+        PCI_ADDR=$(echo "$entry" | awk '{print $1}')
+        printf '0000:%s\n' "$PCI_ADDR" >> "$PASSTHROUGH_LIST"
+    done
+    log "Passthrough device list written to ${PASSTHROUGH_LIST}"
+
     # Build comma-separated vfio-pci.ids
     VFIO_IDS=$(IFS=,; echo "${GPU_IDS[*]}")
     log "vfio-pci.ids: $VFIO_IDS"
@@ -290,30 +316,36 @@ main() {
     # kernel bound devices the provisioner had decided to leave alone. That is
     # the one edit where being idempotent by flag-presence is worse than not
     # being idempotent at all.
-    GRUB_FILE="/etc/default/grub"
-    GRUB_LINE_RE='^GRUB_CMDLINE_LINUX_DEFAULT="'
-    WANT_TOKENS=("${IOMMU_FLAG}" "iommu=pt" "vfio-pci.ids=${VFIO_IDS}" "disable_vga=1")
-
-    grub_has_token() {
-        grep -q -- " $1" "$GRUB_FILE" 2>/dev/null
-    }
+    #
+    # vfio-pci.ids is set-valued, so it is removed outright and re-appended
+    # rather than compared or patched. Both alternatives misfire when the sets
+    # overlap: narrowing `8086:5912,10de:...` to `8086:5912` makes "contains"
+    # true and an in-place replace a prefix match, and either leaves the stale
+    # token in the line next to the new one.
+    GRUB_FILE="${ROOT}/etc/default/grub"
+    # The match is anchored; the replacement is not. Sharing one variable for
+    # both wrote a literal `^` at the start of the line on the first append —
+    # update-grub then ignored the mangled variable, and a second run could not
+    # match its own output to repair it.
+    GRUB_LINE_MATCH='^GRUB_CMDLINE_LINUX_DEFAULT="'
+    GRUB_LINE_PREFIX='GRUB_CMDLINE_LINUX_DEFAULT="'
 
     GRUB_CHANGED=false
-    for token in "${WANT_TOKENS[@]}"; do
+    if grep -q -- " vfio-pci.ids=" "$GRUB_FILE" 2>/dev/null; then
+        sed -i 's/ vfio-pci\.ids=[^ "]*//g' "$GRUB_FILE"
+        GRUB_CHANGED=true
+    fi
+
+    grub_has_token() {
+        grep -q -- " $1[\" ]" "$GRUB_FILE" 2>/dev/null
+    }
+
+    for token in "${IOMMU_FLAG}" "iommu=pt" "vfio-pci.ids=${VFIO_IDS}" "disable_vga=1"; do
         if ! grub_has_token "$token"; then
-            sed -i "s|${GRUB_LINE_RE}\(.*\)\"|${GRUB_LINE_RE}\1 ${token}\"|" "$GRUB_FILE"
+            sed -i "s|${GRUB_LINE_MATCH}\(.*\)\"|${GRUB_LINE_PREFIX}\1 ${token}\"|" "$GRUB_FILE"
             GRUB_CHANGED=true
         fi
     done
-
-    # Drop any vfio-pci.ids that disagrees with this run's set, so a device the
-    # provisioner excluded is not still bound by the boot configuration.
-    STALE_IDS=$(sed -n "s|.*[[:space:]]vfio-pci\.ids=\([^ ]*\).*|\1|p" "$GRUB_FILE" | head -1)
-    if [ -n "$STALE_IDS" ] && [ "$STALE_IDS" != "$VFIO_IDS" ]; then
-        log "Replacing stale vfio-pci.ids '${STALE_IDS}' with '${VFIO_IDS}'"
-        sed -i "s|vfio-pci\.ids=${STALE_IDS}|vfio-pci.ids=${VFIO_IDS}|" "$GRUB_FILE"
-        GRUB_CHANGED=true
-    fi
 
     if [ "$GRUB_CHANGED" = true ]; then
         update-grub
@@ -324,7 +356,8 @@ main() {
     fi
 
     # --- 2. modprobe early binding ---
-    cat > /etc/modprobe.d/vfio.conf <<EOF
+    mkdir -p "${ROOT}/etc/modprobe.d" "${ROOT}/etc/modules-load.d"
+    cat > "${ROOT}/etc/modprobe.d/vfio.conf" <<EOF
 options vfio-pci ids=${VFIO_IDS} disable_vga=1
 softdep i915 pre: vfio-pci
 softdep nouveau pre: vfio-pci
@@ -334,7 +367,7 @@ EOF
     log "modprobe.d/vfio.conf written"
 
     # --- 3. modules-load ---
-    cat > /etc/modules-load.d/vfio.conf <<EOF
+    cat > "${ROOT}/etc/modules-load.d/vfio.conf" <<EOF
 vfio
 vfio_iommu_type1
 vfio_pci
@@ -342,7 +375,7 @@ EOF
     log "modules-load.d/vfio.conf written"
 
     # --- 4. blacklist only passed-through GPU drivers ---
-    BLACKLIST_FILE="/etc/modprobe.d/blacklist-gpu.conf"
+    BLACKLIST_FILE="${ROOT}/etc/modprobe.d/blacklist-gpu.conf"
     : > "$BLACKLIST_FILE"
 
     if echo "$VFIO_IDS" | grep -qi "10de"; then

@@ -1,0 +1,6 @@
+#!/bin/bash
+# tests/e2e/stubs/pvesm — local-lvm is available.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'pvesm %s\n' "$*" >> "$STATE/journal"
+printf 'local-lvm active 365000\n'
+exit 0

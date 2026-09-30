@@ -12,7 +12,7 @@ fails in a way that looks like a hang.
 bash tests/run-wsl.sh                    # whole suite
 bash tests/run-wsl.sh --fast             # static layer only
 bash tests/run-wsl.sh tests/unit/gpu-detect.bats
-bash tests/run-wsl.sh tests/unit/frag10-iommu.bats tests/unit/frag25-vmctl.bats
+bash tests/run-wsl.sh tests/unit/frag10-iommu.bats tests/unit/control-tools.bats
 bash tests/run-wsl.sh --slowest 20       # longer slow-test table
 ```
 

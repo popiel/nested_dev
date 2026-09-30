@@ -45,11 +45,15 @@ set -eu
 
 REF="__GITHUB_REF__"
 REPO="popiel/nested_dev"
-PROVISION_DIR="/root/provision"
-HASH_FILE="/root/.personalization-password-hash"
-UNIT="/etc/systemd/system/pve-firstboot.service"
-WANTS_DIR="/etc/systemd/system/multi-user.target.wants"
-LOG="/var/log/pve-firstboot-bootstrap.log"
+# Filesystem root for everything this bootstrap writes. Empty on a real host.
+# The end-to-end test points it at a scratch tree and asserts the resulting
+# account, keys and fetched tree instead of the script's text.
+ROOT="${PVE_ROOT:-}"
+PROVISION_DIR="${ROOT}/root/provision"
+HASH_FILE="${ROOT}/root/.personalization-password-hash"
+UNIT="${ROOT}/etc/systemd/system/pve-firstboot.service"
+WANTS_DIR="${ROOT}/etc/systemd/system/multi-user.target.wants"
+LOG="${ROOT}/var/log/pve-firstboot-bootstrap.log"
 
 # Personalization identity (§05), substituted at build time. Deliberately
 # rendered rather than read from provision/personalization.sh, which does not
@@ -138,46 +142,60 @@ getent group sudo >/dev/null 2>&1 || groupadd -r sudo
 
 # Administrative access on the host, and password-less SSH with the operator key.
 usermod -aG sudo "$USER_NAME"
-mkdir -p "${USER_HOME}/.ssh"
-chmod 700 "${USER_HOME}/.ssh"
-printf '%s\n' "$ADMIN_PUBKEY" > "${USER_HOME}/.ssh/authorized_keys"
-chmod 600 "${USER_HOME}/.ssh/authorized_keys"
-chown -R "${USER_NAME}:${USER_NAME}" "$USER_HOME"
+# The home directory as a filesystem location, as opposed to USER_HOME, which
+# is the account attribute handed to useradd/usermod and must stay unprefixed
+# even under PVE_ROOT.
+USER_HOME_DIR="${ROOT}${USER_HOME}"
+mkdir -p "${USER_HOME_DIR}/.ssh"
+chmod 700 "${USER_HOME_DIR}/.ssh"
+printf '%s\n' "$ADMIN_PUBKEY" > "${USER_HOME_DIR}/.ssh/authorized_keys"
+chmod 600 "${USER_HOME_DIR}/.ssh/authorized_keys"
+chown -R "${USER_NAME}:${USER_NAME}" "$USER_HOME_DIR"
 log "personalization account ready: password set, sudo group, operator key installed"
 
 # --- 3. Fetch the provision/ tree at the pinned REF -------------------
 log "fetching provisioner tree at ${REF}"
 mkdir -p "$PROVISION_DIR"
-TMP="/root/.nested_dev.tar.gz"
+TMP="${ROOT}/root/.nested_dev.tar.gz"
 if ! wget -qO "$TMP" "https://codeload.github.com/${REPO}/tar.gz/refs/heads/${REF}"; then
     rm -f "$TMP"
     die "failed to fetch provisioner tree for ${REPO}@${REF}"
 fi
-tar -xzf "$TMP" -C /root
+tar -xzf "$TMP" -C "${ROOT}/root"
 rm -f "$TMP"
-[ -d "/root/nested_dev-${REF}/provision" ] || die "archive did not contain provision/"
+[ -d "${ROOT}/root/nested_dev-${REF}/provision" ] || die "archive did not contain provision/"
+
+rm -rf "${PROVISION_DIR:?}.old"
+[ -d "$PROVISION_DIR" ] && mv "$PROVISION_DIR" "${PROVISION_DIR}.old"
+mv "${ROOT}/root/nested_dev-${REF}/provision" "$PROVISION_DIR"
 
 # frag/30 injects the build machine's admin public key into every guest seed,
 # but keys/ is not part of the provision tree. Preserve the pubkey out of the
-# tarball before the extract is deleted below. Read from the archive rather
-# than from the host's /root/.ssh/authorized_keys so that a key added to the
-# host by hand does not silently propagate to every guest.
-ADMIN_PUBKEY_SRC="/root/nested_dev-${REF}/keys/host_os_ed25519.pub"
+# tarball into the tree that was just put in place. This must happen after the
+# swap above, not before: preserving it into the old directory and then moving
+# that directory to .old loses the key, and frag/30 aborts on the missing file
+# after everything else already succeeded.
+#
+# Read from the archive rather than from the host's /root/.ssh/authorized_keys
+# so that a key added to the host by hand does not silently propagate to every
+# guest.
+ADMIN_PUBKEY_SRC="${ROOT}/root/nested_dev-${REF}/keys/host_os_ed25519.pub"
 [ -f "$ADMIN_PUBKEY_SRC" ] || die "archive did not contain keys/host_os_ed25519.pub"
 mkdir -p "${PROVISION_DIR}/keys"
 cp "$ADMIN_PUBKEY_SRC" "${PROVISION_DIR}/keys/host_os_ed25519.pub"
 chmod 644 "${PROVISION_DIR}/keys/host_os_ed25519.pub"
 log "admin public key preserved at ${PROVISION_DIR}/keys/host_os_ed25519.pub"
 
-rm -rf "${PROVISION_DIR:?}.old"
-[ -d "$PROVISION_DIR" ] && mv "$PROVISION_DIR" "${PROVISION_DIR}.old"
-mv "/root/nested_dev-${REF}/provision" "$PROVISION_DIR"
-rm -rf "/root/nested_dev-${REF}"
+rm -rf "${ROOT}/root/nested_dev-${REF}"
 chmod +x "${PROVISION_DIR}/host/provision-host.sh"
 chmod +x "${PROVISION_DIR}/host"/frag/*.sh 2>/dev/null || true
 
 # --- 4. Install the pve-firstboot unit --------------------------------
+# NOTE: ExecStart is the path as the booted host sees it, never ${ROOT}-prefixed.
+# The unit file runs on the host; the PVE_ROOT prefix is a test-harness
+# redirection for where files land, not for what they contain.
 log "installing pve-firstboot.service"
+mkdir -p "$(dirname "$UNIT")"
 cat > "$UNIT" <<UNIT
 [Unit]
 Description=PVE first boot provisioning
@@ -186,7 +204,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=${PROVISION_DIR}/host/provision-host.sh
+ExecStart=/root/provision/host/provision-host.sh
 
 [Install]
 WantedBy=multi-user.target
@@ -203,7 +221,7 @@ systemctl enable pve-firstboot.service >/dev/null 2>&1 || true
 # provisioner directly. Fragments are idempotent, so a later re-run is safe.
 log "running provisioner"
 if ! /bin/sh "${PROVISION_DIR}/host/provision-host.sh"; then
-    die "provisioner failed — see /var/log/pve-firstboot.log"
+    die "provisioner failed — see ${ROOT}/var/log/pve-firstboot.log"
 fi
 
 log "=== first-boot bootstrap complete ==="

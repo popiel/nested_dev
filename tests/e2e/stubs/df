@@ -1,0 +1,4 @@
+#!/bin/bash
+# tests/e2e/stubs/df — 365 GB free on the fixture host's storage, in the shape
+# `df --output=avail` actually prints (header plus the bare value).
+printf 'Avail\n365G\n'

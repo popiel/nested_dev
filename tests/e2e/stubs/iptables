@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/iptables — records the ruleset, enforces nothing.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'iptables %s\n' "$*" >> "$STATE/journal"
+exit 0

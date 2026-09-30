@@ -1,0 +1,3 @@
+#!/bin/bash
+# tests/e2e/stubs/nproc — 8 cores.
+echo 8

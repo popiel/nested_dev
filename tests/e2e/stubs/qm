@@ -1,0 +1,34 @@
+#!/bin/bash
+# tests/e2e/stubs/qm — the virtualization layer, as the provisioner sees it.
+#
+# Records every invocation to $E2E_STATE/qm-journal and emulates just enough
+# lifecycle for frag/30's flow: a VM does not exist until `qm create` marks it
+# created, `qm status` reports stopped afterwards, `qm config` has nothing to
+# say, and guest-agent calls succeed immediately so the provisioning gate for
+# VM 102 passes on its first poll instead of burning the 600s timeout.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+JOURNAL="$STATE/qm-journal"
+CREATED="$STATE/qm-created"
+mkdir -p "$STATE"
+touch "$CREATED"
+printf 'qm %s\n' "$*" >> "$JOURNAL"
+verb="${1:-}"
+case "$verb" in
+  status)
+    if grep -qx "$2" "$CREATED" 2>/dev/null; then
+      printf 'status: stopped\n'
+      exit 0
+    fi
+    exit 1
+    ;;
+  create)
+    printf '%s\n' "$2" >> "$CREATED"
+    exit 0
+    ;;
+  config)
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac

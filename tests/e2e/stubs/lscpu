@@ -1,0 +1,7 @@
+#!/bin/bash
+# tests/e2e/stubs/lscpu — an Intel host, canned.
+cat <<'EOF'
+Architecture:                         x86_64
+Vendor ID:                            GenuineIntel
+Model name:                           Intel(R) Core(TM) i7-7700K CPU @ 4.20GHz
+EOF

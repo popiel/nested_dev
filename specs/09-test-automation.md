@@ -248,18 +248,22 @@ acceptance tables in each spec.
 | 00 | `invariants.bats` | Sizing baselines, guest egress policy and its firewall rules, dev range containment |
 | 01 | `build-iso.bats` | Disk validation, rendering, escaping, manifest, assistant failure detection, MSYS path handling |
 | 01 | `invariants.bats` | Answer-file shape, bootstrap placeholders |
-| 01 | `first-boot-user.bats` | Account creation ordering and idempotency, UID/GID shadowing, `root` handling |
-| 01 | `frag10-iommu.bats` | Vendor detection, IOMMU flag mapping, audio companions, separability, virtio exclusion |
-| 01 | `frag25-vmctl.bats` | Control account, keypair generation, host trust pin, pin/lease agreement |
+| 01 | `provision.bats` (e2e) | Operator account identity, password hash, `sudo` grant, key installation, no `root` credentialing |
+| 01 | `frag10-iommu.bats` | Vendor detection, IOMMU flag mapping, audio companions, separability over fixture groups including the measured host layout, virtio exclusion |
+| 01 | `gpu-detect.bats` | Partitioning the accepted passthrough set by role, unknown vendors left out, missing set aborts |
+| 01 | `provision.bats` (e2e) | Control account, keypair generation, host trust pin, staged-key destruction |
 | 02/03/04 | `configs.bats` | Seed YAML validity |
 | 02/03/04 | `invariants.bats` | Placeholder inventory, desktop private-key exclusivity |
 | 05 | `personalization.bats` | Variable definition, derived home, single definition of the shared resolver |
 | 05 | `resolve-ref.bats` | Branch, tag, SHA pass-through, unresolvable, absent git, `set -e` safety |
-| 05 | `first-boot-user.bats` | Two-hash split, no hash in the bootstrap, locked `root` in every seed |
-| 06 | `frag25-vmctl.bats` | Placeholder survival detection, key injection, staged-key shredding and ordering |
+| 05 | `guest-seeds.bats` | Locked `root` in every seed, template placeholder vocabulary |
+| 05 | `provision.bats` (e2e) | Hash reaches the account and every seed; admin and guest keys injected |
+| 06 | `provision.bats` (e2e) | Placeholder survival detection, key injection, staged-key shredding, re-provisioning changes nothing |
+| 06 | `guest-seeds.bats` | Template placeholder vocabulary |
 | 06 | `invariants.bats` | Placeholder inventory completeness |
-| 07 | `frag25-vmctl.bats` | Forced-command restriction, real shell, control-program installation, dev range, hostname settling, credential-path agreement, error text |
-| 08 | `first-boot-user.bats` | Credential paths used by the build and by the operator-facing check |
+| 07 | `control-tools.bats` | Forced-command restriction, real shell, dev range, hostname settling, error text |
+| 07 | `provision.bats` (e2e) | Control-program installation, forced-command account as created |
+| 08 | `nested-keys-status.bats` | Operator credential check looks in `keys/`, executed against fixture credentials |
 | 09 | all | Source guards, lint coverage of extension-less scripts and of the harness itself, dead-code detection |
 | 09 | `timing.bats` | Timing record parsing, report totals, regression thresholds, suite-list set equality and label uniqueness, fast-mode coverage, result-block accounting, skip handling, unrunnable and unparseable suites, wrapper and setup-script contracts, `AGENTS.md` accuracy |
 

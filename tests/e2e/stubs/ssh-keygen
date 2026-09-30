@@ -1,0 +1,19 @@
+#!/bin/bash
+# tests/e2e/stubs/ssh-keygen — deterministic keys. The fragments only need key
+# files to exist with stable content (they are catted, base64'd and chmodded);
+# real key generation would be slower and non-deterministic.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+f=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-f" ]; then f="$a"; prev=""; continue; fi
+  case "$a" in
+    -f) prev="-f" ;;
+  esac
+done
+[ -n "$f" ] || { echo "e2e ssh-keygen stub: no -f path in: $*" >&2; exit 1; }
+base="$(basename "$f")"
+printf 'E2E-PRIVATE-KEY-FOR-%s\n' "$base" > "$f"
+printf 'ssh-ed25519 E2EPUB-%s e2e@test\n' "$base" > "$f.pub"
+printf 'ssh-keygen %s\n' "$*" >> "$STATE/journal"
+exit 0

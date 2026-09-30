@@ -1,0 +1,5 @@
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=5
+GRUB_DISTRIBUTOR="Proxmox Virtual Environment"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on iommu=pt vfio-pci.ids=8086:5912,10de:1b80,10de:1b80,10de:10f0 disable_vga=1"
+GRUB_CMDLINE_LINUX=""

@@ -1,0 +1,10 @@
+#!/bin/bash
+# tests/e2e/stubs/ip — a host with a physical NIC and an existing vmbr0.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+if [ "${1:-}" = "-o" ]; then
+  printf '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\n'
+  printf '2: eno1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000\n'
+  exit 0
+fi
+printf 'ip %s\n' "$*" >> "$STATE/journal"
+exit 0

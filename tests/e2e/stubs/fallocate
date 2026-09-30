@@ -1,0 +1,8 @@
+#!/bin/bash
+# tests/e2e/stubs/fallocate — pretends to allocate by touching the target,
+# which is always the last argument.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'fallocate %s\n' "$*" >> "$STATE/journal"
+for last in "$@"; do :; done
+: > "$last"
+exit 0

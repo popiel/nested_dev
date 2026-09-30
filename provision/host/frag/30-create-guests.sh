@@ -9,61 +9,43 @@
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+ROOT="${PVE_ROOT:-}"
+# /proc is a kernel interface, not a provisioner output. Overridable for the
+# end-to-end test, which supplies a fixture meminfo.
+PROC="${PVE_PROC:-/proc}"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
 die() { log "FATAL: $*"; exit 1; }
 
 # --- Pure functions (testable via source-guard) ---
 
-detect_gpu_pci() {
-    local vendor_filter="$1"
-    local ids=()
-    while IFS= read -r line; do
-        local addr
-        addr=$(echo "$line" | awk '{print $1}')
-        local vd
-        vd=$(lspci -n -s "$addr" | awk '{print $3}')
-        local v
-        v=$(echo "$vd" | cut -d: -f1)
-        if [ "$v" = "$vendor_filter" ]; then
-            ids+=("0000:${addr}")
-            # Find audio companion via BDF prefix (same bus, next function)
-            local bus_prefix
-            bus_prefix="${addr%.*}"
-            local audio_addr
-            audio_addr=$(lspci -s "${bus_prefix}." | grep -i audio | awk '{print $1}' || true)
-            if [ -n "$audio_addr" ]; then
-                local audio_group="/sys/bus/pci/devices/0000:${audio_addr}/iommu_group/devices"
-                local gpu_group="/sys/bus/pci/devices/0000:${addr}/iommu_group/devices"
-                if [ -d "$audio_group" ] && [ -d "$gpu_group" ]; then
-                    # Count directory entries, not regular files: sysfs exposes
-                    # group members as symlinks to device directories, so
-                    # `find -type f` yields empty output for BOTH groups, the diff
-                    # below compares "" with "", reports them identical, and the
-                    # audio companion is never added to the passthrough set.
-                    if ! diff -q <(find "$audio_group" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) \
-                                 <(find "$gpu_group" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) >/dev/null 2>&1; then
-                        # Separate IOMMU group — include audio in passthrough
-                        local audio_in_set=false
-                        for existing_id in "${ids[@]}"; do
-                            local existing_vd
-                            existing_vd="${existing_id#0000:}"
-                            local audio_vd
-                            audio_vd=$(lspci -n -s "$audio_addr" | awk '{print $3}')
-                            if [ "$existing_vd" = "$audio_vd" ]; then
-                                audio_in_set=true
-                                break
-                            fi
-                        done
-                        if [ "$audio_in_set" = false ]; then
-                            ids+=("0000:${audio_addr}")
-                            log "Added audio companion $audio_addr for GPU $addr"
-                        fi
-                    fi
-                fi
-            fi
-        fi
-    done < <(lspci | grep -iE 'vga|3d|display' | awk '{print $1, $0}' | cut -d' ' -f1,3-)
-    IFS=,; echo "${ids[*]}"
+partition_passthrough_devices() {
+    # Splits frag/10's accepted device set by role: integrated GPUs go to the
+    # desktop, discrete NVIDIA GPUs go to the LLM guest. Sets IGPU_IDS and
+    # DGPU_IDS as comma-joined full BDFs. A device of unrecognized vendor is
+    # left to the host with a warning rather than attached to a guest whose
+    # configuration was built around a different device class.
+    local list_path="$1"
+    [ -s "$list_path" ] \
+        || die "passthrough device list is missing or empty at ${list_path} (frag/10 did not run or accepted nothing)"
+
+    IGPU_IDS=""
+    DGPU_IDS=""
+    local full_bdf short_bdf vd vendor
+    while IFS= read -r full_bdf; do
+        [ -n "$full_bdf" ] || continue
+        short_bdf="${full_bdf#0000:}"
+        vd=$(lspci -n -s "$short_bdf" | awk '{print $3}')
+        vendor="${vd%%:*}"
+        case "$vendor" in
+            8086|1002)
+                IGPU_IDS="${IGPU_IDS:+${IGPU_IDS},}${full_bdf}" ;;
+            10de)
+                DGPU_IDS="${DGPU_IDS:+${DGPU_IDS},}${full_bdf}" ;;
+            *)
+                log "WARNING: accepted device ${full_bdf} has unrecognized vendor '${vendor}'; leaving it to the host" ;;
+        esac
+    done < "$list_path"
 }
 
 download_iso() {
@@ -73,7 +55,7 @@ download_iso() {
         return
     fi
     log "Downloading $(basename "$dest")..."
-    wget -q --show-progress -O "$dest" "$url" 2>&1 | tee -a /var/log/pve-firstboot.log
+    wget -q --show-progress -O "$dest" "$url" 2>&1 | tee -a "${ROOT}/var/log/pve-firstboot.log"
     log "Downloaded: $(sha256sum "$dest" | awk '{print $1}')"
 }
 
@@ -126,7 +108,7 @@ main() {
     # resolve_ref_to_sha comes from here too: it is the single definition, and
     # it never fails (empty string when git or the network is unavailable),
     # which matters under this script's `set -euo pipefail`.
-    . /root/provision/personalization.sh 2>/dev/null || true
+    . "${ROOT}/root/provision/personalization.sh" 2>/dev/null || true
     GITHUB_REPO="${PERSONALIZATION_REPO:-popiel/nested_dev}"
     GITHUB_REF="${PERSONALIZATION_REF:-main}"
     command -v resolve_ref_to_sha >/dev/null 2>&1 \
@@ -144,7 +126,7 @@ main() {
     log "=== Guest VM creation ==="
 
     # --- Source Ubuntu release config ---
-    . /root/provision/ubuntu-release.conf 2>/dev/null || {
+    . "${ROOT}/root/provision/ubuntu-release.conf" 2>/dev/null || {
         UBUNTU_VERSION="26.04"
         UBUNTU_CODENAME="noble"
     }
@@ -153,10 +135,10 @@ main() {
     UBUNTU_SERVER_ISO="ubuntu-${UBUNTU_VERSION}-live-server-amd64.iso"
 
     # --- Detect host resources ---
-    TOTAL_MEM_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+    TOTAL_MEM_KB=$(awk '/MemTotal/{print $2}' "${PROC}/meminfo")
     TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
     CPU_CORES=$(nproc)
-    FREE_DISK_GB=$(df -BG --output=avail /var/lib/vz | tail -1 | tr -d ' G')
+    FREE_DISK_GB=$(df -BG --output=avail "${ROOT}/var/lib/vz" | tail -1 | tr -d ' G')
 
     log "Host: ${TOTAL_MEM_GB} GB RAM, ${CPU_CORES} cores, ${FREE_DISK_GB} GB free"
 
@@ -172,12 +154,20 @@ main() {
     # long download followed by an opaque qm error.
     preflight_guest_prerequisites "$GUEST_BRIDGE" "$GUEST_STORAGE"
 
-    # --- Detect GPUs for passthrough ---
-    IGPU_IDS=$(detect_gpu_pci "8086")
-    if [ -z "$IGPU_IDS" ]; then
-        IGPU_IDS=$(detect_gpu_pci "1002")
-    fi
-    DGPU_IDS=$(detect_gpu_pci "10de")
+    # --- Attach exactly the devices frag/10 accepted ---
+    #
+    # The passthrough decision lives in frag/10, which writes the accepted set
+    # to passthrough-devices. This fragment reads that set and partitions it by
+    # role — integrated GPU to the desktop, discrete GPUs to the LLM guest — but
+    # it never adds a device of its own. A device frag/10 judged unsafe is left
+    # to the host even when it is physically present: attaching it anyway would
+    # hand the guest hardware the kernel never bound to vfio-pci.
+    #
+    # A missing or empty set is fatal rather than an empty attachment. An empty
+    # `--hostpci` is a silent downgrade: the guest is created, boots, and has no
+    # GPU, and nothing in the log explains it.
+    PASSTHROUGH_LIST="${ROOT}/var/lib/pve-firstboot/passthrough-devices"
+    partition_passthrough_devices "$PASSTHROUGH_LIST"
 
     log "iGPU passthrough: ${IGPU_IDS:-none}"
     log "dGPU passthrough: ${DGPU_IDS:-none}"
@@ -201,7 +191,7 @@ main() {
     # This is the LOGIN password for the personalization account in every
     # guest. It is not the host root password, which never leaves the host and
     # is not persisted anywhere the provisioner can read.
-    PERSONALIZATION_HASH_FILE="/root/.personalization-password-hash"
+    PERSONALIZATION_HASH_FILE="${ROOT}/root/.personalization-password-hash"
     [ -f "$PERSONALIZATION_HASH_FILE" ] \
         || die "Personalization password hash not found: ${PERSONALIZATION_HASH_FILE}"
     PERSONALIZATION_HASH="$(cat "$PERSONALIZATION_HASH_FILE")"
@@ -211,38 +201,38 @@ main() {
     # Preserved into the provision tree by first-boot.sh. Injected as an
     # authorized key on the host (already, via the PVE answer root-ssh-keys)
     # and on every guest, so the operator key works everywhere.
-    ADMIN_PUBKEY_FILE="/root/provision/keys/host_os_ed25519.pub"
+    ADMIN_PUBKEY_FILE="${ROOT}/root/provision/keys/host_os_ed25519.pub"
     [ -f "$ADMIN_PUBKEY_FILE" ] || die "Admin public key not found: ${ADMIN_PUBKEY_FILE}"
     ADMIN_PUBKEY="$(cat "$ADMIN_PUBKEY_FILE")"
     log "Admin public key loaded for guest injection"
 
     # --- Read guest identity public key (desktop's install-time identity) ---
-    GUEST_ID_PUBKEY_FILE="/root/.nested-dev/guest-id/guest_id_ed25519.pub"
+    GUEST_ID_PUBKEY_FILE="${ROOT}/root/.nested-dev/guest-id/guest_id_ed25519.pub"
     [ -f "$GUEST_ID_PUBKEY_FILE" ] || die "Guest identity public key not found: ${GUEST_ID_PUBKEY_FILE}"
     GUEST_ID_PUBKEY="$(cat "$GUEST_ID_PUBKEY_FILE")"
     log "Guest identity public key loaded for guest injection"
 
     # --- Read vmctl private key (base64 for desktop injection) ---
-    VMCTL_KEY_FILE="/root/.nested-dev/vmctl-priv-staged"
+    VMCTL_KEY_FILE="${ROOT}/root/.nested-dev/vmctl-priv-staged"
     [ -f "$VMCTL_KEY_FILE" ] || die "vmctl private key not staged at ${VMCTL_KEY_FILE} (frag/25 did not run?)"
     VMCTL_KEY_B64=$(base64 -w0 "$VMCTL_KEY_FILE" 2>/dev/null || base64 "$VMCTL_KEY_FILE" 2>/dev/null)
     log "vmctl private key loaded for desktop seed injection"
 
     # --- Read guest identity private key (base64 for desktop injection) ---
-    GUEST_ID_KEY_FILE="/root/.nested-dev/guest-id-priv-staged"
+    GUEST_ID_KEY_FILE="${ROOT}/root/.nested-dev/guest-id-priv-staged"
     [ -f "$GUEST_ID_KEY_FILE" ] || die "Guest identity private key not staged at ${GUEST_ID_KEY_FILE} (frag/25 did not run?)"
     GUEST_ID_KEY_B64=$(base64 -w0 "$GUEST_ID_KEY_FILE" 2>/dev/null || base64 "$GUEST_ID_KEY_FILE" 2>/dev/null)
     log "Guest identity private key loaded for desktop seed injection"
 
     # --- Create NoCloud seed directory ---
-    SEED_DIR="/var/lib/vz/template/cidata"
+    SEED_DIR="${ROOT}/var/lib/vz/template/cidata"
     mkdir -p "$SEED_DIR"
 
     # --- Install genisoimage if needed ---
     if ! command -v genisoimage >/dev/null 2>&1; then
         log "Installing genisoimage..."
         apt-get update -qq 2>/dev/null
-        apt-get install -y genisoimage 2>&1 | tail -1 >> /var/log/pve-firstboot.log
+        apt-get install -y genisoimage 2>&1 | tail -1 >> "${ROOT}/var/log/pve-firstboot.log"
         log "genisoimage installed"
     fi
 
@@ -259,7 +249,7 @@ main() {
         for required in PERSONALIZATION_USERNAME PERSONALIZATION_FULLNAME \
                        PERSONALIZATION_UID PERSONALIZATION_GID; do
             if [ -z "${!required:-}" ]; then
-                die "${required} not set — check /root/provision/personalization.sh"
+                die "${required} not set — check ${ROOT}/root/provision/personalization.sh"
             fi
         done
         sed -e "s|CHANGE_ME_HASHED|${PERSONALIZATION_HASH}|g" \
@@ -302,7 +292,7 @@ main() {
     done
 
     # --- Download Ubuntu ISOs if not present ---
-    ISO_DIR="/var/lib/vz/template/iso"
+    ISO_DIR="${ROOT}/var/lib/vz/template/iso"
     mkdir -p "$ISO_DIR"
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_DESKTOP_ISO}" "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}"
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_SERVER_ISO}" "${ISO_DIR}/${UBUNTU_SERVER_ISO}"

@@ -19,11 +19,11 @@ load '../lib/helpers'
 setup() {
     setup_mock_path
     source "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh"
-    # The fragment's log() appends to the hardcoded /var/log/pve-firstboot.log,
-    # which does not exist here — and under `set -euo pipefail` a failed
-    # printf makes every call to it abort, which would look like the preflight
-    # itself failing. Capture the messages instead so the exit status and the
-    # diagnostics are both observable.
+    # The fragment's log() appends under ${ROOT}/var/log (empty ROOT here, so the
+    # real /var/log path, which does not exist in this environment) — and under
+    # `set -euo pipefail` a failed printf makes every call to it abort, which
+    # would look like the preflight itself failing. Capture the messages instead
+    # so the exit status and the diagnostics are both observable.
     log() { printf '%s\n' "$*"; }
 }
 
@@ -83,80 +83,4 @@ host_without_storage() {
     run preflight_guest_prerequisites "vmbr0" "local-lvm"
     [[ "$output" == *"vmbr0"* ]]
     [[ "$output" == *"local-lvm"* ]]
-}
-
-@test "the preflight does not guess which NIC to bridge" {
-    # Taking the first non-loopback interface automatically is the same class of
-    # mistake as the disk probe R-01.4.1 prohibits: it can pick the host's only
-    # network path and take the host off the network. A missing bridge is
-    # reported and left to the operator.
-    local src
-    src=$(cat "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh")
-    assert_not_contains "$src" 'ip route get 1.1.1.1'
-    assert_not_contains "$src" "ip link show | awk -F': ' 'NR==3"
-    assert_not_contains "$src" 'nmcli con add type bridge'
-}
-
-@test "the guests use the same bridge and storage the preflight checked" {
-    # Otherwise the preflight can pass against a bridge no guest uses, which is
-    # the exact silent-failure it was added to prevent: the check would be
-    # correct about `vmbr0` while every guest still asked for something else.
-    local frag="${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh"
-
-    # The bridge and storage appear exactly once each, as declarations...
-    run grep -c 'GUEST_BRIDGE="vmbr0"' "$frag"
-    [ "$output" -eq 1 ]
-    run grep -c 'GUEST_STORAGE="local-lvm"' "$frag"
-    [ "$output" -eq 1 ]
-
-    # ...and no guest references a literal name directly.
-    run grep -n 'bridge=vmbr0' "$frag"
-    [ -z "$output" ] || {
-        echo "a guest still hardcodes the bridge:" >&2
-        echo "$output" >&2
-        return 1
-    }
-    run grep -n -- '--scsi[01] local-lvm:' "$frag"
-    [ -z "$output" ] || {
-        echo "a guest still hardcodes the storage:" >&2
-        echo "$output" >&2
-        return 1
-    }
-
-    # All three guests bridge through the one declaration.
-    run grep -c 'bridge=${GUEST_BRIDGE}' "$frag"
-    [ "$output" -eq 3 ]
-}
-
-@test "the preflight runs before the ISO downloads" {
-    # The downloads take minutes. Checking afterwards means the operator waits
-    # out both of them before being told the host cannot create a guest.
-    local src
-    src=$(cat "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh")
-    local pf_line dl_line
-    pf_line=$(grep -n '^[^#]*preflight_guest_prerequisites "\$GUEST_BRIDGE"' <<< "$src" | cut -d: -f1)
-    dl_line=$(grep -n '^[^#]*download_iso "\${UBUNTU_BASE_URL}' <<< "$src" | head -1 | cut -d: -f1)
-    [ -n "$pf_line" ] || { echo "main() never calls the preflight" >&2; return 1; }
-    [ -n "$dl_line" ] || { echo "the ISO download line moved" >&2; return 1; }
-    [ "$pf_line" -lt "$dl_line" ] || {
-        echo "preflight at $pf_line runs after the download at $dl_line" >&2
-        return 1
-    }
-}
-
-@test "detect_gpu_pci compares IOMMU groups by entry, not by regular file" {
-    # Same defect as in frag/10: sysfs publishes group members as symlinks to
-    # device directories, so `find -type f` returns nothing for both the GPU and
-    # the audio group. diff then compares "" with "", calls the two groups
-    # identical, and the audio companion is never added to the passthrough set.
-    local src
-    src=$(cat "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh")
-    run grep -c 'find "\$audio_group" -maxdepth 1 -type f' \
-        "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh"
-    [ "$output" -eq 0 ] || {
-        echo "detect_gpu_pci still matches regular files only" >&2
-        return 1
-    }
-    assert_contains "$src" 'find "$audio_group" -mindepth 1 -maxdepth 1 -printf'
-    assert_contains "$src" 'find "$gpu_group" -mindepth 1 -maxdepth 1 -printf'
 }

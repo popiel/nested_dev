@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/sysctl — records, changes no kernel parameters.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'sysctl %s\n' "$*" >> "$STATE/journal"
+exit 0

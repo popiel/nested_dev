@@ -1,0 +1,4 @@
+# PVE repository (fixture): a host without a subscription, as the installer
+# leaves it. frag/05 must disable these and add the no-subscription suite.
+deb http://enterprise.proxmox.com/debian/pve trixie pve-enterprise
+deb http://enterprise.proxmox.com/debian/ceph-squid trixie enterprise

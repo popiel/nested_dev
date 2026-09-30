@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/update-initramfs — records, rebuilds no initramfs.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'update-initramfs %s\n' "$*" >> "$STATE/journal"
+exit 0

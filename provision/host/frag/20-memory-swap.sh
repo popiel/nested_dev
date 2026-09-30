@@ -3,7 +3,9 @@
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
-log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/pve-firstboot.log; }
+ROOT="${PVE_ROOT:-}"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
 
 log "=== Memory/swap setup ==="
 
@@ -15,7 +17,7 @@ if ! dpkg -l zram-tools 2>/dev/null | grep -q '^ii'; then
 fi
 
 # Configure zram: zstd, 50% of RAM, high priority
-cat > /etc/default/zramswap <<'EOF'
+cat > "${ROOT}/etc/default/zramswap" <<'EOF'
 ALGO=zstd
 PERCENT=50
 PRIORITY=100
@@ -25,7 +27,7 @@ systemctl enable --now zramswap
 log "ZRAM enabled (zstd, 50%)"
 
 # --- Disk swap (4 GB file) ---
-SWAPFILE="/swapfile"
+SWAPFILE="${ROOT}/swapfile"
 if [ ! -f "$SWAPFILE" ]; then
     fallocate -l 4G "$SWAPFILE"
     chmod 600 "$SWAPFILE"
@@ -33,8 +35,8 @@ if [ ! -f "$SWAPFILE" ]; then
     log "Swap file created (4 GB)"
 fi
 
-if ! grep -q "^/swapfile" /etc/fstab; then
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+if ! grep -q "^${ROOT}/swapfile" "${ROOT}/etc/fstab"; then
+    echo "${ROOT}/swapfile none swap sw 0 0" >> "${ROOT}/etc/fstab"
 fi
 
 if ! swapon --show | grep -q "$SWAPFILE"; then

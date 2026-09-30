@@ -465,8 +465,8 @@ EOF
     # entries as "label:tests/unit/name.bats", so requiring a quote immediately
     # before the path would not match anything.
     #
-    # BATS_TEST_DIRNAME is tests/unit, so the static/ and unit/ globs have to
-    # be resolved from tests/, one level up. Globbing from tests/unit matched
+    # BATS_TEST_DIRNAME is tests/unit, so the static/, unit/ and e2e/ globs have
+    # to be resolved from tests/, one level up. Globbing from tests/unit matched
     # nothing, ls failed on stderr, and this test passed with an empty input
     # list — it was checking nothing at all.
     local file missing="" seen=0
@@ -474,7 +474,7 @@ EOF
         [ -n "$file" ] || continue
         seen=$((seen + 1))
         grep -qF "$file" "${BATS_TEST_DIRNAME}/../run.sh" || missing="${missing} $file"
-    done < <(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats unit/*.bats)
+    done < <(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats unit/*.bats e2e/*.bats)
     [ "$seen" -gt 0 ] || {
         echo "found no test files to check; the glob is wrong" >&2
         return 1
@@ -491,9 +491,9 @@ EOF
     # files' timing records under one name in the report.
     local run_sh="${BATS_TEST_DIRNAME}/../run.sh" listed actual
     listed="$(sed -n '/^ALL_SUITES=(/,/^)/p' "$run_sh" \
-        | grep -oE '[a-z0-9-]+:tests/(static|unit)/[a-z0-9-]+\.bats' \
+        | grep -oE '[a-z0-9-]+:tests/(static|unit|e2e)/[a-z0-9-]+\.bats' \
         | sed 's/^[^:]*://' | sort)"
-    actual="$(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats unit/*.bats \
+    actual="$(cd "${BATS_TEST_DIRNAME}/.." && ls static/*.bats unit/*.bats e2e/*.bats \
         | sed 's|^|tests/|' | sort)"
     [ -n "$actual" ] || {
         echo "found no test files to check; the glob is wrong" >&2

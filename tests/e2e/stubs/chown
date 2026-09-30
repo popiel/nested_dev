@@ -1,0 +1,6 @@
+#!/bin/bash
+# tests/e2e/stubs/chown — ownership cannot be set for fixture accounts that do
+# not exist on this machine, so this records and succeeds.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'chown %s\n' "$*" >> "$STATE/journal"
+exit 0

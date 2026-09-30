@@ -73,22 +73,26 @@ ALL_SUITES=(
     "lint:tests/static/lint.bats"
     "configs:tests/static/configs.bats"
     "invariants:tests/static/invariants.bats"
+    "guest-seeds:tests/static/guest-seeds.bats"
     "personalization:tests/unit/personalization.bats"
     "resolve-ref:tests/unit/resolve-ref.bats"
     "gpu-detect:tests/unit/gpu-detect.bats"
     "frag10-iommu:tests/unit/frag10-iommu.bats"
     "frag05-apt-repos:tests/unit/frag05-apt-repos.bats"
+    "frag06-sudo:tests/unit/frag06-sudo.bats"
     "provision-host-lock:tests/unit/provision-host-lock.bats"
-    "frag25-vmctl:tests/unit/frag25-vmctl.bats"
+    "control-tools:tests/unit/control-tools.bats"
     "frag30-guest-create:tests/unit/frag30-guest-create.bats"
-    "first-boot-user:tests/unit/first-boot-user.bats"
+    "nested-keys-status:tests/unit/nested-keys-status.bats"
     "build-iso:tests/unit/build-iso.bats"
+    "provision-e2e:tests/e2e/provision.bats"
     "timing:tests/unit/timing.bats"
 )
 STATIC_SUITES=(
     "lint:tests/static/lint.bats"
     "configs:tests/static/configs.bats"
     "invariants:tests/static/invariants.bats"
+    "guest-seeds:tests/static/guest-seeds.bats"
 )
 
 SUITES=()

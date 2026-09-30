@@ -10,6 +10,11 @@
 # died on its first command, provision-host.sh aborted the run on the first
 # failing fragment, and frag/25 and frag/30 never executed. The error named a
 # repository, three fragments away from anything to do with repositories.
+#
+# These are the fragment's pure functions and its main() contract. Whether the
+# repair happens before anything needs apt is not pinned here — it emerges in
+# tests/e2e/provision.bats, where the apt stub answers 401 for as long as the
+# enterprise list is enabled, so any premature apt call fails the run.
 
 load '../lib/helpers'
 
@@ -154,101 +159,4 @@ EOF
     run main
     [ "$status" -ne 0 ]
     [[ "$output" == *"refusing to guess"* ]]
-}
-
-@test "the enterprise entries are commented out, not deleted" {
-    # The original is the operator's to restore if they ever get a subscription,
-    # and a deleted file is indistinguishable from one that was never there.
-    write_enterprise_list
-    run sed -i 's/^\([[:space:]]*deb[[:space:]]\)/# \1/' "$ENTERPRISE_LIST"
-    run grep -c '^# deb ' "$ENTERPRISE_LIST"
-    [ "$output" -eq 2 ]
-    run grep -c '^deb ' "$ENTERPRISE_LIST"
-    [ "$output" -eq 0 ]
-}
-
-@test "the fragment runs before any fragment that calls apt" {
-    # Every other fragment inherits whatever this one leaves behind, and the
-    # first apt caller is the one that dies, so ordering is the whole fix.
-    local frag_dir="${PROJECT_ROOT}/provision/host/frag"
-    local first_apt
-    first_apt=$(grep -l 'apt-get' "$frag_dir"/*.sh | sort | head -1)
-    [ -n "$first_apt" ] || { echo "no fragment calls apt" >&2; return 1; }
-    [[ "$(basename "$first_apt")" == "05-apt-repos.sh" ]] || {
-        echo "first fragment calling apt is $(basename "$first_apt"), not 05-apt-repos.sh" >&2
-        return 1
-    }
-}
-
-@test "fragments are executed in a deterministic order that reaches 05 first" {
-    # provision-host.sh globs frag/*.sh, so the filename order is the run order.
-    local order
-    order=$(cd "${PROJECT_ROOT}/provision/host/frag" && printf '%s\n' *.sh)
-    [ "${order%%$'\n'*}" = "05-apt-repos.sh" ]
-}
-
-@test "the first-boot bootstrap makes no package-manager calls at all" {
-    # The structural invariant, replacing a pair of duplicated function bodies
-    # and a test that compared them.
-    #
-    # first-boot.sh used to carry its own copy of this repository repair so that
-    # it could install sudo before fetching the tree. That was forty lines of the
-    # same logic in two files, and a test asserting they matched — which is a
-    # test that fails only after someone has already shipped the drift, and
-    # whose failure mode is a confusing 401 rather than a clear one.
-    #
-    # Asserting instead that first-boot.sh cannot call apt at all means the
-    # duplication cannot come back: the only way to add a package-manager call
-    # there is to also delete this test, which is a visible act rather than an
-    # invisible one.
-    local firstboot="${PROJECT_ROOT}/provision/host/first-boot.sh"
-
-    run grep -nE '^[[:space:]]*(apt-get|apt|dpkg)[[:space:]]' "$firstboot"
-    [ -z "$output" ] || {
-        echo "first-boot.sh calls the package manager:" >&2
-        echo "$output" >&2
-        echo >&2
-        echo "Package management belongs in provision/host/frag/, which is fetched" >&2
-        echo "from the pinned REF and can therefore be corrected without rebuilding" >&2
-        echo "and re-burning the ISO." >&2
-        return 1
-    }
-
-    # The repository repair specifically must not have crept back in.
-    run grep -c 'pve-enterprise.list' "$firstboot"
-    [ "$output" -eq 0 ] || {
-        echo "first-boot.sh references the enterprise repository again" >&2
-        return 1
-    }
-}
-
-@test "the sudo package is installed by a fragment, after the repository repair" {
-    # Ordering is the reason this is not in the bootstrap: on a host without a
-    # subscription, installing sudo before frag/05 repairs apt fails on the 401
-    # and reports nothing about sudo.
-    local frag_dir="${PROJECT_ROOT}/provision/host/frag"
-    local sudo_frag="${frag_dir}/06-sudo.sh"
-    [ -f "$sudo_frag" ] || { echo "frag/06-sudo.sh is missing" >&2; return 1; }
-
-    # 05 must sort before 06, which the run order depends on.
-    [[ "05-apt-repos.sh" < "06-sudo.sh" ]]
-
-    assert_file_contains "$sudo_frag" 'apt-get install -y sudo'
-    # And it must not re-run update; frag/05 just did. Anchored to the start of
-    # a line, so the comment explaining *why* it does not is not the match.
-    run grep -cE '^[[:space:]]*apt-get update' "$sudo_frag"
-    [ "$output" -eq 0 ] || {
-        echo "frag/06-sudo.sh re-runs apt-get update immediately after frag/05 did" >&2
-        return 1
-    }
-}
-
-@test "first-boot creates the sudo group without the package manager" {
-    # Group membership has to be correct before the fetch, so that the account is
-    # administrative the moment the tree arrives. `groupadd` is in the
-    # always-present shadow-utils, so this does not reintroduce a dependency on
-    # apt.
-    local firstboot="${PROJECT_ROOT}/provision/host/first-boot.sh"
-    assert_contains "$(cat "$firstboot")" \
-        'getent group sudo >/dev/null 2>&1 || groupadd -r sudo'
 }

@@ -4,7 +4,13 @@
 # REF: __GITHUB_REF__ (baked at build time)
 set -euo pipefail
 
-LOG="/var/log/pve-firstboot.log"
+# Filesystem root for everything this provisioner writes. Empty on a real host,
+# so all paths below are the production paths. The end-to-end test points it at
+# a scratch tree and asserts the resulting state, which is what makes the whole
+# run — not any one fragment's source text — the thing under test.
+ROOT="${PVE_ROOT:-}"
+
+LOG="${ROOT}/var/log/pve-firstboot.log"
 FRAG_DIR="$(dirname "$0")/frag"
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
@@ -28,8 +34,8 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
 # The second arrival *waits* rather than exiting. Exiting 0 would let
 # first-boot.sh declare the bootstrap complete while provisioning was still in
 # progress; exiting non-zero would fail the run that did nothing wrong.
-LOCK_FILE="/run/lock/pve-firstboot.lock"
-COMPLETE_MARKER="/var/lib/pve-firstboot/complete"
+LOCK_FILE="${ROOT}/run/lock/pve-firstboot.lock"
+COMPLETE_MARKER="${ROOT}/var/lib/pve-firstboot/complete"
 
 mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$COMPLETE_MARKER")"
 

@@ -74,29 +74,26 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 
 * **R-01.3.1** The first-boot bootstrap creates the operator account defined by
   Spec 05 §R-05.3, and grants it `sudo`.
-* **R-01.3.1a** **The `sudo` package is installed by the provision tree, not by
-  the bootstrap.** Granting administrative access needs both the `sudo` group
-  and the binary, and a PVE installation that omits the package provides
-  neither. The bootstrap creates the *group* with `groupadd` — which needs no
-  package manager — and `frag/06-sudo.sh` installs the package once the tree has
-  arrived.
-  This is ordering, not convenience: on a host without a subscription the
-  enterprise repository answers 401, so an `apt-get install sudo` attempted
-  before `frag/05-apt-repos.sh` repairs the repository fails on the repository
-  and reports nothing about sudo. The bootstrap runs before the tree is fetched,
-  so it cannot reach the repair at all.
-* **R-01.3.1b** **The bootstrap makes no package-manager calls.** Every
-  `apt`/`apt-get`/`dpkg` invocation lives in `provision/host/frag/`. Beyond the
-  ordering above, this keeps a fix that does not need the ISO reachable by
-  pushing a commit to the pinned REF, instead of rebuilding and re-burning the
-  installer media for a host that is already installed. A duplicated repair in
-  two files is specifically what this forbids.
+* **R-01.3.1a** **After provisioning, the operator can administer the host.**
+  That means the account exists, belongs to the `sudo` group, logs in with the
+  rendered SSH key, and the `sudo` binary is installed. On a host without a
+  subscription the enterprise repository answers 401, so the package cannot be
+  installed before the repository is repaired — and the repair lives in the
+  provision tree, which the bootstrap cannot reach before fetching it. The
+  bootstrap therefore creates the *group* (which needs no package manager) and
+  the tree installs the *package*.
+* **R-01.3.1b** **Provisioning completes on a host whose enterprise repositories
+  answer 401.** No package operation may run against the enterprise repository
+  before it is disabled; the first one to do so aborts the run, which is how a
+  repository problem previously presented as a memory/swap failure with no
+  guests. Keeping every package operation inside the fetched tree (rather than
+  in the ISO-embedded bootstrap) is what makes a repository fix deployable by
+  pushing a commit instead of rebuilding and re-burning installer media.
 * **R-01.3.1c** **A host whose provisioning failed is still administrable.**
-  This is what makes R-01.3.1a safe. The answer file installs the operator's own
-  SSH key on `root` (`root-ssh-keys`, Spec 05 §R-05.3), so the operator logs in
-  as `root` with the same key they use everywhere else. Root is the *easiest*
-  login on a box where provisioning failed, not an inaccessible last resort —
-  which is why moving the sudo package out of the bootstrap closes no window.
+  The answer file installs the operator's own SSH key on `root`
+  (`root-ssh-keys`, Spec 05 §R-05.3), so the operator logs in as `root` with
+  the same key they use everywhere else. Root is the *easiest* login on a box
+  where provisioning failed, not an inaccessible last resort.
 * **R-01.3.2** The bootstrap **fetches the provision tree last.** Account
   creation, hash persistence and key installation all complete before the
   first network fetch is attempted.
@@ -184,34 +181,25 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   hardware virtualisation exposed. A documented CPU-model override exists for
   that case (Spec 03 covers guest-side verification).
 
-### R-01.7 Provisioning refuses to create guests on an unsafe IOMMU layout
+### R-01.7 Only IOMMU-safe devices reach a guest
 
-* **R-01.7.1** Before any guest is created, the host asserts that every
-  passthrough candidate's IOMMU group contains only that device (or that
-  device and its companion audio function).
-* **R-01.7.2** On failure the run **aborts and names the offending group and
-  its members.** It does not proceed, and it does not proceed quietly.
-* **R-01.7.3** The rule is stated in exactly one place in the source and is
-  evaluated for both the GPU and its audio function, rather than being
-  re-derived per call site. Two derivations of "is this group safe" can
-  disagree, and the disagreeing one is the one that passes a bad device
-  through.
-* **R-01.7.4** An absent group directory counts as zero devices and is
-  therefore not separable, rather than being treated as "no problem found".
-  IOMMU being off in the running kernel is not a passing result, and the run
-  aborts naming the device whose group is missing.
-* **R-01.7.5** **The group membership is counted from the entries the group
-  actually contains.** The kernel publishes a group's members as links to
-  device directories, so a count that selects only regular files reports every
-  group as empty. Such a count satisfies the shape of R-01.7.1 while asserting
-  nothing, and the failure is invisible on hardware: a mock built from plain
-  files matches it exactly, so the assertion passes in the test suite and
-  never fires on a host.
-* **R-01.7.6** The separability rule is **exercised against a group built the
-  way the kernel builds one**, not a convenient stand-in. Where a fixture has
-  to stand in for `sysfs`, it reproduces the structure the rule depends on, so
-  a change to the counting expression cannot pass the tests and fail on the
-  host.
+* **R-01.7.1** A device is passed through only when its IOMMU group contains
+  nothing else, or nothing else besides its companion audio function. Anything
+  else in the group would follow the device into the guest.
+* **R-01.7.2** A device that fails that rule is **left to the host and named in
+  the log with its group and the members that disqualified it** — not attached,
+  and not attached quietly. One unsafe device does not disqualify the others.
+* **R-01.7.3** When no candidate passes, the run **aborts before binding
+  anything to vfio**, naming every candidate and its group. A host where
+  nothing can be passed through is told so rather than configured with an
+  empty passthrough set.
+* **R-01.7.4** Guests attach **exactly the accepted set**: the IOMMU fragment
+  publishes which devices passed, and guest creation reads that set rather
+  than re-detecting hardware. A device the rule rejected is never attached,
+  even when it is physically present, and a missing or empty set aborts guest
+  creation instead of creating guests with silently absent hardware.
+* **R-01.7.5** A device with no IOMMU group at all is not passed through. IOMMU
+  being off in the running kernel is not a passing result.
 
 ### R-01.8 The host overcommits memory safely
 
@@ -286,18 +274,15 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.11.8** The per-VM firewall flag is set on the guests whose egress is
   restricted.
 * **R-01.11.9** **A host that cannot create a guest says so before any download
-  or allocation is attempted.** The bridge named on each guest's network
-  interface and the storage named on each guest's disks are asserted first, and
-  a missing one **aborts with the prerequisite named.** The guest set is created
-  as a single unit, so a host that fails the check produces **no VMs at all** —
-  and an assertion made only by the create call turns one wrong name into
-  exactly that outcome, reported as a bare low-level error after the install
-  media has been downloaded.
-* **R-01.11.10** The check **does not infer which network interface to bridge or
-  which disk to allocate.** An absent bridge is reported for the operator to
-  create, because automatically adopting an interface can take the host's only
-  network path down — the same reason R-01.4.1 forbids target-disk detection.
-  The names the check verifies are the same names the guests are created with.
+  or allocation is attempted, naming the missing prerequisite.** The guest set
+  is created as a single unit, so a host that fails the check produces **no VMs
+  at all** — and an assertion made only by the create call turns one wrong name
+  into exactly that outcome, reported as a bare low-level error after the
+  install media has been downloaded.
+* **R-01.11.10** A missing bridge or storage is **reported for the operator to
+  provide, never improvised.** Automatically adopting a network interface can
+  take the host's only network path down — the same reason R-01.4.1 forbids
+  target-disk detection.
 
 ## 3. Build
 

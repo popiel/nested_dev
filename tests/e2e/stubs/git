@@ -1,0 +1,6 @@
+#!/bin/bash
+# tests/e2e/stubs/git — the network is not available, and resolve_ref_to_sha is
+# specified to degrade to the empty string when it is not. A fast failure here
+# exercises that path; letting the real git attempt an ls-remote would hang the
+# suite on a connection timeout instead.
+exit 1

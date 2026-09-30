@@ -1,0 +1,49 @@
+#!/bin/bash
+# tests/e2e/stubs/lspci — the measured host's PCI layout, canned.
+#
+# The full listing matches the real machine: an Intel HD Graphics 630 alone and
+# two GTX 1080s with their audio functions. frag/10's collection, the audio
+# companion lookup (`lspci -s <bus>.`), and the vendor/device reads
+# (`lspci -n -s <addr>`) all go through here.
+full() {
+  cat <<'EOF'
+00:02.0 VGA compatible controller: Intel Corporation HD Graphics 630 (rev 04)
+01:00.0 VGA compatible controller: NVIDIA Corporation GP104 [GeForce GTX 1080] (rev a1)
+01:00.1 Audio device: NVIDIA Corporation GP104 High Definition Audio Controller (rev a1)
+02:00.0 VGA compatible controller: NVIDIA Corporation GP104 [GeForce GTX 1080] (rev a1)
+02:00.1 Audio device: NVIDIA Corporation GP104 High Definition Audio Controller (rev a1)
+EOF
+}
+vd_for() {
+  case "$1" in
+    00:02.0) printf '8086:5912\n' ;;
+    01:00.0|02:00.0) printf '10de:1b80\n' ;;
+    01:00.1|02:00.1) printf '10de:10f0\n' ;;
+    *) return 1 ;;
+  esac
+}
+numeric=0
+sel=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-s" ]; then sel="$a"; prev=""; continue; fi
+  case "$a" in
+    -n) numeric=1 ;;
+    -s) prev="-s" ;;
+  esac
+done
+if [ -n "$sel" ]; then
+  case "$sel" in
+    *.)
+      full | grep "^${sel}" || true ;;
+    *)
+      if [ "$numeric" = 1 ]; then
+        vd=$(vd_for "$sel") || exit 1
+        printf '%s 0300: %s (rev 04)\n' "$sel" "$vd"
+      else
+        full | grep "^${sel} " || true
+      fi ;;
+  esac
+else
+  full
+fi

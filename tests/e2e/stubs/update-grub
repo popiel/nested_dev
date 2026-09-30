@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/update-grub — records, changes no bootloader.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'update-grub %s\n' "$*" >> "$STATE/journal"
+exit 0

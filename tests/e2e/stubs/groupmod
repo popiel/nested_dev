@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/groupmod — see useradd.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'groupmod %s\n' "$*" >> "$STATE/account-journal"
+exit 0

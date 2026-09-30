@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/netfilter-persistent — records, saves nothing.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'netfilter-persistent %s\n' "$*" >> "$STATE/journal"
+exit 0

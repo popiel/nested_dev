@@ -1,0 +1,4 @@
+#!/bin/bash
+# tests/e2e/stubs/getent — nobody exists on the fixture host. Every account and
+# group the provisioner looks up is absent, so every creation branch runs.
+exit 2

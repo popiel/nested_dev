@@ -1,0 +1,6 @@
+#!/bin/bash
+# tests/e2e/stubs/chpasswd — records args and the password material on stdin,
+# so the test can prove the rendered hash reached the account.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+{ printf 'chpasswd %s\n' "$*"; cat; } >> "$STATE/chpasswd-journal"
+exit 0

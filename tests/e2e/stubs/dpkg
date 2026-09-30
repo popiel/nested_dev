@@ -1,0 +1,4 @@
+#!/bin/bash
+# tests/e2e/stubs/dpkg — nothing is installed on the fixture host, so every
+# "install if missing" branch runs.
+exit 1

@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/usermod — see useradd.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'usermod %s\n' "$*" >> "$STATE/account-journal"
+exit 0
