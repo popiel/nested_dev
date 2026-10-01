@@ -7,7 +7,8 @@
 # (`lspci -n -s <addr>`) all go through here.
 full() {
   cat <<'EOF'
-00:02.0 VGA compatible controller: Intel Corporation HD Graphics 630 (rev 04)
+00:02.0 Display controller [0380]: Intel Corporation HD Graphics 630 (rev 04)
+00:1f.3 Audio device: Intel Corporation 200 Series PCH HD Audio (rev a1)
 01:00.0 VGA compatible controller: NVIDIA Corporation GP104 [GeForce GTX 1080] (rev a1)
 01:00.1 Audio device: NVIDIA Corporation GP104 High Definition Audio Controller (rev a1)
 02:00.0 VGA compatible controller: NVIDIA Corporation GP104 [GeForce GTX 1080] (rev a1)
@@ -17,6 +18,7 @@ EOF
 vd_for() {
   case "$1" in
     00:02.0) printf '8086:5912\n' ;;
+    00:1f.3) printf '8086:a2f0\n' ;;
     01:00.0|02:00.0) printf '10de:1b80\n' ;;
     01:00.1|02:00.1) printf '10de:10f0\n' ;;
     *) return 1 ;;

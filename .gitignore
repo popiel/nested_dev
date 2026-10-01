@@ -45,3 +45,5 @@ nul
 /output/*
 !/output/.gitkeep
 
+# recovery mined data from failed install sequence
+/recovery-ref/

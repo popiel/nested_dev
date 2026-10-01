@@ -1,7 +1,9 @@
 #!/bin/bash
-# tests/e2e/stubs/lscpu — an Intel host, canned.
+# tests/e2e/stubs/lscpu — the measured host's CPU: an i5-7600K, 4 cores and
+# 4 threads (no hyperthreading, which is where the node's 4-vCPU maximum
+# comes from).
 cat <<'EOF'
 Architecture:                         x86_64
 Vendor ID:                            GenuineIntel
-Model name:                           Intel(R) Core(TM) i7-7700K CPU @ 4.20GHz
+Model name:                           Intel(R) Core(TM) i5-7600K CPU @ 3.80GHz
 EOF

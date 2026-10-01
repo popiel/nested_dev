@@ -1,3 +1,5 @@
 #!/bin/bash
-# tests/e2e/stubs/nproc — 8 cores.
-echo 8
+# tests/e2e/stubs/nproc — 4 cores, 4 threads, like the measured host. The
+# 6-core LLM profile is therefore capped to 4 by the fragment, exactly as on
+# the real node.
+echo 4

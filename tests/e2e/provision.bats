@@ -354,7 +354,11 @@ require_run_ok() {
     line="$(grep "qm create 101 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name llm"
     assert_contains "$line" "local-lvm:500"
-    assert_contains "$line" "--cores 6"
+    # The 6-core profile capped at the fixture node's 4-vCPU maximum, with the
+    # reason logged — the same capping the real 4-thread host required.
+    assert_contains "$line" "--cores 4"
+    assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
+        "capping allocation from 6 to 4"
     assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64.iso,media=cdrom"
     assert_not_contains "$line" "hostpci"
     assert_not_contains "$line" "--cdrom"
