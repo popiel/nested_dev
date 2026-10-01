@@ -368,6 +368,14 @@ require_run_ok() {
     run grep -c "genisoimage" "$E2E_STATE/journal"
     # Once per guest per provisioning run, and the suite provisions twice.
     [ "$output" = "6" ]
+    # Seed ISOs are built into the iso content dir, not the seed dir: PVE
+    # verifies every drive path against its storages, and template/cidata/
+    # belongs to none — a seed ISO built there is rejected with "unable to
+    # associate path to any storage".
+    for guest in desktop llm dev; do
+        run grep -c "template/iso/${guest}-seed.iso" "$E2E_STATE/journal"
+        [ "$output" = "2" ]
+    done
 }
 
 @test "re-provisioning changes nothing observable" {

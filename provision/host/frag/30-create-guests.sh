@@ -230,8 +230,15 @@ main() {
     log "Guest identity private key loaded for desktop seed injection"
 
     # --- Create NoCloud seed directory ---
+    # User-data, meta-data and templates live here. The seed *ISOs* go to
+    # ISO_DIR instead: PVE verifies every drive path against its storages, and
+    # template/iso/ is the `local` storage's iso content path while
+    # template/cidata/ belongs to no storage — a seed ISO built here is
+    # rejected with "unable to associate path to any storage".
     SEED_DIR="${ROOT}/var/lib/vz/template/cidata"
     mkdir -p "$SEED_DIR"
+    ISO_DIR="${ROOT}/var/lib/vz/template/iso"
+    mkdir -p "$ISO_DIR"
 
     # --- Install genisoimage if needed ---
     if ! command -v genisoimage >/dev/null 2>&1; then
@@ -277,7 +284,7 @@ main() {
 
         echo "instance-id: ${guest}-$(date +%s)" > "${SEED_DIR}/${guest}-meta-data"
 
-        genisoimage -r -V cidata -joliet-long -o "${SEED_DIR}/${guest}-seed.iso" \
+        genisoimage -r -V cidata -joliet-long -o "${ISO_DIR}/${guest}-seed.iso" \
             "$SEED_FILE" "${SEED_DIR}/${guest}-meta-data" 2>/dev/null
 
         log "NoCloud seed prepared: ${guest}"
@@ -297,8 +304,8 @@ main() {
     done
 
     # --- Download Ubuntu ISOs if not present ---
-    ISO_DIR="${ROOT}/var/lib/vz/template/iso"
-    mkdir -p "$ISO_DIR"
+    # ISO_DIR is defined and created beside SEED_DIR above, because the seed
+    # ISOs are built there too.
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_DESKTOP_ISO}" "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}"
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_SERVER_ISO}" "${ISO_DIR}/${UBUNTU_SERVER_ISO}"
 
@@ -330,7 +337,7 @@ main() {
             --agent enabled=1 \
             ${DESKTOP_HOSTPCI[@]+"${DESKTOP_HOSTPCI[@]}"} \
             --ide2 "${ISO_DIR}/${UBUNTU_DESKTOP_ISO},media=cdrom" \
-            --ide0 "${SEED_DIR}/desktop-seed.iso,media=cdrom" \
+            --ide0 "${ISO_DIR}/desktop-seed.iso,media=cdrom" \
             --scsi0 ${GUEST_STORAGE}:40 \
             --boot order=scsi0
 
@@ -369,7 +376,7 @@ main() {
             --agent enabled=1 \
             ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
             --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \
-            --ide0 "${SEED_DIR}/llm-seed.iso,media=cdrom" \
+            --ide0 "${ISO_DIR}/llm-seed.iso,media=cdrom" \
             --scsi0 ${GUEST_STORAGE}:80 \
             --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE} \
             --boot order=scsi0
@@ -404,7 +411,7 @@ main() {
                 --serial0 socket \
                 --agent enabled=1 \
                 --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \
-                --ide0 "${SEED_DIR}/dev-seed.iso,media=cdrom" \
+                --ide0 "${ISO_DIR}/dev-seed.iso,media=cdrom" \
                 --scsi0 ${GUEST_STORAGE}:40 \
                 --boot order=scsi0
 
