@@ -304,9 +304,15 @@ main() {
 
     # --- VM 100: Desktop ---
     if ! qm status 100 >/dev/null 2>&1; then
-        DESKTOP_HOSTPCI=""
+        # An array, not a string: "--hostpci0 <value>" built as one string and
+        # expanded quoted arrives at qm as a single glued argument, which PVE 9
+        # rejects with "Unknown option: hostpci0 ...". Each element below is
+        # one argv word. The empty-array expansion is zero words, so a guest
+        # with no passthrough hardware gets no hostpci flag at all rather than
+        # an empty one.
+        DESKTOP_HOSTPCI=()
         if [ -n "$IGPU_IDS" ]; then
-            DESKTOP_HOSTPCI="--hostpci0 ${IGPU_IDS},pcie=1,x-vga=0"
+            DESKTOP_HOSTPCI=(--hostpci0 "host=${IGPU_IDS},pcie=1,x-vga=0")
         fi
 
         qm create 100 \
@@ -322,10 +328,10 @@ main() {
             --vga none \
             --serial0 socket \
             --agent enabled=1 \
-            ${DESKTOP_HOSTPCI:+"$DESKTOP_HOSTPCI"} \
-            --cdrom0 "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}" \
+            ${DESKTOP_HOSTPCI[@]+"${DESKTOP_HOSTPCI[@]}"} \
+            --ide2 "${ISO_DIR}/${UBUNTU_DESKTOP_ISO},media=cdrom" \
             --ide0 "${SEED_DIR}/desktop-seed.iso,media=cdrom" \
-            --scsi0 ${GUEST_STORAGE}:40,size=40G \
+            --scsi0 ${GUEST_STORAGE}:40 \
             --boot order=scsi0
 
         qm start 100
@@ -336,12 +342,12 @@ main() {
 
     # --- VM 101: LLM ---
     if ! qm status 101 >/dev/null 2>&1; then
-        LLM_HOSTPCI=""
+        LLM_HOSTPCI=()
         DGPU_INDEX=0
         if [ -n "$DGPU_IDS" ]; then
             IFS=',' read -ra DGPU_LIST <<< "$DGPU_IDS"
             for dgpu in "${DGPU_LIST[@]}"; do
-                LLM_HOSTPCI="${LLM_HOSTPCI} --hostpci${DGPU_INDEX} ${dgpu},pcie=1"
+                LLM_HOSTPCI+=("--hostpci${DGPU_INDEX}" "host=${dgpu},pcie=1")
                 DGPU_INDEX=$((DGPU_INDEX + 1))
             done
         fi
@@ -361,11 +367,11 @@ main() {
             --vga none \
             --serial0 socket \
             --agent enabled=1 \
-            ${LLM_HOSTPCI:+"$LLM_HOSTPCI"} \
-            --cdrom0 "${ISO_DIR}/${UBUNTU_SERVER_ISO}" \
+            ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
+            --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \
             --ide0 "${SEED_DIR}/llm-seed.iso,media=cdrom" \
-            --scsi0 ${GUEST_STORAGE}:80,size=80G \
-            --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE},size=${DATA_VOL_SIZE}G \
+            --scsi0 ${GUEST_STORAGE}:80 \
+            --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE} \
             --boot order=scsi0
 
         if [ -n "$DGPU_IDS" ]; then
@@ -397,9 +403,9 @@ main() {
                 --vga none \
                 --serial0 socket \
                 --agent enabled=1 \
-                --cdrom0 "${ISO_DIR}/${UBUNTU_SERVER_ISO}" \
+                --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \
                 --ide0 "${SEED_DIR}/dev-seed.iso,media=cdrom" \
-                --scsi0 ${GUEST_STORAGE}:40,size=40G \
+                --scsi0 ${GUEST_STORAGE}:40 \
                 --boot order=scsi0
 
             qm start 102

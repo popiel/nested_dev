@@ -310,7 +310,15 @@ require_run_ok() {
     local line
     line="$(grep "qm create 100 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name desktop"
-    assert_contains "$line" "--hostpci0 0000:00:02.0,pcie=1,x-vga=0"
+    # Option and value as separate argv words with an explicit host= prefix:
+    # the previous form glued them into one word ("--hostpci0 0000:..."),
+    # which PVE 9 rejects with "Unknown option". This exact substring fails
+    # on the glued form.
+    assert_contains "$line" "--hostpci0 host=0000:00:02.0,pcie=1,x-vga=0"
+    # Installer ISOs ride --ide2 with media=cdrom: --cdrom0 is not a qm
+    # option and is rejected the same way.
+    assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-desktop-amd64.iso,media=cdrom"
+    assert_not_contains "$line" "--cdrom"
     assert_contains "$line" "bridge=vmbr0"
     assert_contains "$line" "local-lvm:40"
     assert_contains "$line" "52:54:00:00:01:00"
@@ -323,7 +331,9 @@ require_run_ok() {
     line="$(grep "qm create 101 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name llm"
     assert_contains "$line" "local-lvm:500"
+    assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64.iso,media=cdrom"
     assert_not_contains "$line" "hostpci"
+    assert_not_contains "$line" "--cdrom"
     run grep -c "qm set 101" "$E2E_STATE/qm-journal"
     [ "$output" = "0" ]
 }

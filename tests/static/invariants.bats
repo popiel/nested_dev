@@ -65,11 +65,13 @@ load '../lib/helpers'
     # The substance is the size, so assert the size against whatever storage id
     # the fragment uses. Naming the storage here would re-couple this test to
     # the storage variable, and the variable exists so the preflight and the
-    # guests cannot disagree about it.
+    # guests cannot disagree about it. Bare `storage:size` is the canonical
+    # creation form; the redundant `,size=XG` suffix was dropped when PVE 9
+    # started rejecting unvalidated option shapes.
     assert_file_matches "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" \
-        '^\s*--scsi0 \$\{GUEST_STORAGE\}:40,size=40G'
+        '^\s*--scsi0 \$\{GUEST_STORAGE\}:40[[:space:]]'
     assert_file_matches "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" \
-        '^\s*--scsi0 \$\{GUEST_STORAGE\}:80,size=80G'
+        '^\s*--scsi0 \$\{GUEST_STORAGE\}:80[[:space:]]'
 }
 
 @test "frag/30 contains RAM/core sizes from decision table" {
