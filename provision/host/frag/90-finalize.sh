@@ -104,6 +104,15 @@ iptables -A INPUT -p tcp --dport 8006 -s 192.168.14.0/24 -j ACCEPT
 # ICMP
 iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
 
+# DHCP + DNS for guests on vmbr0 (dnsmasq serves this bridge). Without these,
+# guests get no address and no resolver: every installer stalls before writing
+# a byte, and the provisioning gate times out on guests that never started.
+# Scoped to the private bridge, which has no physical ports, so this reaches
+# guests and nothing else.
+iptables -A INPUT -i vmbr0 -p udp --dport 67 -j ACCEPT
+iptables -A INPUT -i vmbr0 -p udp --dport 53 -j ACCEPT
+iptables -A INPUT -i vmbr0 -p tcp --dport 53 -j ACCEPT
+
 log "INPUT rules applied"
 
 # --- filter table: FORWARD ---
@@ -123,21 +132,32 @@ iptables -A FORWARD -i vmbr0 -o vmbr0 -s 192.168.100.100 -j ACCEPT
 #   Ollama images and models on first boot, so it cannot be air-gapped.
 # dev-nested (103): DNS/HTTP/HTTPS. This is the trusted ISO builder; it fetches
 #   from GitHub, the Ubuntu archive and the PVE ISO mirror.
+# Dev template (102): DNS/HTTP/HTTPS while it provisions, for the same fetches
+#   (its first boot pulls container images and the Ubuntu archive). It never
+#   auto-starts after conversion to template, so this allowance in practice
+#   serves the one provisioning run, not a running machine.
 # All other dev VMs (104-249): no egress. Their toolchain is baked into
-#   template 102 during the pre-firewall provisioning window and is cloned
-#   already-provisioned, so a clone never needs to reach the network.
+#   template 102, so a clone never needs to reach the network.
 
 # Desktop (100): unrestricted by design — it is the bastion and browses.
 # Without this rule the desktop has no route off vmbr0 at all, and the
 # "unrestricted" claim in the comment above is not backed by a rule.
 iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s 192.168.100.100 -j ACCEPT
 
-# LLM + trusted builder: DNS, HTTP, HTTPS only.
+# LLM (101), dev template (102), trusted builder (103): DNS, HTTP, HTTPS only.
 # DNS is allowed over both UDP and TCP: a truncated or oversized answer falls
 # back to TCP, and a resolver that only speaks UDP fails exactly when the guest
 # most needs an answer. The host's own OUTPUT chain below allows both for the
 # same reason.
-for EGRESS_IP in 192.168.100.101 192.168.100.103; do
+#
+# The template is on this list because it builds the toolchain its clones run:
+# dev-firstboot.sh fetches from GitHub and the Ubuntu archive and pulls
+# container images, which is all HTTPS (plus DNS). A template that cannot
+# reach its sources cannot provision, and the provisioning gate waits on the
+# log line that only a provisioned template writes. The template never
+# auto-starts after conversion, so in practice these rules serve its one
+# provisioning run, not a running fleet.
+for EGRESS_IP in 192.168.100.101 192.168.100.102 192.168.100.103; do
     iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
         -p udp --dport 53 -j ACCEPT
     iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
@@ -147,7 +167,7 @@ for EGRESS_IP in 192.168.100.101 192.168.100.103; do
     iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
         -p tcp --dport 443 -j ACCEPT
 done
-log "FORWARD egress: 100 unrestricted; 101 + 103 allowed 53/80/443; other dev VMs denied"
+log "FORWARD egress: 100 unrestricted; 101 + 102 + 103 allowed 53/80/443; other dev VMs denied"
 
 # Return traffic for established connections
 iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -169,7 +189,14 @@ iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 # NTP (123)
 iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
 
-log "OUTPUT rules applied (HTTPS/DNS/NTP only)"
+# Replies to the vmbr0 services above: dnsmasq's DHCP offers/acks and DNS
+# answers leave via the bridge. Without these the requests arrive and the
+# answers die here — same silent stall, one chain further along.
+iptables -A OUTPUT -o vmbr0 -p udp --sport 67 --dport 68 -j ACCEPT
+iptables -A OUTPUT -o vmbr0 -p udp --sport 53 -j ACCEPT
+iptables -A OUTPUT -o vmbr0 -p tcp --sport 53 -j ACCEPT
+
+log "OUTPUT rules applied (host HTTPS/DNS/NTP + vmbr0 service replies)"
 
 # --- Set DROP defaults (fail-closed), after every exception above ---
 iptables -P INPUT DROP

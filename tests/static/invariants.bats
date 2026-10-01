@@ -226,12 +226,13 @@ load '../lib/helpers'
         '-o CHANGE_ME_DETECT_AT_PROVISION -s 192.168.100.100 -j ACCEPT'
 }
 
-@test "the LLM VM and the trusted builder are the only guests granted egress" {
+@test "the LLM VM, the template and the trusted builder are granted egress" {
     local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
-    # The egress loop must name exactly the two addresses the policy allows:
-    # the LLM VM and the trusted ISO builder. Adding a third here silently
-    # gives it a route off vmbr0.
-    assert_file_contains "$frag" 'for EGRESS_IP in 192.168.100.101 192.168.100.103; do'
+    # The egress loop must name exactly the three addresses the policy allows:
+    # the LLM VM, the dev template (which builds the toolchain its clones run),
+    # and the trusted ISO builder. Adding a fourth here silently gives it a
+    # route off vmbr0.
+    assert_file_contains "$frag" 'for EGRESS_IP in 192.168.100.101 192.168.100.102 192.168.100.103; do'
     for port in 53 80 443; do
         assert_file_contains "$frag" "--dport ${port} -j ACCEPT"
     done
@@ -244,6 +245,20 @@ load '../lib/helpers'
     local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
     assert_file_contains "$frag" '-p udp --dport 53 -j ACCEPT'
     assert_file_contains "$frag" '-p tcp --dport 53 -j ACCEPT'
+}
+
+@test "the host admits guest DHCP and DNS on vmbr0, both directions" {
+    # dnsmasq serves DHCP and DNS to the private bridge, and a service the
+    # firewall blocks does not exist: without these rules every guest installer
+    # stalls before writing a byte. Scoped to vmbr0 (no physical ports), so
+    # this reaches guests and nothing else — the LAN side stays closed.
+    local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
+    assert_file_contains "$frag" '-i vmbr0 -p udp --dport 67 -j ACCEPT'
+    assert_file_contains "$frag" '-i vmbr0 -p udp --dport 53 -j ACCEPT'
+    assert_file_contains "$frag" '-i vmbr0 -p tcp --dport 53 -j ACCEPT'
+    assert_file_contains "$frag" '-o vmbr0 -p udp --sport 67 --dport 68 -j ACCEPT'
+    assert_file_contains "$frag" '-o vmbr0 -p udp --sport 53 -j ACCEPT'
+    assert_file_contains "$frag" '-o vmbr0 -p tcp --sport 53 -j ACCEPT'
 }
 
 @test "no dev VM at or above 104 is granted egress" {
@@ -261,7 +276,7 @@ load '../lib/helpers'
     # enforce. Compare the rules, not the comments.
     local conf="${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"
     local ip port
-    for ip in 192.168.100.101 192.168.100.103; do
+    for ip in 192.168.100.101 192.168.100.102 192.168.100.103; do
         for port in "tcp --dport 53" "tcp --dport 80" "tcp --dport 443"; do
             # shellcheck disable=SC2016
             grep -qE -- "-s ${ip} -p ${port} -j ACCEPT" "$conf" || {

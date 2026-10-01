@@ -516,6 +516,15 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.100 -j ACCEPT"
     assert_file_contains "$E2E_STATE/journal" "--dport 3389"
     assert_file_contains "$E2E_STATE/journal" "MASQUERADE"
+    # The host-service surface guests need: DHCP and DNS to dnsmasq on vmbr0,
+    # requests and replies. Without any one of these the guests never get an
+    # address and every installer stalls before writing a byte.
+    assert_file_contains "$E2E_STATE/journal" "INPUT -i vmbr0 -p udp --dport 67"
+    assert_file_contains "$E2E_STATE/journal" "INPUT -i vmbr0 -p udp --dport 53"
+    assert_file_contains "$E2E_STATE/journal" "OUTPUT -o vmbr0 -p udp --sport 67 --dport 68"
+    assert_file_contains "$E2E_STATE/journal" "OUTPUT -o vmbr0 -p udp --sport 53"
+    # And the template's egress, without which its first boot cannot fetch.
+    assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.102 -p tcp --dport 443"
 }
 
 @test "memory and swap are configured" {

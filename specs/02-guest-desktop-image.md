@@ -91,6 +91,12 @@ reported
   to finish provisioning over a missing acceleration feature leaves the
   operator with no way to reach the guests at all.
 * **R-02.3.3** A missing rendering tool is likewise reported, not fatal.
+* **R-02.3.4** The iGPU drives the guest's physical console as its primary
+  display, and the same desktop is reachable over RDP (R-02.2.1): a running
+  guest with a black physical screen is a failure, not a headless success.
+  Primary-mode passthrough on Intel integrated graphics is finicky (pre-boot
+  hangs are the documented failure mode), so console output is verified on
+  first boot rather than assumed from the `qm` flags.
 
 ### R-02.4 Browsers, audio and memory
 
@@ -108,6 +114,16 @@ reported
   the VM's memory swappiness is lowered. The desktop is 8 GB of a 32 GB host
   shared with a GPU VM; a print spooler and a Bluetooth stack are memory the
   desktop does not need.
+* **R-02.4.5** Media playback on the desktop has working sound. The integrated
+  HD audio controller (00:1f.3) was the candidate, and it is disqualified:
+  measured 2026-10-01 it shares IOMMU group 10 with the ISA bridge (00:1f.0),
+  the memory controller (00:1f.2) and SMBus (00:1f.4), so passing it through
+  would hand host-critical platform devices to the guest — the same rule
+  that excluded the dGPUs (R-01.7), applied before any code was written.
+  Sound therefore comes without audio passthrough: RDP audio redirection for
+  remote sessions (R-02.4.3 keeps the per-account audio service alive across
+  logouts for exactly this), and a USB audio device passed through by ID —
+  which needs no IOMMU group — if the physical console needs its own output.
 
 ### R-02.5 X11 forwarding from dev VMs
 

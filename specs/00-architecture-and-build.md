@@ -90,7 +90,10 @@ Proxmox web UI, or a serial/IPMI console.
   `vmbr0` and are **not** addressable from the LAN.
 * **R-00.2.2** The host provides DHCP and DNS for `vmbr0`, with a fixed lease
   per VM. Fixed addresses are required because the firewall policy, the host
-  trust pin and the SSH config all reference a VM by address.
+  trust pin and the SSH config all reference a VM by address. The firewall
+  admits that service traffic (DHCP/DNS to the host on `vmbr0`) — a service
+  the firewall blocks is a service that does not exist, whatever the lease
+  file says.
 * **R-00.2.3** VM egress is NAT'd to the LAN. There is no bridged path from a
   VM onto the LAN segment.
 * **R-00.2.4** Host management from the LAN is limited to SSH (port 2222) and
@@ -105,6 +108,7 @@ Proxmox web UI, or a serial/IPMI console.
   |---|---|---|
   | vm 100 desktop | unrestricted | Bastion; browses and fetches |
   | vm 101 llm | 53/80/443 | Installs the driver/CUDA/Docker stack and pulls images and models on first boot |
+  | vm 102 template | 53/80/443 while it provisions | Builds the toolchain its clones run (GitHub, Ubuntu archive, container images); never auto-starts after conversion |
   | vm 103 `dev-nested` | 53/80/443 | The trusted builder: fetches from GitHub, the Ubuntu archive and the Proxmox ISO mirror |
   | vm 104–249 dev | none | Toolchain is baked into template 102 and cloned already-provisioned, so a clone never needs the network |
 
