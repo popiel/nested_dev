@@ -24,6 +24,50 @@ die() { log "FATAL: $*"; exit 1; }
 
 # --- Pure functions (testable via source-guard) ---
 
+ensure_dhcp_renewals() {
+    # The LAN address comes from dhclient, whose AppArmor profile denies the
+    # unix sockets it retries on: renewals fail in a loop and the lease
+    # eventually expires, taking the host off the LAN hours after a
+    # successful install. Best effort only — day-one connectivity does not
+    # depend on renewals (the initial lease outlives the install), so failure
+    # warns instead of aborting.
+    if command -v aa-complain >/dev/null 2>&1; then
+        if aa-complain /usr/sbin/dhclient >/dev/null 2>&1; then
+            log "dhclient AppArmor profile set to complain mode (renewals survive)"
+        else
+            log "WARNING: could not set dhclient complain mode; DHCP renewals may fail at lease expiry"
+        fi
+    else
+        log "WARNING: aa-complain not installed; DHCP renewals may fail at lease expiry (install apparmor-utils and complain /usr/sbin/dhclient)"
+    fi
+}
+
+populate_upstream_resolvers() {
+    # dnsmasq forwards external queries to ${ROOT}/run/resolv.conf, but
+    # nothing on a fresh system ever creates that file: without it dnsmasq
+    # answers guest and host DNS with nothing, and every fetch fails at
+    # lookup while the network itself is fine. Build it from the DHCP
+    # leases' name servers; an empty server list aborts instead of starting
+    # dnsmasq deaf.
+    local f servers
+    servers="$(for f in "${ROOT}/var/lib/dhcp/"*.leases "${ROOT}/var/lib/dhclient/"*.leases; do
+        [ -f "$f" ] || continue
+        grep -h "option domain-name-servers" "$f" 2>/dev/null || true
+    done | awk '{ line=$0; gsub(/;/, " ", line); gsub(/,/, " ", line);
+        n=split(line, parts, /[ \t]+/);
+        for (i=1; i<=n; i++) if (parts[i] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && !seen[parts[i]]++) print parts[i] }')"
+    [ -n "$servers" ] || die "no upstream name servers in any DHCP lease; refusing to start dnsmasq deaf (check the LAN DHCP on ${PHYS_NIC:-unknown})"
+    mkdir -p "${ROOT}/run"
+    {
+        printf '# Upstream resolvers, from the DHCP lease (frag/28). dnsmasq reads this file.\n'
+        printf '%s\n' "$servers" | while IFS= read -r server; do
+            [ -n "$server" ] || continue
+            printf 'nameserver %s\n' "$server"
+        done
+    } > "${ROOT}/run/resolv.conf"
+    log "upstream resolvers written"
+}
+
 wait_for_upstream() {
     # The LAN NIC was just reconfigured, so its DHCP lease is renewing and the
     # first apt call below races it: every repository fails at once ("no longer
@@ -172,6 +216,8 @@ DNSMASQ_EOF
     # Disable dnsmasq's own resolv.conf management (we provide upstream via resolv-file)
     sed -i 's|^#resolv-file=.*|resolv-file=/run/resolv.conf|' "${ROOT}/etc/dnsmasq.conf" 2>/dev/null || true
 
+    populate_upstream_resolvers
+
     systemctl enable --now dnsmasq
     log "dnsmasq configured and started"
 
@@ -190,6 +236,8 @@ SYSCTL_EOF
     iptables -t nat -C POSTROUTING -s 192.168.100.0/24 -o "$PHYS_NIC" -j MASQUERADE 2>/dev/null \
         || iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o "$PHYS_NIC" -j MASQUERADE
     log "Guest egress NAT in place"
+
+    ensure_dhcp_renewals
 
     log "=== Private network setup complete ==="
 }

@@ -1,0 +1,8 @@
+lease {
+  interface "eno1";
+  fixed-address 192.168.14.52;
+  option subnet-mask 255.255.255.0;
+  option routers 192.168.14.1;
+  option domain-name-servers 192.168.14.254;
+  option dhcp-lease-time 14400;
+}

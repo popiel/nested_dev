@@ -225,7 +225,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.9.2** Every VM has a fixed lease and a DNS entry in both short and
   fully-qualified form.
 * **R-01.9.3** Upstream DNS is taken from the host's resolver at provision
-  time, and the host then resolves through dnsmasq. Guests never depend on the
+  time, written to `/run/resolv.conf` for dnsmasq from the DHCP lease, and
+  the host then resolves through dnsmasq. An empty server list aborts instead
+  of starting dnsmasq deaf. Guests never depend on the
   LAN's resolver being reachable or correct.
 * **R-01.9.4** The LAN-facing NIC is detected rather than assumed, and the
   host network configuration is written from that detection.
@@ -246,6 +248,11 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   before proceeding.
 * **R-01.9.8** The build manifest records the install media's checksum and the
   resolved release reference.
+* **R-01.9.9** The host's DHCP client is left able to renew (AppArmor complain
+  where enforced). A lease lost hours post-install darkens the host
+  identically to a failed one, with no provisioner running anymore to report
+  it. This is best effort — day-one connectivity does not depend on renewals
+  — so failure warns instead of aborting.
 
 ### R-01.10 The host firewall is deny-by-default and per-guest
 

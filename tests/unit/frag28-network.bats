@@ -21,15 +21,22 @@ setup() {
     for stub in ip getent sleep date; do
         cp "${E2E_STUBS}/${stub}" "$MOCKBIN/$stub"
     done
-    # chmod and grep are pure filesystem/text utilities, not system state
-    # (see frag06-sudo): the gate needs grep for its probes, and the
-    # isolation here is about route/DNS presence, which grep does not affect.
+    # chmod and grep are pure filesystem/text utilities, not system state:
+    # the gate needs grep for its probes, and the isolation here is about
+    # route/DNS presence, which neither affects.
     cp "$(command -v chmod)" "$MOCKBIN/chmod"
     cp "$(command -v grep)" "$MOCKBIN/grep"
     chmod +x "$MOCKBIN"/*
+    # Functions read ROOT once, at source time, so the scratch root must be
+    # in place before sourcing. log() goes to stdout for message assertions.
+    export PVE_ROOT="${WORK}/root"
+    mkdir -p "${WORK}/root"
+    source "$FRAG28"
+    log() { printf '%s\n' "$*"; }
 }
 
 teardown() {
+    unset PVE_ROOT
     rm -rf "$WORK"
 }
 
@@ -39,6 +46,13 @@ run_gate() {
     # the host's /var/log, which is neither writable nor relevant here.
     env -i PATH="$MOCKBIN" FRAG28="$FRAG28" TIMEOUT="$1" \
         /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; wait_for_upstream "$TIMEOUT"'
+}
+
+run_renew() {
+    # Fully isolated PATH: whether the developer machine has aa-complain
+    # installed must not change which branch runs.
+    env -i PATH="$MOCKBIN" FRAG28="$FRAG28" \
+        /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; ensure_dhcp_renewals'
 }
 
 @test "a routed host with working DNS passes immediately" {
@@ -61,6 +75,63 @@ run_gate() {
     run run_gate 1
     [ "$status" -ne 0 ]
     [[ "$output" == *"no upstream connectivity"* ]]
+}
+
+write_lease() {
+    mkdir -p "${WORK}/root/var/lib/dhcp"
+    cat > "${WORK}/root/var/lib/dhcp/dhclient.eno1.leases"
+}
+
+@test "upstream resolvers are built from the DHCP lease" {
+    write_lease <<'EOF'
+lease {
+  interface "eno1";
+  fixed-address 192.168.14.52;
+  option subnet-mask 255.255.255.0;
+  option routers 192.168.14.1;
+  option domain-name-servers 192.168.14.254, 192.168.14.253;
+  option dhcp-lease-time 14400;
+}
+EOF
+    run populate_upstream_resolvers
+    [ "$status" -eq 0 ]
+    run cat "${WORK}/root/run/resolv.conf"
+    [[ "$output" == *"nameserver 192.168.14.254"* ]]
+    [[ "$output" == *"nameserver 192.168.14.253"* ]]
+}
+
+@test "no lease files means no resolvers and a loud abort" {
+    run populate_upstream_resolvers
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no upstream name servers"* ]]
+}
+
+@test "a lease without name servers aborts instead of starting dnsmasq deaf" {
+    write_lease <<'EOF'
+lease {
+  interface "eno1";
+  fixed-address 192.168.14.52;
+  option subnet-mask 255.255.255.0;
+  option routers 192.168.14.1;
+}
+EOF
+    run populate_upstream_resolvers
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no upstream name servers"* ]]
+}
+
+@test "complain-mode is set when the tooling exists" {
+    printf '#!/bin/bash\nexit 0\n' > "$MOCKBIN/aa-complain"
+    chmod +x "$MOCKBIN/aa-complain"
+    run run_renew
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"complain mode"* ]]
+}
+
+@test "a missing aa-complain warns instead of aborting" {
+    run run_renew
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"aa-complain not installed"* ]]
 }
 
 @test "soliciting uses dhclient with the LAN NIC when present" {

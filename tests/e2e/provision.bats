@@ -64,6 +64,8 @@ setup_file() {
     cp "${E2E_DIR}/fixtures/grub-default" "$ROOT/etc/default/grub"
     cp "${E2E_DIR}/fixtures/fstab" "$ROOT/etc/fstab"
     cp "${E2E_DIR}/fixtures/dnsmasq.conf" "$ROOT/etc/dnsmasq.conf"
+    mkdir -p "$ROOT/var/lib/dhcp"
+    cp "${E2E_DIR}/fixtures/dhclient.leases" "$ROOT/var/lib/dhcp/dhclient.eno1.leases"
 
     # sysfs mirroring the measured host: group 0 holds the iGPU alone, group 2
     # holds both dGPUs, both audio functions and both root ports.
@@ -329,6 +331,9 @@ require_run_ok() {
         "POSTROUTING -s 192.168.100.0/24 -o eno1 -j MASQUERADE"
     assert_file_contains "$E2E_ROOT/etc/sysctl.d/99-nested-dev.conf" \
         "net.ipv4.ip_forward = 1"
+    # Upstream resolvers come from the DHCP lease: nothing on a fresh system
+    # creates /run/resolv.conf, and without it dnsmasq forwards into the void.
+    run grep -xF "nameserver 192.168.14.254" "$E2E_ROOT/run/resolv.conf"
 }
 
 @test "the run reboots once to activate the vfio binding, then resumes" {
