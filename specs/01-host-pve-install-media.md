@@ -283,6 +283,10 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   provide, never improvised.** Automatically adopting a network interface can
   take the host's only network path down — the same reason R-01.4.1 forbids
   target-disk detection.
+* **R-01.11.11** Each guest's vCPU allocation is **capped at the node's per-VM
+  maximum.** PVE refuses a create whose vCPU count exceeds it, so a profile
+  written for a larger host would otherwise fail on a smaller one with no
+  guests created. The cap is logged when it cuts the profile down.
 
 ## 3. Build
 

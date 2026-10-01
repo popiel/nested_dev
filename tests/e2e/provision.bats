@@ -323,6 +323,12 @@ require_run_ok() {
     assert_contains "$line" "local-lvm:40"
     assert_contains "$line" "52:54:00:00:01:00"
     assert_contains "$line" "--memory 8192"
+    # OVMF without an efidisk boots with temporary efivars, so installed
+    # guests lose their boot entries on reboot.
+    assert_contains "$line" "--efidisk0 local-lvm:1"
+    # Uncapped on the 8-core fixture host; the capping branch is covered in
+    # tests/unit/frag30-guest-create.bats against a 4-core node.
+    assert_contains "$line" "--cores 4"
 }
 
 @test "the llm guest is created with no passthrough hardware" {
@@ -331,6 +337,7 @@ require_run_ok() {
     line="$(grep "qm create 101 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name llm"
     assert_contains "$line" "local-lvm:500"
+    assert_contains "$line" "--cores 6"
     assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64.iso,media=cdrom"
     assert_not_contains "$line" "hostpci"
     assert_not_contains "$line" "--cdrom"
@@ -343,6 +350,7 @@ require_run_ok() {
     local line
     line="$(grep "qm create 102 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name dev-template"
+    assert_contains "$line" "--efidisk0 local-lvm:1"
     for vmid in 100 101 102; do
         run grep -c "qm start $vmid" "$E2E_STATE/qm-journal"
         [ "$output" -ge 1 ]

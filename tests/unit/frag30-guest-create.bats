@@ -84,3 +84,21 @@ host_without_storage() {
     [[ "$output" == *"vmbr0"* ]]
     [[ "$output" == *"local-lvm"* ]]
 }
+
+@test "core allocations are capped at the node's per-VM maximum" {
+    # PVE 9 refuses a VM whose vCPU count exceeds the node's per-VM maximum,
+    # which tracks the host's visible cores: 6 cores on a 4-core host fails
+    # the create with "MAX 4 vcpus allowed per VM on this node".
+    CPU_CORES=4
+    run cap_vm_cores 6
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"capping"* ]]
+    [ "$(printf '%s\n' "$output" | tail -1)" = "4" ]
+}
+
+@test "core allocations within the maximum pass through unchanged" {
+    CPU_CORES=8
+    run cap_vm_cores 6
+    [ "$status" -eq 0 ]
+    [ "$output" = "6" ]
+}

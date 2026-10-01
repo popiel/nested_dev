@@ -19,6 +19,20 @@ die() { log "FATAL: $*"; exit 1; }
 
 # --- Pure functions (testable via source-guard) ---
 
+cap_vm_cores() {
+    # The profile's core count bounded by what the node allows per VM. Prints
+    # the smaller of the want and the host's core count (floor 1), and logs
+    # when the profile is cut down, so a 4-core host running the 6-core LLM
+    # profile says so instead of failing the create opaquely.
+    local want="$1" max="$CPU_CORES"
+    [ "$max" -ge 1 ] 2>/dev/null || max=1
+    if [ "$want" -gt "$max" ]; then
+        log "host allows ${max} vcpus per VM; capping allocation from ${want} to ${max}"
+        want="$max"
+    fi
+    printf '%s\n' "$want"
+}
+
 partition_passthrough_devices() {
     # Splits frag/10's accepted device set by role: integrated GPUs go to the
     # desktop, discrete NVIDIA GPUs go to the LLM guest. Sets IGPU_IDS and
@@ -192,6 +206,14 @@ main() {
         log "64 GB+ host detected: LLM gets 24 GB"
     fi
 
+    # PVE 9 refuses a VM whose vCPU count exceeds the node's per-VM maximum,
+    # which tracks the host's visible cores: requesting 6 on a 4-core host
+    # fails the create with "MAX 4 vcpus allowed per VM on this node". Cap
+    # each guest at what the node allows rather than what the profile wants.
+    DESKTOP_CORES=$(cap_vm_cores "$DESKTOP_CORES")
+    LLM_CORES=$(cap_vm_cores "$LLM_CORES")
+    DEV_CORES=$(cap_vm_cores "$DEV_CORES")
+
     # --- Read personalization password hash ---
     # This is the LOGIN password for the personalization account in every
     # guest. It is not the host root password, which never leaves the host and
@@ -338,6 +360,7 @@ main() {
             ${DESKTOP_HOSTPCI[@]+"${DESKTOP_HOSTPCI[@]}"} \
             --ide2 "${ISO_DIR}/${UBUNTU_DESKTOP_ISO},media=cdrom" \
             --ide0 "${ISO_DIR}/desktop-seed.iso,media=cdrom" \
+            --efidisk0 ${GUEST_STORAGE}:1 \
             --scsi0 ${GUEST_STORAGE}:40 \
             --boot order=scsi0
 
@@ -377,6 +400,7 @@ main() {
             ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
             --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \
             --ide0 "${ISO_DIR}/llm-seed.iso,media=cdrom" \
+            --efidisk0 ${GUEST_STORAGE}:1 \
             --scsi0 ${GUEST_STORAGE}:80 \
             --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE} \
             --boot order=scsi0
@@ -412,6 +436,7 @@ main() {
                 --agent enabled=1 \
                 --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \
                 --ide0 "${ISO_DIR}/dev-seed.iso,media=cdrom" \
+                --efidisk0 ${GUEST_STORAGE}:1 \
                 --scsi0 ${GUEST_STORAGE}:40 \
                 --boot order=scsi0
 
