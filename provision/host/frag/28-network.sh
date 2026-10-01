@@ -29,7 +29,8 @@ wait_for_upstream() {
     # first apt call below races it: every repository fails at once ("no longer
     # has a Release file") even though the configuration is correct. Gate on a
     # default route plus a working resolver instead of assuming instant link.
-    # Timeout in seconds; sleeps in 5s polls.
+    # Timeout in seconds; polls every 5. Returns nonzero on timeout — the
+    # caller decides whether to solicit a lease or die.
     local timeout="$1" waited=0
     log "waiting for upstream connectivity (default route + DNS)"
     while [ "$waited" -lt "$timeout" ]; do
@@ -41,7 +42,30 @@ wait_for_upstream() {
         sleep 5
         waited=$((waited + 5))
     done
-    die "no upstream connectivity ${timeout}s after applying the network config; check the LAN DHCP on ${PHYS_NIC:-unknown}"
+    log "no upstream connectivity after ${timeout}s"
+    return 1
+}
+
+solicit_dhcp() {
+    # Actively (re)solicit a DHCP lease on the LAN NIC. Waiting alone is not
+    # enough: after the reconfiguration there is repeatedly an address but no
+    # route and no client still running to renew it — only asking produces the
+    # lease. Output flows to the provision log like every other fragment
+    # command.
+    local nic="$1"
+    if command -v dhclient >/dev/null 2>&1; then
+        log "soliciting DHCP lease on ${nic} (dhclient)"
+        dhclient -v "$nic" || return 1
+    elif command -v dhcpcd >/dev/null 2>&1; then
+        log "soliciting DHCP lease on ${nic} (dhcpcd)"
+        dhcpcd "$nic" || return 1
+    elif command -v udhcpc >/dev/null 2>&1; then
+        log "soliciting DHCP lease on ${nic} (udhcpc)"
+        udhcpc -i "$nic" || return 1
+    else
+        log "no DHCP client found; cannot solicit a lease"
+        return 1
+    fi
 }
 
 main() {
@@ -90,8 +114,15 @@ EOF
     fi
     log "vmbr0 carries 192.168.100.1/24"
 
-    # --- 2b. Wait for the LAN side to come back before any apt call ---
-    wait_for_upstream 120
+    # --- 2b. Ensure upstream connectivity before any apt call ---
+    # A short passive wait first (a healthy renew lands on its own), then one
+    # active solicitation: the renew repeatedly does not re-fire by itself
+    # after the reconfiguration. Dying here names the area; dying later in
+    # apt names repositories.
+    if ! wait_for_upstream 60; then
+        solicit_dhcp "$PHYS_NIC" || die "no upstream connectivity; check the LAN DHCP on ${PHYS_NIC}"
+        wait_for_upstream 120 || die "no upstream connectivity; check the LAN DHCP on ${PHYS_NIC}"
+    fi
 
     # --- 3. Install and configure dnsmasq ---
     if ! dpkg -l dnsmasq 2>/dev/null | grep -q '^ii'; then

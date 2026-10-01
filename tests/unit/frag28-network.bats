@@ -55,10 +55,32 @@ run_gate() {
     [[ "$output" == *"no upstream connectivity"* ]]
 }
 
-@test "a host with no working resolver waits out the timeout and dies loudly" {
+@test "a host with no working resolver waits out the timeout and fails loudly" {
     printf '#!/bin/bash\nexit 2\n' > "$MOCKBIN/getent"
     chmod +x "$MOCKBIN/getent"
     run run_gate 1
     [ "$status" -ne 0 ]
     [[ "$output" == *"no upstream connectivity"* ]]
+}
+
+@test "soliciting uses dhclient with the LAN NIC when present" {
+    cat > "$MOCKBIN/dhclient" <<'EOF'
+#!/bin/bash
+printf 'dhclient %s\n' "$*" >> "${E2E_STATE:?}/dhcp-journal"
+exit 0
+EOF
+    chmod +x "$MOCKBIN/dhclient"
+    export E2E_STATE="$WORK/state"
+    mkdir -p "$E2E_STATE"
+    run env -i PATH="$MOCKBIN" FRAG28="$FRAG28" NIC="enp0s31f6" E2E_STATE="$E2E_STATE" \
+        /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; solicit_dhcp "$NIC"'
+    [ "$status" -eq 0 ]
+    run grep -q "dhclient enp0s31f6" "$E2E_STATE/dhcp-journal"
+}
+
+@test "soliciting fails loudly with no DHCP client installed" {
+    run env -i PATH="$MOCKBIN" FRAG28="$FRAG28" NIC="enp0s31f6" \
+        /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; solicit_dhcp "$NIC"'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no DHCP client found"* ]]
 }

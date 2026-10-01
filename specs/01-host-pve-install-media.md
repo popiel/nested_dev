@@ -236,8 +236,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.9.7** The bridge address, DHCP/DNS service, forwarding, and outbound
   NAT exist **before any guest boots**, and upstream connectivity (a default
   route plus a working resolver) is verified after the LAN reconfiguration
-  before any package operation. Guests configure networking by DHCP
-  and fetch packages and first-boot scripts from the internet during
+  before any package operation — soliciting a lease once first, since the
+  renewal does not reliably re-fire on its own. Guests configure networking
+  by DHCP and fetch packages and first-boot scripts from the internet during
   installation; the installer-time network provides neither a DHCP server nor
   a route. A guest that boots before this exists stalls without an address
   and fails its provisioning gate after the timeout. Writing the interface
