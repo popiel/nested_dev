@@ -261,6 +261,15 @@ load '../lib/helpers'
     assert_file_contains "$frag" '-o vmbr0 -p tcp --sport 53 -j ACCEPT'
 }
 
+@test "DNAT'd LAN traffic to the desktop passes the filter" {
+    # PREROUTING rewrites these destinations, but rewritten packets still
+    # traverse FORWARD: without explicit accepts the documented SSH/RDP access
+    # is translated and then silently dropped.
+    local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
+    assert_file_contains "$frag" '-o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT'
+    assert_file_contains "$frag" '-o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT'
+}
+
 @test "no dev VM at or above 104 is granted egress" {
     # 104-249 must fall through to the DROP default. Any explicit rule for that
     # range reverses the containment the range boundary exists to provide.

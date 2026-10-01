@@ -314,6 +314,11 @@ require_run_ok() {
     assert_file_contains "$E2E_ROOT/etc/network/interfaces" "auto eno1"
     assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
         "vmbr0 carries 192.168.100.1/24"
+    # bind-dynamic, not bind-interfaces: the bridge has no carrier until
+    # guests attach, and bind-interfaces never picks up DHCP on an interface
+    # that appears later — dnsmasq ends up answering DNS while deaf on DHCP.
+    assert_file_contains "$E2E_ROOT/etc/dnsmasq.d/nested_dev.conf" "bind-dynamic"
+    assert_file_not_contains "$E2E_ROOT/etc/dnsmasq.d/nested_dev.conf" "bind-interfaces"
     # The LAN side is re-verified after the reconfiguration: the DHCP renewal
     # races the first apt call, which otherwise fails on every repository.
     assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
@@ -356,6 +361,10 @@ require_run_ok() {
     assert_contains "$line" "local-lvm:40"
     assert_contains "$line" "52:54:00:00:01:00"
     assert_contains "$line" "--memory 8192"
+    # Explicit installer-first boot order: PVE passes strict=on, so an order
+    # naming only the empty disk parks the guest at a UEFI shell instead of
+    # falling through to the CDROM.
+    assert_contains "$line" '--boot order=ide2;scsi0'
     # OVMF without an efidisk boots with temporary efivars, so installed
     # guests lose their boot entries on reboot.
     assert_contains "$line" "--efidisk0 local-lvm:1"
@@ -370,6 +379,7 @@ require_run_ok() {
     line="$(grep "qm create 101 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name llm"
     assert_contains "$line" "local-lvm:500"
+    assert_contains "$line" '--boot order=ide2;scsi0'
     # The 6-core profile capped at the fixture node's 4-vCPU maximum, with the
     # reason logged — the same capping the real 4-thread host required.
     assert_contains "$line" "--cores 4"
@@ -387,6 +397,7 @@ require_run_ok() {
     local line
     line="$(grep "qm create 102 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name dev-template"
+    assert_contains "$line" '--boot order=ide2;scsi0'
     assert_contains "$line" "--efidisk0 local-lvm:1"
     for vmid in 100 101 102; do
         run grep -c "qm start $vmid" "$E2E_STATE/qm-journal"
@@ -516,6 +527,12 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.100 -j ACCEPT"
     assert_file_contains "$E2E_STATE/journal" "--dport 3389"
     assert_file_contains "$E2E_STATE/journal" "MASQUERADE"
+    # LAN ingress to the desktop: DNAT rewrites these destinations in
+    # PREROUTING, but the filter still has to admit them.
+    assert_file_contains "$E2E_STATE/journal" \
+        "-i eno1 -o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT"
+    assert_file_contains "$E2E_STATE/journal" \
+        "-i eno1 -o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT"
     # The host-service surface guests need: DHCP and DNS to dnsmasq on vmbr0,
     # requests and replies. Without any one of these the guests never get an
     # address and every installer stalls before writing a byte.

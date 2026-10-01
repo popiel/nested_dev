@@ -121,6 +121,12 @@ iptables -F FORWARD
 # Desktop (192.168.100.100) can reach anyone on vmbr0 (SSH, X11 forwarding)
 iptables -A FORWARD -i vmbr0 -o vmbr0 -s 192.168.100.100 -j ACCEPT
 
+# LAN → desktop: the PREROUTING DNAT rules rewrite these destinations, but
+# rewritten packets still traverse FORWARD — without explicit accepts here the
+# documented SSH/RDP access is translated and then silently dropped.
+iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT
+iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT
+
 # --- Guest egress policy ---
 # FORWARD governs traffic between a VM and the LAN; the OUTPUT chain below
 # governs only the host's own traffic and does not restrict guests. MASQUERADE

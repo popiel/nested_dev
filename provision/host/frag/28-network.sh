@@ -136,7 +136,12 @@ EOF
     cat > "${ROOT}/etc/dnsmasq.d/nested_dev.conf" <<'DNSMASQ_EOF'
 # dnsmasq config for nested_dev — served on vmbr0 (192.168.100.0/24)
 interface=vmbr0
-bind-interfaces
+# Dynamic binding, not bind-at-startup: the bridge has no address and no
+# carrier when dnsmasq first starts (no guest taps attached yet), and a
+# bind-at-startup mode never picks up DHCP on an interface that appears
+# later — leaving dnsmasq answering DNS while deaf on DHCP, with every guest
+# installer stalled pre-storage and no log line saying why.
+bind-dynamic
 
 # DHCP range for ad-hoc / future VMs
 dhcp-range=192.168.100.110,192.168.100.200,255.255.255.0,12h

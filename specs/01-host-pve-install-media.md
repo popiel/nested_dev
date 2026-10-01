@@ -258,6 +258,7 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   | Host INPUT | loopback, established, SSH 2222 from LAN, SSH 22 from the desktop only, web UI 8006 from LAN, ICMP echo. Everything else dropped. |
   | Host OUTPUT | loopback, established, 443, 53, 123. Everything else dropped. |
   | FORWARD, inter-VM | the desktop may reach any `vmbr0` peer. No guest may reach the desktop, and no guest may reach another guest. |
+  | FORWARD, ingress | SSH 22 and RDP 3389 from the LAN to the desktop only. DNAT rewrites the destination but the filter still has to admit the packets — without these rules the documented remote access is translated and then dropped. |
   | FORWARD, egress | per R-00.2.6. |
   | NAT | MASQUERADE for `vmbr0` to the LAN; DNAT from the LAN for the desktop's SSH and RDP and for host SSH on 2222. |
 
@@ -306,6 +307,18 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   maximum.** PVE refuses a create whose vCPU count exceeds it, so a profile
   written for a larger host would otherwise fail on a smaller one with no
   guests created. The cap is logged when it cuts the profile down.
+* **R-01.11.12** Guest autoinstalls **complete without console interaction.**
+  The installer prompts when it finds autoinstall data without the
+  `autoinstall` kernel parameter, and a guest waiting on an invisible prompt
+  (no display device, silent serial) never installs. Seeding the parameter
+  is part of the boot configuration the fragment creates, not something
+  answered by hand per guest.
+* **R-01.11.13** Guests boot the installer **by explicit boot order, not by
+  fallthrough.** PVE passes `strict=on`, so an order naming only the empty
+  disk parks the guest at a UEFI shell instead of reaching the attached
+  installer media. The installer ISO is detached after each guest's first
+  boot completes, so a post-install reboot lands in the installed system
+  rather than looping back into the installer.
 
 ## 3. Build
 

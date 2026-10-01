@@ -339,6 +339,11 @@ main() {
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_SERVER_ISO}" "${ISO_DIR}/${UBUNTU_SERVER_ISO}"
 
     # --- VM 100: Desktop ---
+    # Boot order names the installer explicitly: PVE passes strict=on, so an
+    # order naming only the empty disk parks the guest at a UEFI shell instead
+    # of falling through to the CDROM. The installer ISO is detached after
+    # each guest's first boot completes, so a post-install reboot lands in the
+    # installed system rather than looping back into the installer.
     if ! qm status 100 >/dev/null 2>&1; then
         # An array, not a string: "--hostpci0 <value>" built as one string and
         # expanded quoted arrives at qm as a single glued argument, which PVE 9
@@ -369,7 +374,7 @@ main() {
             --ide0 "${ISO_DIR}/desktop-seed.iso,media=cdrom" \
             --efidisk0 ${GUEST_STORAGE}:1 \
             --scsi0 ${GUEST_STORAGE}:40 \
-            --boot order=scsi0
+            --boot "order=ide2;scsi0"
 
         qm start 100
         log "VM 100 (desktop) created and started: ${DESKTOP_MEM}MB, ${DESKTOP_CORES} cores, 40GB OS, MAC 52:54:00:00:01:00"
@@ -410,7 +415,7 @@ main() {
             --efidisk0 ${GUEST_STORAGE}:1 \
             --scsi0 ${GUEST_STORAGE}:80 \
             --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE} \
-            --boot order=scsi0
+            --boot "order=ide2;scsi0"
 
         if [ -n "$DGPU_IDS" ]; then
             qm set 101 --args '-cpu host,kvm=off,hidden=1'
@@ -445,7 +450,7 @@ main() {
                 --ide0 "${ISO_DIR}/dev-seed.iso,media=cdrom" \
                 --efidisk0 ${GUEST_STORAGE}:1 \
                 --scsi0 ${GUEST_STORAGE}:40 \
-                --boot order=scsi0
+                --boot "order=ide2;scsi0"
 
             qm start 102
             log "VM 102 (dev-template) created and starting for provisioning: ${DEV_MEM}MB, ${DEV_CORES} cores, 40GB OS"

@@ -67,7 +67,14 @@ separating browsing from development.
 ### R-02.2 Session
 
 * **R-02.2.1** An i3 session starts, both on the physical console through
-  lightdm and over RDP.
+  lightdm and over RDP — and it is the SAME session in both places
+  (mirrored/cloned pixels), not an extended desktop and not a second
+  session. The physical monitor is not visible from where the operator works,
+  so a remote view showing anything else is operationally equivalent to no
+  remote view. xorgxrdp alone creates separate sessions per login and does
+  not satisfy this; the remote path must scrape the physical display
+  (e.g. a VNC scrape of the console session gatewayed over RDP) or
+  equivalent.
 * **R-02.2.2** The session definition launches i3 explicitly, so an RDP session
   does not fall back to a bare X session with no window manager.
 * **R-02.2.3** The account is added to the group that xrdp requires for
