@@ -1,5 +1,10 @@
 #!/bin/bash
 # tests/e2e/stubs/iptables — records the ruleset, enforces nothing.
+# A -C (check) always reports absent: the fixture host starts with no rules,
+# so guarded appends proceed and get journaled.
 STATE="${E2E_STATE:?E2E_STATE not set}"
 printf 'iptables %s\n' "$*" >> "$STATE/journal"
+if [ "${1:-}" = "-C" ]; then
+  exit 1
+fi
 exit 0

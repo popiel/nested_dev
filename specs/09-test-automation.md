@@ -248,7 +248,7 @@ acceptance tables in each spec.
 | 00 | `invariants.bats` | Sizing baselines, guest egress policy and its firewall rules, dev range containment |
 | 01 | `build-iso.bats` | Disk validation, rendering, escaping, manifest, assistant failure detection, MSYS path handling |
 | 01 | `invariants.bats` | Answer-file shape, bootstrap placeholders |
-| 01 | `provision.bats` (e2e) | Operator account identity, password hash, `sudo` grant, key installation, no `root` credentialing |
+| 01 | `provision.bats` (e2e) | Operator account identity, password hash, `sudo` grant, key installation, no `root` credentialing, private network up before guests |
 | 01 | `frag10-iommu.bats` | Vendor detection, IOMMU flag mapping, audio companions, separability over fixture groups including the measured host layout, virtio exclusion |
 | 01 | `gpu-detect.bats` | Partitioning the accepted passthrough set by role, unknown vendors left out, missing set aborts |
 | 01 | `provision.bats` (e2e) | Control account, keypair generation, host trust pin, staged-key destruction |

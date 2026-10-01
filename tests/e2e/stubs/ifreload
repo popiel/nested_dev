@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/ifreload — records the network apply, changes nothing.
+STATE="${E2E_STATE:?E2E_STATE not set}"
+printf 'ifreload %s\n' "$*" >> "$STATE/journal"
+exit 0

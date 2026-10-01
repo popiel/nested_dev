@@ -1,10 +1,21 @@
 #!/bin/bash
 # tests/e2e/stubs/ip — a host with a physical NIC and an existing vmbr0.
+# The addr output carries the private address frag/28 assigns: the fragment
+# verifies it landed before any guest boots, so the stub represents the
+# applied state, not the pre-existing one.
 STATE="${E2E_STATE:?E2E_STATE not set}"
 if [ "${1:-}" = "-o" ]; then
-  printf '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\n'
-  printf '2: eno1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000\n'
-  exit 0
+  case "${2:-}" in
+    link)
+      printf '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\n'
+      printf '2: eno1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000\n'
+      exit 0
+      ;;
+    addr)
+      printf '3: vmbr0    inet 192.168.100.1/24 scope global vmbr0\n'
+      exit 0
+      ;;
+  esac
 fi
 printf 'ip %s\n' "$*" >> "$STATE/journal"
 exit 0

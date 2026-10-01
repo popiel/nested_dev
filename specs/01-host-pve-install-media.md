@@ -225,7 +225,15 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.9.6** `vmbr0` has no physical port. A bridge that includes the LAN
   NIC would place every VM directly on the LAN segment, which R-00.2.3
   forbids.
-* **R-01.9.7** The build manifest records the install media's checksum and the
+* **R-01.9.7** The bridge address, DHCP/DNS service, forwarding, and outbound
+  NAT exist **before any guest boots.** Guests configure networking by DHCP
+  and fetch packages and first-boot scripts from the internet during
+  installation; the installer-time network provides neither a DHCP server nor
+  a route. A guest that boots before this exists stalls without an address
+  and fails its provisioning gate after the timeout. Writing the interface
+  configuration is not enough — the run verifies the address is assigned
+  before proceeding.
+* **R-01.9.8** The build manifest records the install media's checksum and the
   resolved release reference.
 
 ### R-01.10 The host firewall is deny-by-default and per-guest

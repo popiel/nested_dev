@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# frag/90-finalize.sh — Final host configuration, networking, screening
-# Routed network: $PHYS_NIC = LAN (DHCP), vmbr0 = private (192.168.100.1/24)
-# dnsmasq on host serves DHCP/DNS to VMs on vmbr0.
+# frag/90-finalize.sh — Firewall, host naming, build record
+# The private network itself (bridge addressing, dnsmasq, forwarding, NAT) is
+# frag/28-network.sh, which runs before any guest boots: guests need DHCP, DNS
+# and egress while they install. This fragment keeps the parts that come
+# after: the filter rules with fail-closed defaults, host naming and DNS, and
+# the build record. It assumes the network is up and dies otherwise — a
+# firewall over an unaddressed bridge would filter traffic that cannot flow.
 # Idempotent. REF: __GITHUB_REF__
 set -euo pipefail
 
@@ -11,6 +15,7 @@ ROOT="${PVE_ROOT:-}"
 PROC="${PVE_PROC:-/proc}"
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
+die() { log "FATAL: $*"; exit 1; }
 
 log "=== Finalize ==="
 
@@ -32,97 +37,15 @@ else
     log "Detected physical NIC: $PHYS_NIC"
 fi
 
-# ============================================================
-# 2. Write network config — routed architecture
-# ============================================================
-mkdir -p "${ROOT}/etc/network"
-cat > "${ROOT}/etc/network/interfaces" <<EOF
-auto lo
-iface lo inet loopback
-
-# Physical NIC — LAN-facing, DHCP from external server
-auto ${PHYS_NIC}
-iface ${PHYS_NIC} inet dhcp
-
-# Private bridge — VM-facing, static IP, dnsmasq serves DHCP/DNS
-auto vmbr0
-iface vmbr0 inet static
-    address 192.168.100.1/24
-    bridge-ports none
-    bridge-stp off
-    bridge-fd 0
-EOF
-log "Network config written: ${PHYS_NIC} (DHCP) + vmbr0 (192.168.100.1/24)"
-
-# Apply networking
-if ! ip link show vmbr0 >/dev/null 2>&1; then
-    systemctl restart networking
-    log "Networking restarted"
-else
-    log "vmbr0 already exists — skipping restart"
+# The private bridge must already carry its address: frag/28 brings it up
+# before any guest boots, and filtering a bridge with no address filters
+# nothing while claiming otherwise.
+if ! ip -o addr show dev vmbr0 2>/dev/null | grep -q '192\.168\.100\.1/24'; then
+    die "vmbr0 has no 192.168.100.1/24; frag/28-network.sh did not run or did not converge"
 fi
 
 # ============================================================
-# 3. Install and configure dnsmasq
-# ============================================================
-if ! dpkg -l dnsmasq 2>/dev/null | grep -q '^ii'; then
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq
-    log "dnsmasq installed"
-fi
-
-# Write dnsmasq config (static leases + DNS for VMs)
-mkdir -p "${ROOT}/etc/dnsmasq.d"
-cat > "${ROOT}/etc/dnsmasq.d/nested_dev.conf" <<'DNSMASQ_EOF'
-# dnsmasq config for nested_dev — served on vmbr0 (192.168.100.0/24)
-interface=vmbr0
-bind-interfaces
-
-# DHCP range for ad-hoc / future VMs
-dhcp-range=192.168.100.110,192.168.100.200,255.255.255.0,12h
-
-# Default gateway and DNS for DHCP clients
-dhcp-option=option:router,192.168.100.1
-dhcp-option=option:dns-server,192.168.100.1
-
-# --- Static leases (MACs match frag/30 qm create --net0) ---
-dhcp-host=52:54:00:00:01:00,lychee,192.168.100.100
-dhcp-host=52:54:00:00:01:01,lychee-llm,192.168.100.101
-dhcp-host=52:54:00:00:01:02,lychee-dev-template,192.168.100.102
-
-# --- DNS: short names + FQDNs ---
-address=/lychee-host/192.168.100.1
-address=/lychee-host.wolfskeep.com/192.168.100.1
-address=/lychee/192.168.100.100
-address=/lychee.wolfskeep.com/192.168.100.100
-address=/lychee-llm/192.168.100.101
-address=/lychee-llm.wolfskeep.com/192.168.100.101
-address=/lychee-dev-template/192.168.100.102
-address=/lychee-dev-template.wolfskeep.com/192.168.100.102
-
-# Upstream DNS from host's DHCP-provided resolv.conf
-resolv-file=/run/resolv.conf
-DNSMASQ_EOF
-
-# Disable dnsmasq's own resolv.conf management (we provide upstream via resolv-file)
-sed -i 's|^#resolv-file=.*|resolv-file=/run/resolv.conf|' "${ROOT}/etc/dnsmasq.conf" 2>/dev/null || true
-
-systemctl enable --now dnsmasq
-log "dnsmasq configured and started"
-
-# ============================================================
-# 4. Enable IP forwarding
-# ============================================================
-mkdir -p "${ROOT}/etc/sysctl.d"
-cat > "${ROOT}/etc/sysctl.d/99-nested-dev.conf" <<'SYSCTL_EOF'
-# Enable IPv4 forwarding for routed VM network
-net.ipv4.ip_forward = 1
-SYSCTL_EOF
-sysctl -w net.ipv4.ip_forward=1
-log "IP forwarding enabled"
-
-# ============================================================
-# 5. Install iptables-persistent
+# 2. Install iptables-persistent
 # ============================================================
 if ! dpkg -l iptables-persistent 2>/dev/null | grep -q '^ii'; then
     apt-get update -qq
@@ -131,17 +54,17 @@ if ! dpkg -l iptables-persistent 2>/dev/null | grep -q '^ii'; then
 fi
 
 # ============================================================
-# 6. Apply iptables rules
+# 3. Apply iptables rules
 # ============================================================
 # LAN: 192.168.14.0/24 (external DHCP)
 # VM subnet: 192.168.100.0/24
 # $PHYS_NIC = LAN-facing interface
-
-# --- Set DROP defaults (fail-closed) ---
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT DROP
-log "Default policies set to DROP"
+#
+# Policies are set LAST, after every ACCEPT rule below. Setting DROP first
+# strands the chain — including the operator's own SSH session — in the window
+# before its exceptions exist, and a fragment that dies mid-section (as
+# observed) then leaves a half-built ruleset under fail-closed defaults with
+# no way back in except the console.
 
 # --- NAT table ---
 iptables -t nat -F PREROUTING
@@ -248,12 +171,18 @@ iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
 
 log "OUTPUT rules applied (HTTPS/DNS/NTP only)"
 
-# Save rules
+# --- Set DROP defaults (fail-closed), after every exception above ---
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
+log "Default policies set to DROP"
+
+# Save rules (after the policies, so a reboot restores fail-closed, not open)
 netfilter-persistent save
 log "iptables rules saved"
 
 # ============================================================
-# 7. Configure host DNS to use dnsmasq
+# 4. Configure host DNS to use dnsmasq
 # ============================================================
 # Point host resolver at dnsmasq (127.0.0.1) for VM name resolution
 # dnsmasq forwards external queries to upstream DNS from /run/resolv.conf
@@ -265,7 +194,7 @@ RESOLV_EOF
 log "Host DNS configured to use dnsmasq (127.0.0.1)"
 
 # ============================================================
-# 8. Write /etc/hosts with VM entries
+# 5. Write /etc/hosts with VM entries
 # ============================================================
 cat > "${ROOT}/etc/hosts" <<'HOSTS_EOF'
 127.0.0.1       localhost
@@ -279,13 +208,13 @@ HOSTS_EOF
 log "/etc/hosts updated with VM entries"
 
 # ============================================================
-# 9. Hostname
+# 6. Hostname
 # ============================================================
 hostnamectl set-hostname lychee-host.wolfskeep.com
 log "Hostname set to lychee-host.wolfskeep.com"
 
 # ============================================================
-# 10. Dev VM control (vmctl)
+# 7. Dev VM control (vmctl)
 # ============================================================
 # Ensure dnsmasq dev drop-in exists
 if [ ! -f "${ROOT}/etc/dnsmasq.d/zz-dev.conf" ]; then
@@ -307,7 +236,7 @@ EOF
 fi
 
 # ============================================================
-# 10. Record build info
+# 8. Record build info
 # ============================================================
 mkdir -p "${ROOT}/root/output"
 cat > "${ROOT}/root/output/MANIFEST" <<EOF
@@ -325,7 +254,7 @@ EOF
 log "Manifest written to ${ROOT}/root/output/MANIFEST"
 
 # ============================================================
-# 11. MOTD
+# 9. MOTD
 # ============================================================
 cat > "${ROOT}/etc/motd" <<'EOF'
 

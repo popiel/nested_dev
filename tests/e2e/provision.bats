@@ -305,6 +305,23 @@ require_run_ok() {
 
 # --- the guests ---
 
+@test "the private network is up with DHCP, DNS and egress" {
+    require_run_ok
+    # The bridge carries its address (verified by the fragment itself before
+    # any guest boots — an unapplied interfaces file fails loudly here
+    # instead of failing three guests opaquely minutes later).
+    assert_file_contains "$E2E_ROOT/etc/network/interfaces" "address 192.168.100.1/24"
+    assert_file_contains "$E2E_ROOT/etc/network/interfaces" "auto eno1"
+    assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
+        "vmbr0 carries 192.168.100.1/24"
+    # dnsmasq serves the segment and guest egress is NATed.
+    assert_file_contains "$E2E_STATE/journal" "systemctl enable --now dnsmasq"
+    assert_file_contains "$E2E_STATE/journal" \
+        "POSTROUTING -s 192.168.100.0/24 -o eno1 -j MASQUERADE"
+    assert_file_contains "$E2E_ROOT/etc/sysctl.d/99-nested-dev.conf" \
+        "net.ipv4.ip_forward = 1"
+}
+
 @test "the desktop is created with the iGPU on the checked bridge and storage" {
     require_run_ok
     local line
