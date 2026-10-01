@@ -29,10 +29,19 @@ if command -v sudo >/dev/null 2>&1; then
 else
     log "sudo not installed — installing it"
     export DEBIAN_FRONTEND=noninteractive
-    # No `apt-get update` here: frag/05 has just run it, and a second one would
-    # re-fetch every index for no reason.
-    apt-get install -y sudo \
-        || die "failed to install sudo; the operator account would have no administrative access on the host"
+    # The install is attempted first and the lists refreshed only if it fails:
+    # frag/05 has normally just run apt-get update, and re-fetching every index
+    # unconditionally would slow every re-provision for no reason. But "frag/05
+    # ran" is an ordering fact, not a guarantee — a no-op frag/05 on a host
+    # whose lists were never fetched leaves install failing on empty lists, as
+    # observed, so the retry heals exactly that case instead of dying on it.
+    if ! apt-get install -y sudo; then
+        log "install failed — refreshing package lists and retrying once"
+        apt-get update -qq \
+            || die "apt-get update failed; cannot install sudo"
+        apt-get install -y sudo \
+            || die "failed to install sudo; the operator account would have no administrative access on the host"
+    fi
 
     # `command -v` succeeding is the only claim that matters. apt can exit 0 with
     # a diverted binary, and a host where sudo is not actually on PATH produces

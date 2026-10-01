@@ -25,6 +25,10 @@ partition_passthrough_devices() {
     # DGPU_IDS as comma-joined full BDFs. A device of unrecognized vendor is
     # left to the host with a warning rather than attached to a guest whose
     # configuration was built around a different device class.
+    #
+    # Always exits 0: main() calls this as a bare statement under `set -e`,
+    # and the while loop below would otherwise return the status of whatever
+    # its last iteration happened to run.
     local list_path="$1"
     [ -s "$list_path" ] \
         || die "passthrough device list is missing or empty at ${list_path} (frag/10 did not run or accepted nothing)"
@@ -46,6 +50,7 @@ partition_passthrough_devices() {
                 log "WARNING: accepted device ${full_bdf} has unrecognized vendor '${vendor}'; leaving it to the host" ;;
         esac
     done < "$list_path"
+    return 0
 }
 
 download_iso() {

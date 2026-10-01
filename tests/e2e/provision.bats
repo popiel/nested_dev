@@ -54,8 +54,12 @@ setup_file() {
         "$ROOT/sys/bus/pci/devices" \
         "$ROOT/sys/kernel/iommu_groups/0/devices" \
         "$ROOT/sys/kernel/iommu_groups/2/devices"
-    cp "${E2E_DIR}/fixtures/enterprise.list" \
-        "$ROOT/etc/apt/sources.list.d/pve-enterprise.list"
+    cp "${E2E_DIR}/fixtures/pve-enterprise.sources" \
+        "$ROOT/etc/apt/sources.list.d/pve-enterprise.sources"
+    cp "${E2E_DIR}/fixtures/ceph.sources" \
+        "$ROOT/etc/apt/sources.list.d/ceph.sources"
+    cp "${E2E_DIR}/fixtures/debian.sources" \
+        "$ROOT/etc/apt/sources.list.d/debian.sources"
     cp "${E2E_DIR}/fixtures/meminfo" "$ROOT/proc/meminfo"
     cp "${E2E_DIR}/fixtures/grub-default" "$ROOT/etc/default/grub"
     cp "${E2E_DIR}/fixtures/fstab" "$ROOT/etc/fstab"
@@ -216,13 +220,20 @@ require_run_ok() {
 
 # --- the package repositories ---
 
-@test "the enterprise repositories are disabled and the suite is exact" {
+@test "every enterprise source is moved aside and the suite is exact" {
     require_run_ok
-    run grep -cE '^[[:space:]]*deb[[:space:]]' \
-        "$E2E_ROOT/etc/apt/sources.list.d/pve-enterprise.list"
-    [ "$output" = "0" ]
+    local srcdir="$E2E_ROOT/etc/apt/sources.list.d"
+    # Both enterprise files are moved aside under names apt ignores, not
+    # deleted: restoring a subscription is moving them back.
+    for name in pve-enterprise.sources ceph.sources; do
+        [ ! -e "$srcdir/$name" ]
+        run cmp "$srcdir/$name.disabled" "${E2E_DIR}/fixtures/$name"
+    done
+    # The plain Debian source is untouched.
+    run cmp "$srcdir/debian.sources" "${E2E_DIR}/fixtures/debian.sources"
+    # ...and the no-subscription repository is in place for the detected suite.
     run grep -xF 'deb http://download.proxmox.com/debian/pve trixie pve-no-subscription' \
-        "$E2E_ROOT/etc/apt/sources.list.d/pve-no-subscription.list"
+        "$srcdir/pve-no-subscription.list"
 }
 
 @test "no package operation ran against the 401 repositories" {

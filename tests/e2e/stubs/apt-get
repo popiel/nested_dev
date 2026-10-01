@@ -1,16 +1,44 @@
 #!/bin/bash
 # tests/e2e/stubs/apt-get — a package manager with the real host's disease.
 #
-# `apt-get update` fails exactly like the PVE enterprise repository does
-# without a subscription (exit 100, 401 on stderr) for as long as the
-# enterprise list has an enabled entry, and succeeds once frag/05 has repaired
-# it. That ordering is not asserted anywhere in the tests; it emerges from the
-# environment. Any fragment — or the bootstrap — that calls apt before the
-# repair aborts the run, which is what happens on the real host.
+# `apt-get update` fails exactly like the PVE enterprise repositories do
+# without a subscription (exit 100, 401 on stderr) for as long as any enabled
+# enterprise entry exists, in either source format, and succeeds once frag/05
+# has moved them aside. That ordering is not asserted anywhere in the tests; it
+# emerges from the environment. Any fragment — or the bootstrap — that calls
+# apt before the repair aborts the run, which is what happens on the real host.
 STATE="${E2E_STATE:?E2E_STATE not set}"
 ROOT="${PVE_ROOT:?PVE_ROOT not set}"
 MOCKBIN="${E2E_MOCKBIN:?E2E_MOCKBIN not set}"
 printf 'apt-get %s\n' "$*" >> "$STATE/apt-journal"
+enterprise_enabled() {
+    # Mirrors what apt itself consults: an enabled enterprise entry in any
+    # source file, in either the one-line or the DEB822 format. Independent
+    # of frag/05's own detection on purpose — if both agree the tripwire is
+    # silent, and if they disagree the run fails loudly either way.
+    local f
+    for f in "${ROOT}/etc/apt/sources.list" "${ROOT}/etc/apt/sources.list.d/"*.list; do
+        [ -f "$f" ] || continue
+        if grep -E '^[[:space:]]*deb[[:space:]]' "$f" 2>/dev/null \
+            | grep -q 'enterprise\.proxmox\.com'; then
+            return 0
+        fi
+    done
+    for f in "${ROOT}/etc/apt/sources.list.d/"*.sources; do
+        [ -f "$f" ] || continue
+        if awk '
+            BEGIN { enterprise = 0; enabled = 1 }
+            /^[[:space:]]*$/ { enterprise = 0; enabled = 1; next }
+            /^[[:space:]]*#/ { next }
+            /enterprise\.proxmox\.com/ { enterprise = 1 }
+            /^[[:space:]]*[Ee]nabled:[[:space:]]*(no|false|0)([[:space:]]|$)/ { enabled = 0 }
+            END { exit !(enterprise && enabled) }
+        ' "$f"; then
+            return 0
+        fi
+    done
+    return 1
+}
 case " $* " in
   *" install"*)
     # Installing a package makes its binary appear. Each installed name gets a
@@ -28,8 +56,7 @@ case " $* " in
 esac
 case " $* " in
   *" update"*)
-    if grep -qE '^[[:space:]]*deb[[:space:]]' \
-        "${ROOT}/etc/apt/sources.list.d/pve-enterprise.list" 2>/dev/null; then
+    if enterprise_enabled; then
       echo "E: Failed to fetch https://enterprise.proxmox.com/debian/pve/dists/trixie/InRelease 401 Unauthorized [IP: 66.70.154.82 443]" >&2
       echo "E: The repository 'https://enterprise.proxmox.com/debian/pve trixie InRelease' is not signed." >&2
       printf 'apt-get %s -> 100\n' "$*" >> "$STATE/apt-journal"
