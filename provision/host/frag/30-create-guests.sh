@@ -306,8 +306,15 @@ main() {
 
         echo "instance-id: ${guest}-$(date +%s)" > "${SEED_DIR}/${guest}-meta-data"
 
+        # NoCloud discovers exactly `user-data` and `meta-data` at the ISO
+        # root. Passing the files bare bakes them in under their on-disk
+        # basenames (`desktop-user-data`), which cloud-init ignores — the
+        # installer then goes interactive and waits forever while the
+        # provisioning gate times out on a guest that never started. The
+        # graft maps each file to the name the datasource looks for.
         genisoimage -r -V cidata -joliet-long -o "${ISO_DIR}/${guest}-seed.iso" \
-            "$SEED_FILE" "${SEED_DIR}/${guest}-meta-data" 2>/dev/null
+            -graft-points "user-data=${SEED_FILE}" "meta-data=${SEED_DIR}/${guest}-meta-data" \
+            2>/dev/null
 
         log "NoCloud seed prepared: ${guest}"
     done
@@ -443,7 +450,7 @@ main() {
             qm start 102
             log "VM 102 (dev-template) created and starting for provisioning: ${DEV_MEM}MB, ${DEV_CORES} cores, 40GB OS"
 
-            PROVISIONING_TIMEOUT=600
+            PROVISIONING_TIMEOUT=1800
             elapsed=0
             log "Provisioning gate: waiting for VM 102 first-boot (timeout: ${PROVISIONING_TIMEOUT}s)"
             while [ $elapsed -lt $PROVISIONING_TIMEOUT ]; do
@@ -456,7 +463,17 @@ main() {
                 sleep 10
                 elapsed=$((elapsed + 10))
                 if [ $((elapsed % 60)) -eq 0 ]; then
-                    log "Provisioning gate: ${elapsed}s elapsed..."
+                    # Say which phase it is stuck in, if it is stuck: the
+                    # installer has no guest agent by design, so silence from
+                    # the agent means autoinstall is still running, while an
+                    # answering agent with no completion marker means
+                    # dev-firstboot.sh (docker install + four image pulls) is
+                    # the long pole.
+                    if qm agent 102 ping >/dev/null 2>&1; then
+                        log "Provisioning gate: ${elapsed}s elapsed... (installed system up, dev-firstboot running)"
+                    else
+                        log "Provisioning gate: ${elapsed}s elapsed... (installer phase, no agent by design)"
+                    fi
                 fi
             done
 

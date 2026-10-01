@@ -420,6 +420,13 @@ require_run_ok() {
     for guest in desktop llm dev; do
         run grep -c "template/iso/${guest}-seed.iso" "$E2E_STATE/journal"
         [ "$output" = "2" ]
+        # ...and mapped to the exact names NoCloud discovers. Bare file args
+        # bake in on-disk basenames (`desktop-user-data`) that cloud-init
+        # ignores, leaving the installer interactive forever.
+        run grep -c " user-data=.*${guest}-user-data" "$E2E_STATE/journal"
+        [ "$output" = "2" ]
+        run grep -c " meta-data=.*${guest}-meta-data" "$E2E_STATE/journal"
+        [ "$output" = "2" ]
     done
 }
 
