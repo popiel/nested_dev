@@ -36,6 +36,7 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
 # progress; exiting non-zero would fail the run that did nothing wrong.
 LOCK_FILE="${ROOT}/run/lock/pve-firstboot.lock"
 COMPLETE_MARKER="${ROOT}/var/lib/pve-firstboot/complete"
+REBOOT_MARKER="${ROOT}/var/lib/pve-firstboot/rebooted"
 
 mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$COMPLETE_MARKER")"
 
@@ -60,6 +61,30 @@ for frag in "$FRAG_DIR"/*.sh; do
         exit 1
     fi
     log "--- $(basename "$frag") OK ---"
+
+    # --- reboot to activate the vfio-pci binding, exactly once ---
+    # frag/10 writes the GRUB cmdline, modprobe config and initramfs that bind
+    # the passthrough devices — but all three take effect at boot, and nothing
+    # unbinds the host driver live. A guest started before that reboot fails
+    # attaching hardware the host kernel still holds. So the run reboots after
+    # the network is up (frag/28, the last thing needed before guests) and the
+    # still-enabled unit resumes the run after boot; every fragment is
+    # idempotent, so the post-boot pass is fast no-ops up to frag/30.
+    #
+    # Suppressed under PVE_ROOT: the test harness must observe the marker and
+    # the continuation, not reboot the machine running the tests.
+    if [[ "$frag" == */28-network.sh ]] && [ ! -f "$REBOOT_MARKER" ]; then
+        date -Is > "$REBOOT_MARKER"
+        if [ -z "${PVE_ROOT:-}" ]; then
+            log "rebooting once to activate the vfio-pci binding; provisioning resumes after boot"
+            systemctl reboot
+            sleep 60
+            log "ERROR: reboot was requested but the machine is still up"
+            exit 1
+        else
+            log "(reboot suppressed: PVE_ROOT is set)"
+        fi
+    fi
 done
 
 date -Is > "$COMPLETE_MARKER"

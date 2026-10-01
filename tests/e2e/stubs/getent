@@ -1,4 +1,10 @@
 #!/bin/bash
-# tests/e2e/stubs/getent — nobody exists on the fixture host. Every account and
-# group the provisioner looks up is absent, so every creation branch runs.
+# tests/e2e/stubs/getent — the fixture host's resolver works, but nobody
+# exists in its account database. `getent hosts <name>` answers (used by the
+# upstream-connectivity gate); every passwd/group lookup fails, so every
+# account-creation branch runs.
+if [ "${1:-}" = "hosts" ]; then
+    printf '93.184.216.34 %s\n' "${2:-localhost}"
+    exit 0
+fi
 exit 2

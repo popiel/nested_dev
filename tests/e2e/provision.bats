@@ -314,12 +314,28 @@ require_run_ok() {
     assert_file_contains "$E2E_ROOT/etc/network/interfaces" "auto eno1"
     assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
         "vmbr0 carries 192.168.100.1/24"
+    # The LAN side is re-verified after the reconfiguration: the DHCP renewal
+    # races the first apt call, which otherwise fails on every repository.
+    assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
+        "upstream connectivity confirmed"
     # dnsmasq serves the segment and guest egress is NATed.
     assert_file_contains "$E2E_STATE/journal" "systemctl enable --now dnsmasq"
     assert_file_contains "$E2E_STATE/journal" \
         "POSTROUTING -s 192.168.100.0/24 -o eno1 -j MASQUERADE"
     assert_file_contains "$E2E_ROOT/etc/sysctl.d/99-nested-dev.conf" \
         "net.ipv4.ip_forward = 1"
+}
+
+@test "the run reboots once to activate the vfio binding, then resumes" {
+    require_run_ok
+    # GRUB cmdline, modprobe config and initramfs all take effect at boot, and
+    # nothing unbinds the host driver live: a guest started before that reboot
+    # fails attaching hardware the host kernel still holds.
+    [ -f "$E2E_ROOT/var/lib/pve-firstboot/rebooted" ]
+    # Suppressed under PVE_ROOT — the harness observes the marker and the
+    # continuation, not an actual reboot of the test machine.
+    assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
+        "(reboot suppressed: PVE_ROOT is set)"
 }
 
 @test "the desktop is created with the iGPU on the checked bridge and storage" {

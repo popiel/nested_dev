@@ -2,8 +2,10 @@
 # tests/e2e/stubs/ip — a host with a physical NIC and an existing vmbr0.
 # The addr output carries the private address frag/28 assigns: the fragment
 # verifies it landed before any guest boots, so the stub represents the
-# applied state, not the pre-existing one.
-STATE="${E2E_STATE:?E2E_STATE not set}"
+# applied state, not the pre-existing one. The route output feeds the
+# upstream-connectivity gate the same way.
+# E2E_STATE is resolved lazily so the canned branches work without a journal
+# (unit tests reuse this stub without the full harness).
 if [ "${1:-}" = "-o" ]; then
   case "${2:-}" in
     link)
@@ -17,5 +19,10 @@ if [ "${1:-}" = "-o" ]; then
       ;;
   esac
 fi
+if [ "${1:-}" = "route" ]; then
+  printf 'default via 192.168.14.1 dev eno1 proto dhcp metric 100\n'
+  exit 0
+fi
+STATE="${E2E_STATE:?E2E_STATE not set}"
 printf 'ip %s\n' "$*" >> "$STATE/journal"
 exit 0

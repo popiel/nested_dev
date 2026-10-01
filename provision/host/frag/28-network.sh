@@ -22,21 +22,40 @@ ROOT="${PVE_ROOT:-}"
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> "${ROOT}/var/log/pve-firstboot.log"; }
 die() { log "FATAL: $*"; exit 1; }
 
-log "=== Private network setup ==="
+# --- Pure functions (testable via source-guard) ---
 
-# ============================================================
-# 1. Detect physical NIC
-# ============================================================
-PHYS_NIC=$(ip -o link show | awk -F': ' '{print $2}' | grep -v -E 'lo|vmbr|docker|veth|br-' | head -1)
-[ -n "$PHYS_NIC" ] \
-    || die "no physical NIC detected; cannot build the private network"
-log "Physical NIC: $PHYS_NIC"
+wait_for_upstream() {
+    # The LAN NIC was just reconfigured, so its DHCP lease is renewing and the
+    # first apt call below races it: every repository fails at once ("no longer
+    # has a Release file") even though the configuration is correct. Gate on a
+    # default route plus a working resolver instead of assuming instant link.
+    # Timeout in seconds; sleeps in 5s polls.
+    local timeout="$1" waited=0
+    log "waiting for upstream connectivity (default route + DNS)"
+    while [ "$waited" -lt "$timeout" ]; do
+        if ip route show default 2>/dev/null | grep -q . \
+            && getent hosts deb.debian.org >/dev/null 2>&1; then
+            log "upstream connectivity confirmed"
+            return 0
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    die "no upstream connectivity ${timeout}s after applying the network config; check the LAN DHCP on ${PHYS_NIC:-unknown}"
+}
 
-# ============================================================
-# 2. Write network config and apply it — routed architecture
-# ============================================================
-mkdir -p "${ROOT}/etc/network"
-cat > "${ROOT}/etc/network/interfaces" <<EOF
+main() {
+    log "=== Private network setup ==="
+
+    # --- 1. Detect physical NIC ---
+    PHYS_NIC=$(ip -o link show | awk -F': ' '{print $2}' | grep -v -E 'lo|vmbr|docker|veth|br-' | head -1)
+    [ -n "$PHYS_NIC" ] \
+        || die "no physical NIC detected; cannot build the private network"
+    log "Physical NIC: $PHYS_NIC"
+
+    # --- 2. Write network config and apply it — routed architecture ---
+    mkdir -p "${ROOT}/etc/network"
+    cat > "${ROOT}/etc/network/interfaces" <<EOF
 auto lo
 iface lo inet loopback
 
@@ -52,37 +71,38 @@ iface vmbr0 inet static
     bridge-stp off
     bridge-fd 0
 EOF
-log "Network config written: ${PHYS_NIC} (DHCP) + vmbr0 (192.168.100.1/24)"
+    log "Network config written: ${PHYS_NIC} (DHCP) + vmbr0 (192.168.100.1/24)"
 
-# Writing the file is not bringing the network up: until the address is
-# assigned, dnsmasq below binds nothing and every guest that boots has no
-# gateway and no resolver. Prefer the differential apply; fall back to the
-# full restart where ifupdown2 is absent. Either way the address is verified
-# afterwards — an unapplied file fails this fragment loudly instead of failing
-# three guests opaquely minutes later.
-if command -v ifreload >/dev/null 2>&1; then
-    ifreload -a || die "ifreload failed to apply the network config"
-else
-    systemctl restart networking || die "networking restart failed"
-fi
+    # Writing the file is not bringing the network up: until the address is
+    # assigned, dnsmasq below binds nothing and every guest that boots has no
+    # gateway and no resolver. Prefer the differential apply; fall back to the
+    # full restart where ifupdown2 is absent. Either way the address is verified
+    # afterwards — an unapplied file fails this fragment loudly instead of
+    # failing three guests opaquely minutes later.
+    if command -v ifreload >/dev/null 2>&1; then
+        ifreload -a || die "ifreload failed to apply the network config"
+    else
+        systemctl restart networking || die "networking restart failed"
+    fi
 
-if ! ip -o addr show dev vmbr0 2>/dev/null | grep -q '192\.168\.100\.1/24'; then
-    die "vmbr0 has no 192.168.100.1/24 after applying the network config; guests would boot with no gateway or DNS"
-fi
-log "vmbr0 carries 192.168.100.1/24"
+    if ! ip -o addr show dev vmbr0 2>/dev/null | grep -q '192\.168\.100\.1/24'; then
+        die "vmbr0 has no 192.168.100.1/24 after applying the network config; guests would boot with no gateway or DNS"
+    fi
+    log "vmbr0 carries 192.168.100.1/24"
 
-# ============================================================
-# 3. Install and configure dnsmasq
-# ============================================================
-if ! dpkg -l dnsmasq 2>/dev/null | grep -q '^ii'; then
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq
-    log "dnsmasq installed"
-fi
+    # --- 2b. Wait for the LAN side to come back before any apt call ---
+    wait_for_upstream 120
 
-# Write dnsmasq config (static leases + DNS for VMs)
-mkdir -p "${ROOT}/etc/dnsmasq.d"
-cat > "${ROOT}/etc/dnsmasq.d/nested_dev.conf" <<'DNSMASQ_EOF'
+    # --- 3. Install and configure dnsmasq ---
+    if ! dpkg -l dnsmasq 2>/dev/null | grep -q '^ii'; then
+        apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq
+        log "dnsmasq installed"
+    fi
+
+    # Write dnsmasq config (static leases + DNS for VMs)
+    mkdir -p "${ROOT}/etc/dnsmasq.d"
+    cat > "${ROOT}/etc/dnsmasq.d/nested_dev.conf" <<'DNSMASQ_EOF'
 # dnsmasq config for nested_dev — served on vmbr0 (192.168.100.0/24)
 interface=vmbr0
 bind-interfaces
@@ -113,28 +133,31 @@ address=/lychee-dev-template.wolfskeep.com/192.168.100.102
 resolv-file=/run/resolv.conf
 DNSMASQ_EOF
 
-# Disable dnsmasq's own resolv.conf management (we provide upstream via resolv-file)
-sed -i 's|^#resolv-file=.*|resolv-file=/run/resolv.conf|' "${ROOT}/etc/dnsmasq.conf" 2>/dev/null || true
+    # Disable dnsmasq's own resolv.conf management (we provide upstream via resolv-file)
+    sed -i 's|^#resolv-file=.*|resolv-file=/run/resolv.conf|' "${ROOT}/etc/dnsmasq.conf" 2>/dev/null || true
 
-systemctl enable --now dnsmasq
-log "dnsmasq configured and started"
+    systemctl enable --now dnsmasq
+    log "dnsmasq configured and started"
 
-# ============================================================
-# 4. Enable IP forwarding and guest egress
-# ============================================================
-mkdir -p "${ROOT}/etc/sysctl.d"
-cat > "${ROOT}/etc/sysctl.d/99-nested-dev.conf" <<'SYSCTL_EOF'
+    # --- 4. Enable IP forwarding and guest egress ---
+    mkdir -p "${ROOT}/etc/sysctl.d"
+    cat > "${ROOT}/etc/sysctl.d/99-nested-dev.conf" <<'SYSCTL_EOF'
 # Enable IPv4 forwarding for routed VM network
 net.ipv4.ip_forward = 1
 SYSCTL_EOF
-sysctl -w net.ipv4.ip_forward=1
-log "IP forwarding enabled"
+    sysctl -w net.ipv4.ip_forward=1
+    log "IP forwarding enabled"
 
-# MASQUERADE now; the filter table (including DROP defaults) is frag/90's,
-# after the guests. Guarded rather than flushed: this runs on every
-# re-provision and must not stack duplicate rules.
-iptables -t nat -C POSTROUTING -s 192.168.100.0/24 -o "$PHYS_NIC" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o "$PHYS_NIC" -j MASQUERADE
-log "Guest egress NAT in place"
+    # MASQUERADE now; the filter table (including DROP defaults) is frag/90's,
+    # after the guests. Guarded rather than flushed: this runs on every
+    # re-provision and must not stack duplicate rules.
+    iptables -t nat -C POSTROUTING -s 192.168.100.0/24 -o "$PHYS_NIC" -j MASQUERADE 2>/dev/null \
+        || iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o "$PHYS_NIC" -j MASQUERADE
+    log "Guest egress NAT in place"
 
-log "=== Private network setup complete ==="
+    log "=== Private network setup complete ==="
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

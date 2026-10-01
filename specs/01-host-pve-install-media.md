@@ -200,6 +200,14 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   creation instead of creating guests with silently absent hardware.
 * **R-01.7.5** A device with no IOMMU group at all is not passed through. IOMMU
   being off in the running kernel is not a passing result.
+* **R-01.7.6** The host **reboots once, after the network is up and before any
+  guest starts, and provisioning resumes after boot.** The GRUB cmdline, the
+  modprobe binding and the initramfs all take effect at boot, and nothing
+  unbinds the host driver live — a guest started first fails attaching
+  hardware the host kernel still holds. The reboot happens exactly once per
+  provisioning (a marker, not a counter in memory, since memory does not
+  survive it), and every fragment is idempotent so the post-boot pass is fast
+  no-ops up to guest creation.
 
 ### R-01.8 The host overcommits memory safely
 
@@ -226,7 +234,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   NIC would place every VM directly on the LAN segment, which R-00.2.3
   forbids.
 * **R-01.9.7** The bridge address, DHCP/DNS service, forwarding, and outbound
-  NAT exist **before any guest boots.** Guests configure networking by DHCP
+  NAT exist **before any guest boots**, and upstream connectivity (a default
+  route plus a working resolver) is verified after the LAN reconfiguration
+  before any package operation. Guests configure networking by DHCP
   and fetch packages and first-boot scripts from the internet during
   installation; the installer-time network provides neither a DHCP server nor
   a route. A guest that boots before this exists stalls without an address
