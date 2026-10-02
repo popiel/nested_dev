@@ -54,6 +54,14 @@ setup_file() {
         "$ROOT/sys/bus/pci/devices" \
         "$ROOT/sys/kernel/iommu_groups/0/devices" \
         "$ROOT/sys/kernel/iommu_groups/2/devices"
+    # PVE manages root's keys as a symlink into pmxcfs (dangling here, as on
+    # a host whose cluster filesystem is down): frag/25 must convert it to a
+    # real file and merge the cluster store, or the run dies touching it.
+    mkdir -p "$ROOT/etc/pve/priv" "$ROOT/root/.ssh"
+    printf 'ssh-ed25519 E2EPUB-cluster_root e2e@test\n' \
+        > "$ROOT/etc/pve/priv/authorized_keys"
+    ln -s "$ROOT/etc/pve/priv/authorized_keys" \
+        "$ROOT/root/.ssh/authorized_keys"
     cp "${E2E_DIR}/fixtures/pve-enterprise.sources" \
         "$ROOT/etc/apt/sources.list.d/pve-enterprise.sources"
     cp "${E2E_DIR}/fixtures/ceph.sources" \
@@ -513,6 +521,20 @@ require_run_ok() {
     assert_file_contains "$E2E_ROOT/root/.ssh/authorized_keys" \
         'from="192.168.100.100",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 E2EPUB-guest_id_ed25519'
     [ -f "$E2E_ROOT/etc/dnsmasq.d/zz-dev.conf" ]
+}
+
+@test "root's authorized_keys is a real file carrying cluster and guest keys" {
+    require_run_ok
+    # A symlink into pmxcfs dangles whenever pve-cluster is down, costing
+    # root key auth (and the run itself, touching the path) exactly when
+    # access matters most. Converted once, merged every run, deduplicated by
+    # content — so the cluster canary appears exactly once across runs.
+    [ -f "$E2E_ROOT/root/.ssh/authorized_keys" ]
+    [ ! -L "$E2E_ROOT/root/.ssh/authorized_keys" ] || {
+        echo "root authorized_keys is still a symlink" >&2; return 1
+    }
+    run grep -c "E2EPUB-cluster_root" "$E2E_ROOT/root/.ssh/authorized_keys"
+    [ "$output" = "1" ]
 }
 
 @test "the first-boot unit is installed and the run is marked complete" {

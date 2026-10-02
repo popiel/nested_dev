@@ -146,8 +146,32 @@ fi
 # host access from the desktop silently breaks while the key is still present.
 GUEST_ID_PUB=$(cat "${GUEST_ID_KEY_DIR}/guest_id_ed25519.pub")
 ROOT_AUTH_KEYS="${ROOT}/root/.ssh/authorized_keys"
+CLUSTER_AUTH_KEYS="${ROOT}/etc/pve/priv/authorized_keys"
 mkdir -p "${ROOT}/root/.ssh"
 chmod 700 "${ROOT}/root/.ssh"
+# A real file, never PVE's symlink into pmxcfs. When pve-cluster is down the
+# link dangles: root loses key auth entirely (sshd reads zero keys through
+# it) and even touching the path fails with ENOENT — exactly when access
+# matters most. Convert once, preserving whatever the link resolves to, then
+# merge the cluster store on every run so keys added cluster-side are never
+# lost. Local extras are never removed: revoking a key means editing the real
+# file, not the cluster store.
+if [ -L "$ROOT_AUTH_KEYS" ]; then
+    LINK_CONTENT="$(cat "$ROOT_AUTH_KEYS" 2>/dev/null || true)"
+    rm -f "$ROOT_AUTH_KEYS"
+    if [ -n "$LINK_CONTENT" ]; then
+        printf '%s\n' "$LINK_CONTENT" > "$ROOT_AUTH_KEYS"
+    fi
+    log "replaced authorized_keys symlink with a real file (degraded-mode SSH)"
+fi
+if [ -r "$CLUSTER_AUTH_KEYS" ]; then
+    while IFS= read -r keyline || [ -n "$keyline" ]; do
+        [ -n "$keyline" ] || continue
+        grep -qF -- "$keyline" "$ROOT_AUTH_KEYS" 2>/dev/null \
+            || printf '%s\n' "$keyline" >> "$ROOT_AUTH_KEYS"
+    done < "$CLUSTER_AUTH_KEYS"
+    log "merged cluster authorized_keys"
+fi
 touch "$ROOT_AUTH_KEYS"
 chmod 600 "$ROOT_AUTH_KEYS"
 # grep on the key body only, so re-running does not append a duplicate entry.
