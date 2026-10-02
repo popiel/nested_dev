@@ -78,3 +78,43 @@ load '../lib/helpers'
     run iptables-restore --test < "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"
     [ "$status" -eq 0 ]
 }
+
+@test "every DNAT has a filter admission for its rewritten tuple" {
+    # NAT rewrites before the filter runs, so a DNAT is only as good as the
+    # rule admitting the REWRITTEN destination — never the original port.
+    # Both rule sources are checked: the fragment applying the live state and
+    # the reference the boot restore uses. Line continuations are joined
+    # first, so multi-line rules match as one.
+    local file joined ip port
+    for file in "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
+                "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"; do
+        joined="$(sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta' "$file")"
+        while read -r ip port; do
+            [ -n "$ip" ] || continue
+            printf '%s\n' "$joined" \
+                | grep -qE -- "-d ${ip} .*--dport ${port} .*-j ACCEPT" || {
+                echo "$file: DNAT to ${ip}:${port} admits nothing for the rewritten tuple" >&2
+                return 1
+            }
+        done < <(printf '%s\n' "$joined" \
+            | grep -oE -- '--to-destination [0-9.]+:[0-9]+' \
+            | sed -E 's/--to-destination ([0-9.]+):([0-9]+)/\1 \2/')
+    done
+}
+
+@test "no DNAT targets the host itself" {
+    # Host services are served by listening (sshd on 2222), never by
+    # DNAT-to-self: the filter sees the rewritten port, so the admitting rule
+    # for the original port can never match — host SSH from the LAN never
+    # admitted a connection under that combination, in any topology.
+    local file
+    for file in "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
+                "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"; do
+        # The trailing colon matters: without it 192.168.100.1 also matches
+        # the desktop's 192.168.100.100.
+        if grep -q -- "DNAT --to-destination 192.168.100.1:" "$file"; then
+            echo "$file: DNAT-to-self for host SSH is back" >&2
+            return 1
+        fi
+    done
+}
