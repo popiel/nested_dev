@@ -178,8 +178,10 @@ EOF
     # Write dnsmasq config (static leases + DNS for VMs)
     mkdir -p "${ROOT}/etc/dnsmasq.d"
     cat > "${ROOT}/etc/dnsmasq.d/nested_dev.conf" <<'DNSMASQ_EOF'
-# dnsmasq config for nested_dev — served on vmbr0 (192.168.100.0/24)
+# dnsmasq config for nested_dev — served on vmbr0 (192.168.100.0/24),
+# plus localhost: frag/90 points the host's own resolv.conf at 127.0.0.1.
 interface=vmbr0
+interface=lo
 # Dynamic binding, not bind-at-startup: the bridge has no address and no
 # carrier when dnsmasq first starts (no guest taps attached yet), and a
 # bind-at-startup mode never picks up DHCP on an interface that appears

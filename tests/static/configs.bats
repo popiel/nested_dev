@@ -38,6 +38,21 @@ load '../lib/helpers'
     [ "$status" -eq 0 ]
 }
 
+@test "dnsmasq listens where the host resolver points" {
+    # frag/90 writes nameserver 127.0.0.1 into /etc/resolv.conf (pinned by the
+    # e2e), so a dnsmasq bound to vmbr0 alone leaves every guest resolving
+    # fine while the host itself cannot resolve anything. Both dnsmasq
+    # sources — the reference config and the heredoc frag/28 installs — must
+    # bind localhost as well as the bridge.
+    assert_file_contains "${PROJECT_ROOT}/provision/network/dnsmasq.conf" \
+        'interface=lo'
+    local heredoc
+    heredoc="$(sed -n "/nested_dev.conf.*DNSMASQ_EOF/,/^DNSMASQ_EOF$/p" \
+        "${PROJECT_ROOT}/provision/host/frag/28-network.sh")"
+    [ -n "$heredoc" ] || { echo "frag/28 dnsmasq heredoc not found" >&2; return 1; }
+    assert_contains "$heredoc" 'interface=lo'
+}
+
 @test "iptables-forwarding.conf passes iptables-restore --test" {
     require_command iptables-restore
     run iptables-restore --test < "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"
