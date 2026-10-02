@@ -242,16 +242,27 @@ log "Host DNS configured to use dnsmasq (127.0.0.1)"
 # ============================================================
 # 5. Write /etc/hosts with VM entries
 # ============================================================
-cat > "${ROOT}/etc/hosts" <<'HOSTS_EOF'
+# The node itself resolves to its LAN address — never loopback. pmxcfs
+# refuses to start when the node name resolves to 127.x (it needs a
+# non-loopback identity for the node), so the Debian 127.0.1.1 convention
+# bricks every reboot: the first boot works (the installer wrote a real
+# entry), this file clobbers it, and pve-cluster can never restart. Derive
+# the address from the detected LAN NIC; fail loudly with no address, since
+# nothing downstream of a missing LAN address can succeed either.
+NODE_IP="$(ip -o addr show dev "$PHYS_NIC" 2>/dev/null \
+    | awk -v nic="$PHYS_NIC" '$2 == nic && $3 == "inet" {split($4, a, "/"); print a[1]; exit}')"
+[ -n "$NODE_IP" ] || die "no IPv4 address on ${PHYS_NIC} — cannot write node hosts entry"
+cat > "${ROOT}/etc/hosts" <<HOSTS_EOF
 127.0.0.1       localhost
-127.0.1.1       lychee-host.wolfskeep.com lychee-host
+
+${NODE_IP} lychee-host.wolfskeep.com lychee-host
 
 # VM static entries (MACs match frag/30 qm create --net0)
 192.168.100.100 lychee.wolfskeep.com lychee
 192.168.100.101 lychee-llm.wolfskeep.com lychee-llm
 192.168.100.102 lychee-dev-template.wolfskeep.com lychee-dev-template
 HOSTS_EOF
-log "/etc/hosts updated with VM entries"
+log "/etc/hosts updated with VM entries (node=${NODE_IP})"
 
 # ============================================================
 # 6. Hostname

@@ -554,6 +554,14 @@ require_run_ok() {
     [ "$output" = "3" ]
     assert_file_contains "$E2E_ROOT/etc/resolv.conf" "nameserver 127.0.0.1"
     assert_file_contains "$E2E_ROOT/etc/hosts" "192.168.100.100 lychee.wolfskeep.com lychee"
+    # The node itself resolves to its detected LAN address — never loopback.
+    # pmxcfs refuses to start when the node name resolves to 127.x, so a
+    # 127.0.1.1 line here bricks every reboot (first boot works off the
+    # installer's entry, then this file clobbers it).
+    assert_file_contains "$E2E_ROOT/etc/hosts" \
+        "192.168.14.52 lychee-host.wolfskeep.com lychee-host"
+    run grep -c "127.0.1.1" "$E2E_ROOT/etc/hosts"
+    [ "$output" = "0" ]
     [ -f "$E2E_ROOT/root/output/MANIFEST" ]
     [ -f "$E2E_ROOT/etc/motd" ]
     assert_file_contains "$E2E_STATE/journal" "iptables -P INPUT DROP"

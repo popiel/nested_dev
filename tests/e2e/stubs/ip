@@ -15,6 +15,7 @@ if [ "${1:-}" = "-o" ]; then
       ;;
     addr)
       printf '3: vmbr0    inet 192.168.100.1/24 scope global vmbr0\n'
+      printf '2: eno1    inet 192.168.14.52/24 brd 192.168.14.255 scope global dynamic eno1\n'
       exit 0
       ;;
   esac
