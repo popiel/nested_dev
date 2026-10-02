@@ -226,7 +226,11 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   fully-qualified form.
 * **R-01.9.3** Upstream DNS is taken from the host's resolver at provision
   time, written to `/run/resolv.conf` for dnsmasq from the DHCP lease, and
-  the host then resolves through dnsmasq. An empty server list aborts instead
+  the host then resolves through dnsmasq. Public resolvers are configured as
+  a last-resort fallback tier only — the LAN resolver may be unreachable or
+  incorrect (observed: answering TCP/53 while blackholing UDP/53, which
+  dnsmasq requires), and the lasting fix for that is the LAN equipment, not
+  this repository. An empty server list aborts instead
   of starting dnsmasq deaf. Guests never depend on the
   LAN's resolver being reachable or correct.
 * **R-01.9.4** The LAN-facing NIC is detected rather than assumed, and the
