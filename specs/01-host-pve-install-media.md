@@ -326,6 +326,11 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   installer media. The installer ISO is detached after each guest's first
   boot completes, so a post-install reboot lands in the installed system
   rather than looping back into the installer.
+* **R-01.11.14** The server guests keep an emulated display. Headless fleet
+  VMs gain nothing from it day to day, but every blind debugging session
+  costs hours for want of a console, and an emulated VGA costs essentially
+  nothing to carry. The desktop keeps none: its passed-through iGPU is its
+  console (R-02.3.4), and a second GPU would muddy which head is primary.
 
 ## 3. Build
 

@@ -344,6 +344,13 @@ main() {
     # of falling through to the CDROM. The installer ISO is detached after
     # each guest's first boot completes, so a post-install reboot lands in the
     # installed system rather than looping back into the installer.
+    #
+    # No emulated display: the passed-through iGPU is this guest's console
+    # (R-02.3.4), and a second GPU would muddy which head is primary. The
+    # server guests below keep one: headless fleet VMs gain nothing from it
+    # day to day, but every blind debugging session on this project has cost
+    # hours for want of a console, and an emulated VGA costs essentially
+    # nothing to carry.
     if ! qm status 100 >/dev/null 2>&1; then
         # An array, not a string: "--hostpci0 <value>" built as one string and
         # expanded quoted arrives at qm as a single glued argument, which PVE 9
@@ -406,7 +413,7 @@ main() {
             --ostype l26 \
             --bios ovmf \
             --machine q35 \
-            --vga none \
+            --vga std \
             --serial0 socket \
             --agent enabled=1 \
             ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
@@ -443,7 +450,7 @@ main() {
                 --ostype l26 \
                 --bios ovmf \
                 --machine q35 \
-                --vga none \
+                --vga std \
                 --serial0 socket \
                 --agent enabled=1 \
                 --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \

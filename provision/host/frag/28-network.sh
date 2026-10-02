@@ -218,7 +218,13 @@ DNSMASQ_EOF
 
     populate_upstream_resolvers
 
-    systemctl enable --now dnsmasq
+    # Restart unconditionally, not enable --now: --now is a no-op on an
+    # already-active service, so a changed config file would never take
+    # effect on re-runs (leases persist across the ~1s blip; clients retry
+    # transparently). A silently stale dnsmasq is how DHCP dies with the
+    # service still "active".
+    systemctl enable dnsmasq
+    systemctl restart dnsmasq
     log "dnsmasq configured and started"
 
     # --- 4. Enable IP forwarding and guest egress ---

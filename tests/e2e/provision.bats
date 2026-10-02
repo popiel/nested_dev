@@ -326,7 +326,8 @@ require_run_ok() {
     assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
         "upstream connectivity confirmed"
     # dnsmasq serves the segment and guest egress is NATed.
-    assert_file_contains "$E2E_STATE/journal" "systemctl enable --now dnsmasq"
+    assert_file_contains "$E2E_STATE/journal" "systemctl enable dnsmasq"
+    assert_file_contains "$E2E_STATE/journal" "systemctl restart dnsmasq"
     assert_file_contains "$E2E_STATE/journal" \
         "POSTROUTING -s 192.168.100.0/24 -o eno1 -j MASQUERADE"
     assert_file_contains "$E2E_ROOT/etc/sysctl.d/99-nested-dev.conf" \
@@ -366,6 +367,8 @@ require_run_ok() {
     assert_contains "$line" "local-lvm:40"
     assert_contains "$line" "52:54:00:00:01:00"
     assert_contains "$line" "--memory 8192"
+    # Desktop keeps no emulated display: its iGPU is its console.
+    assert_contains "$line" "--vga none"
     # Explicit installer-first boot order: PVE passes strict=on, so an order
     # naming only the empty disk parks the guest at a UEFI shell instead of
     # falling through to the CDROM.
@@ -384,6 +387,8 @@ require_run_ok() {
     line="$(grep "qm create 101 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name llm"
     assert_contains "$line" "local-lvm:500"
+    # Server guests keep an emulated display for console access.
+    assert_contains "$line" "--vga std"
     assert_contains "$line" '--boot order=ide2;scsi0'
     # The 6-core profile capped at the fixture node's 4-vCPU maximum, with the
     # reason logged — the same capping the real 4-thread host required.
@@ -402,6 +407,7 @@ require_run_ok() {
     local line
     line="$(grep "qm create 102 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name dev-template"
+    assert_contains "$line" "--vga std"
     assert_contains "$line" '--boot order=ide2;scsi0'
     assert_contains "$line" "--efidisk0 local-lvm:1"
     for vmid in 100 101 102; do
