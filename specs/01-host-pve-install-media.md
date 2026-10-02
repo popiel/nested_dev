@@ -271,7 +271,7 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   | FORWARD, inter-VM | the desktop may reach any `vmbr0` peer. No guest may reach the desktop, and no guest may reach another guest. |
   | FORWARD, ingress | SSH 22 and RDP 3389 from the LAN to the desktop only. DNAT rewrites the destination but the filter still has to admit the packets — without these rules the documented remote access is translated and then dropped. |
   | FORWARD, egress | per R-00.2.6. |
-  | NAT | MASQUERADE for `vmbr0` to the LAN; DNAT from the LAN for the desktop's SSH and RDP and for host SSH on 2222. |
+  | NAT | MASQUERADE for `vmbr0` to the LAN; DNAT from the LAN for the desktop's SSH and RDP. Host SSH on 2222 is served by sshd listening on 2222, not by DNAT (DNAT-to-self cannot work: the filter sees the rewritten port, so the admitting rule could never match). |
 
 * **R-01.10.3** Host SSH on port 22 is accepted from the desktop's address
   only. The control channel that creates and starts dev VMs is privileged;

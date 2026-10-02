@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/sshd — validates nothing, breaks nothing.
+# frag/25 runs `sshd -t` to gate its Port 2222 drop-in; the resulting state
+# (the drop-in file) is what the suite asserts, not the validation.
+exit 0

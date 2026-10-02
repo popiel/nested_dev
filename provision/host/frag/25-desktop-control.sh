@@ -173,4 +173,24 @@ if [ ! -f "${ROOT}/etc/dnsmasq.d/zz-dev.conf" ]; then
     log "dnsmasq dev drop-in created"
 fi
 
+# --- sshd on 2222 for LAN management ---
+# The documented path is ssh -p 2222 root@<LAN-IP>, admitted by frag/90 from
+# the LAN while port 22 stays desktop-only. sshd serves it by listening on
+# 2222 directly (a DNAT 2222→host:22 cannot work — see frag/90). Restart only
+# on change: a restart is safe for existing sessions (they persist), but a
+# pointless one on every re-run is noise and risk for nothing.
+SSHD_DROPIN="${ROOT}/etc/ssh/sshd_config.d/nested-dev-2222.conf"
+mkdir -p "$(dirname "$SSHD_DROPIN")"
+printf 'Port 2222\n' > "${SSHD_DROPIN}.new"
+if ! cmp -s "${SSHD_DROPIN}.new" "$SSHD_DROPIN" 2>/dev/null; then
+    mv "${SSHD_DROPIN}.new" "$SSHD_DROPIN"
+    sshd -t || die "sshd config test failed after adding Port 2222"
+    systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null \
+        || log "WARNING: sshd restart failed — Port 2222 takes effect on next restart"
+    log "sshd now listens on 2222 (LAN management)"
+else
+    rm -f "${SSHD_DROPIN}.new"
+    log "sshd already listens on 2222"
+fi
+
 log "=== desktop-control setup complete ==="
