@@ -41,6 +41,11 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     docker-ce docker-ce-cli containerd.io 2>&1 | tee -a "$LOG"
 
+# Build tools the seed used to request at install time. The installer's
+# minimal sources could not resolve them (fakeroot failed curtin
+# system-install twice); here the full sources exist, so install them late.
+apt-get install -y --no-install-recommends fakeroot 2>&1 | tee -a "$LOG"
+
 # Add user to docker group
 usermod -aG docker "${PERSONALIZATION_USERNAME}"
 

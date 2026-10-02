@@ -18,11 +18,14 @@ autoinstall:
       - "__ADMIN_PUBKEY__"
       - "__GUEST_ID_PUBKEY__"
   packages:
+    # Install-time only: everything here must resolve against the installer's
+    # minimal sources. Build tools that nothing at install time consumes
+    # (fakeroot lived here and broke two installs at curtin system-install)
+    # belong in dev-firstboot.sh, which runs against the full sources.
     - curl
     - ca-certificates
     - gnupg
     - git
-    - fakeroot
     - qemu-guest-agent
   late-commands:
     # UID/GID from personalization.sh — must run before any chown on this user

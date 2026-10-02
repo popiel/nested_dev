@@ -166,3 +166,24 @@ assert_key_write_creates_ssh_dir_first() {
     assert_file_contains "${PROJECT_ROOT}/dev/user-data/user-data" \
         's/^PERSONALIZATION_REF=.*/PERSONALIZATION_REF=__GITHUB_REF__/'
 }
+
+@test "install-time package lists carry no build tools nothing at install time consumes" {
+    # fakeroot sat in the dev seed's packages list and failed curtin
+    # system-install twice: install-time requests resolve against the
+    # installer's minimal sources, while first-boot runs against the full
+    # ones. A package nothing at install time needs must be installed by the
+    # first-boot script, not requested from the installer.
+    #
+    # Asserted as the concrete relocation, not a component map the repo cannot
+    # maintain: no seed requests fakeroot, and dev-firstboot installs it.
+    local guest
+    for guest in desktop llm dev; do
+        if grep -q '^[[:space:]]*-[[:space:]]*fakeroot[[:space:]]*$' \
+            "${PROJECT_ROOT}/${guest}/user-data/user-data"; then
+            echo "$guest seed requests fakeroot at install time" >&2
+            return 1
+        fi
+    done
+    assert_file_contains "${PROJECT_ROOT}/dev/dev-firstboot.sh" \
+        'fakeroot'
+}
