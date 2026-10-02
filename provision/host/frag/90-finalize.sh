@@ -78,9 +78,12 @@ iptables -t nat -A PREROUTING -i "$PHYS_NIC" -p tcp --dport 22 \
 iptables -t nat -A PREROUTING -i "$PHYS_NIC" -p tcp --dport 3389 \
     -j DNAT --to-destination 192.168.100.100:3389
 
-# LAN → host: SSH on port 2222 (192.168.14.* only) → host:22
-iptables -t nat -A PREROUTING -i "$PHYS_NIC" -s 192.168.14.0/24 -p tcp --dport 2222 \
-    -j DNAT --to-destination 192.168.100.1:22
+# LAN → host SSH is on port 2222, served by sshd listening on 2222 directly
+# (frag/25). Deliberately NOT a DNAT 2222→host:22: DNAT rewrites the port in
+# PREROUTING, so the filter would see dport 22 from a LAN source and drop it
+# — the INPUT dport-2222 rule below could never match a DNAT'd packet, and no
+# listener ever existed on 2222. That combination meant host SSH from the LAN
+# never worked in any topology.
 
 # VM egress: MASQUERADE from private subnet to LAN
 iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o "$PHYS_NIC" -j MASQUERADE
@@ -199,6 +202,12 @@ iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 # NTP (123)
 iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
 
+# ICMP echo (ping) outbound. Replies come back through ESTABLISHED,RELATED
+# above (conntrack, which every reply path here already depends on). Without
+# this the host cannot ping anything it is allowed to talk to — a diagnostic
+# blackhole in a firewall the operator debugs from behind.
+iptables -A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
+
 # Replies to the vmbr0 services above: dnsmasq's DHCP offers/acks and DNS
 # answers leave via the bridge. Without these the requests arrive and the
 # answers die here — same silent stall, one chain further along.
@@ -206,7 +215,7 @@ iptables -A OUTPUT -o vmbr0 -p udp --sport 67 --dport 68 -j ACCEPT
 iptables -A OUTPUT -o vmbr0 -p udp --sport 53 -j ACCEPT
 iptables -A OUTPUT -o vmbr0 -p tcp --sport 53 -j ACCEPT
 
-log "OUTPUT rules applied (host HTTP/HTTPS/DNS/NTP + vmbr0 service replies)"
+log "OUTPUT rules applied (host HTTP/HTTPS/DNS/NTP/ICMP-echo + vmbr0 service replies)"
 
 # --- Set DROP defaults (fail-closed), after every exception above ---
 iptables -P INPUT DROP

@@ -544,6 +544,20 @@ require_run_ok() {
         "-i eno1 -o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT"
     assert_file_contains "$E2E_STATE/journal" \
         "-i eno1 -o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT"
+    # Host SSH on 2222: sshd listens on the port directly (frag/25 drop-in)
+    # and INPUT admits it from the LAN. A DNAT 2222→host:22 must NOT exist:
+    # DNAT rewrites the port before the filter, so the filter would see dport
+    # 22 from a LAN source and drop it — that combination never admitted a
+    # single connection in any topology.
+    assert_file_contains "$E2E_STATE/journal" \
+        "INPUT -p tcp --dport 2222 -s 192.168.14.0/24 -j ACCEPT"
+    assert_file_contains "$E2E_ROOT/etc/ssh/sshd_config.d/nested-dev-2222.conf" \
+        "Port 2222"
+    run grep "DNAT --to-destination 192.168.100.1:22" "$E2E_STATE/journal"
+    [ "$status" -ne 0 ] || {
+        echo "DNAT-to-self for host SSH is back — it can never admit traffic" >&2
+        return 1
+    }
     # The host-service surface guests need: DHCP and DNS to dnsmasq on vmbr0,
     # requests and replies. Without any one of these the guests never get an
     # address and every installer stalls before writing a byte.
@@ -555,6 +569,10 @@ require_run_ok() {
     # past lockdown — which is also what makes the plain-http mirror check
     # a valid end-to-end probe rather than a firewall artifact.
     assert_file_contains "$E2E_STATE/journal" "OUTPUT -p tcp --dport 80 -j ACCEPT"
+    # Host ICMP echo egress: without it the operator cannot ping anything the
+    # host may otherwise reach — a diagnostic blackhole in a firewall debugged
+    # from behind.
+    assert_file_contains "$E2E_STATE/journal" "OUTPUT -p icmp --icmp-type echo-request -j ACCEPT"
     # And the template's egress, without which its first boot cannot fetch.
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.102 -p tcp --dport 443"
 }
