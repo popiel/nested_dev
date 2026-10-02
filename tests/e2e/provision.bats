@@ -551,6 +551,10 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "INPUT -i vmbr0 -p udp --dport 53"
     assert_file_contains "$E2E_STATE/journal" "OUTPUT -o vmbr0 -p udp --sport 67 --dport 68"
     assert_file_contains "$E2E_STATE/journal" "OUTPUT -o vmbr0 -p udp --sport 53"
+    # Host HTTP egress: the archives are HTTP-only, so without it apt dies
+    # past lockdown — which is also what makes the plain-http mirror check
+    # a valid end-to-end probe rather than a firewall artifact.
+    assert_file_contains "$E2E_STATE/journal" "OUTPUT -p tcp --dport 80 -j ACCEPT"
     # And the template's egress, without which its first boot cannot fetch.
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.102 -p tcp --dport 443"
 }

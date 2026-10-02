@@ -99,9 +99,12 @@ Proxmox web UI, or a serial/IPMI console.
 * **R-00.2.4** Host management from the LAN is limited to SSH (port 2222) and
   the web UI (port 8006). Host SSH from inside `vmbr0` is accepted from the
   desktop only.
-* **R-00.2.5** The host itself reaches only HTTPS, DNS and NTP. A
+* **R-00.2.5** The host itself reaches only HTTP, HTTPS, DNS and NTP. A
   hypervisor with unrestricted egress is a hypervisor that can be used as a
-  pivot into the LAN it was meant to be shielded from.
+  pivot into the LAN it was meant to be shielded from. HTTP stays in the
+  list (rather than HTTPS-only) because the Debian, Ubuntu and Proxmox
+  archives are HTTP-only — without it the host cannot update or install
+  anything past lockdown.
 * **R-00.2.6** Guest egress is governed by the FORWARD chain, per-guest:
 
   | Guest | Egress | Rationale |

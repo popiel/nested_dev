@@ -180,13 +180,17 @@ iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 log "FORWARD rules applied"
 
-# --- filter table: OUTPUT (host egress: HTTPS/DNS/NTP only) ---
+# --- filter table: OUTPUT (host egress: HTTP/HTTPS/DNS/NTP only) ---
 iptables -F OUTPUT
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# HTTPS (443)
+# HTTPS (443) and HTTP (80). HTTP is not a lapse: the Debian, Ubuntu and
+# Proxmox archives are HTTP-only (there is no TLS endpoint to allow instead),
+# so without it the host cannot update or install anything past lockdown —
+# which this very fragment does to later fragments on every re-run.
 iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
 
 # DNS (53)
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
@@ -202,7 +206,7 @@ iptables -A OUTPUT -o vmbr0 -p udp --sport 67 --dport 68 -j ACCEPT
 iptables -A OUTPUT -o vmbr0 -p udp --sport 53 -j ACCEPT
 iptables -A OUTPUT -o vmbr0 -p tcp --sport 53 -j ACCEPT
 
-log "OUTPUT rules applied (host HTTPS/DNS/NTP + vmbr0 service replies)"
+log "OUTPUT rules applied (host HTTP/HTTPS/DNS/NTP + vmbr0 service replies)"
 
 # --- Set DROP defaults (fail-closed), after every exception above ---
 iptables -P INPUT DROP
