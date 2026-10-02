@@ -53,6 +53,26 @@ load '../lib/helpers'
     assert_contains "$heredoc" 'interface=lo'
 }
 
+@test "public upstreams are a fallback tier, not the policy" {
+    # The lease-provided resolver is primary; the public servers exist only
+    # for a broken LAN resolver (observed: TCP/53 answered, UDP/53
+    # blackholed). Pin both halves so a future edit can neither drop the
+    # fallback (re-breaking everything behind a bad router) nor drop the
+    # lease path (silently promoting last-resort servers to everyday use).
+    # Same two sources as the localhost test above.
+    local ref="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
+    assert_file_contains "$ref" 'resolv-file=/run/resolv.conf'
+    assert_file_contains "$ref" 'server=9.9.9.9'
+    assert_file_contains "$ref" 'server=1.1.1.1'
+    local heredoc
+    heredoc="$(sed -n "/nested_dev.conf.*DNSMASQ_EOF/,/^DNSMASQ_EOF$/p" \
+        "${PROJECT_ROOT}/provision/host/frag/28-network.sh")"
+    [ -n "$heredoc" ] || { echo "frag/28 dnsmasq heredoc not found" >&2; return 1; }
+    assert_contains "$heredoc" 'resolv-file=/run/resolv.conf'
+    assert_contains "$heredoc" 'server=9.9.9.9'
+    assert_contains "$heredoc" 'server=1.1.1.1'
+}
+
 @test "iptables-forwarding.conf passes iptables-restore --test" {
     require_command iptables-restore
     run iptables-restore --test < "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"

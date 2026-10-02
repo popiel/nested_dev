@@ -213,6 +213,11 @@ address=/lychee-dev-template.wolfskeep.com/192.168.100.102
 
 # Upstream DNS from host's DHCP-provided resolv.conf
 resolv-file=/run/resolv.conf
+
+# Last-resort upstream tier (see the reference config for why): the lease
+# resolver above is primary, these public servers only on its failure.
+server=9.9.9.9
+server=1.1.1.1
 DNSMASQ_EOF
 
     # Disable dnsmasq's own resolv.conf management (we provide upstream via resolv-file)
