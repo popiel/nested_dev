@@ -34,16 +34,35 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
 # The second arrival *waits* rather than exiting. Exiting 0 would let
 # first-boot.sh declare the bootstrap complete while provisioning was still in
 # progress; exiting non-zero would fail the run that did nothing wrong.
+#
+# The lock is held by re-executing under flock(1), never as an fd kept open
+# for the run. An fd lock (exec 9>...; flock 9) is inherited by every child —
+# including daemons that never exit. frag/28 starts dhclient daemons mid-run,
+# and each one carried a copy of the lock forever: every later run hung on
+# acquisition with no provisioner running anywhere, fuser showing only dhclient
+# holding the file. With --close, flock holds the lock in the waiting parent
+# while the script, its fragments, and anything they daemonize run without the
+# fd, so a daemon can never inherit it again.
 LOCK_FILE="${ROOT}/run/lock/pve-firstboot.lock"
 COMPLETE_MARKER="${ROOT}/var/lib/pve-firstboot/complete"
 REBOOT_MARKER="${ROOT}/var/lib/pve-firstboot/rebooted"
 
 mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$COMPLETE_MARKER")"
 
-exec 9>"$LOCK_FILE"
-log "=== pve-firstboot starting ==="
-log "waiting for the provisioning lock (${LOCK_FILE})"
-flock 9
+if [ "${PVE_FIRSTBOOT_LOCKED:-}" != "1" ]; then
+    export PVE_FIRSTBOOT_LOCKED=1
+    log "=== pve-firstboot starting ==="
+    log "waiting for the provisioning lock (${LOCK_FILE})"
+    # Explicit bash: this script needs it (pipefail, [[ ]] below), and $0
+    # re-executed through the shebang would depend on the installer's exec bit.
+    # No arguments are ever passed; the branch keeps "$@" correct under set -u
+    # on old bash, where an empty "$@" aborts.
+    if [ "$#" -gt 0 ]; then
+        exec flock --close "$LOCK_FILE" bash "$0" "$@"
+    else
+        exec flock --close "$LOCK_FILE" bash "$0"
+    fi
+fi
 log "acquired the provisioning lock"
 
 if [ -f "$COMPLETE_MARKER" ]; then

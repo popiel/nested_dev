@@ -13,6 +13,12 @@
 # its lock, marker and log into the test's scratch tree. Asserting that the
 # source contains `flock` would pass against a lock placed where it never
 # contends.
+#
+# A second incident shapes the last test: the lock used to be an fd held open
+# for the whole run, and every daemon a fragment started inherited a copy.
+# frag/28's dhclient daemons held it forever, so later runs hung with no
+# provisioner running. The lock is now held by a waiting flock(1) parent while
+# the script runs without the fd (--close).
 
 load '../lib/helpers'
 
@@ -145,4 +151,50 @@ EOF
     run bash "${PROV_ROOT}/provision-host.sh"
     [ "$status" -eq 0 ]
     [ -f "${WORK}/var/lib/pve-firstboot/complete" ]
+}
+
+@test "a daemon spawned by a fragment cannot hold the lock after the run" {
+    # frag/28 starts dhclient daemons mid-run. Under the old fd-held lock each
+    # one inherited a copy of the lock fd, and every later run hung on
+    # acquisition with no provisioner running anywhere — fuser showed only
+    # dhclient holding the file. This replays that shape with sleep standing in
+    # for dhclient: if the daemon inherits the lock, the second run hangs and
+    # timeout kills it.
+    #
+    # Flag and tool support are asserted, not assumed: without --close there is
+    # no daemon-safe lock to test, and without timeout a regression would hang
+    # the suite instead of failing it.
+    command -v flock >/dev/null 2>&1 || { echo "no flock(1) — lock behavior untestable here" >&2; return 1; }
+    flock --help 2>&1 | grep -q -- --close || { echo "flock(1) has no --close — lock behavior untestable here" >&2; return 1; }
+    command -v timeout >/dev/null 2>&1 || { echo "no timeout(1) — a hang would hang the suite" >&2; return 1; }
+    cat > "${FRAG_DIR}/10-daemon.sh" <<EOF
+#!/usr/bin/env bash
+echo "frag ran" >> "${WORK}/frag-runs"
+# Appended, never overwritten: the second run re-executes this fragment and
+# spawns again. An orphan from either run holds the suite-output pipe open
+# until it dies, so every spawned pid is recorded and all are killed at the
+# end — a single pidfile would leak the first orphan and stall the harness
+# for the sleep's whole lifetime on every green run.
+sleep 60 & echo \$! >> "${WORK}/daemon.pids"
+exit 0
+EOF
+    create_mock systemctl 'exit 0'
+
+    bash "${PROV_ROOT}/provision-host.sh" >/dev/null 2>&1
+    [ -s "${WORK}/daemon.pids" ] || { echo "fragment did not spawn the daemon" >&2; return 1; }
+    # A parked daemon must exist while the second run starts, or nothing about
+    # inheritance is proven.
+    kill -0 "$(tail -n 1 "${WORK}/daemon.pids")" 2>/dev/null || { echo "daemon already gone" >&2; return 1; }
+
+    # Unlock exactly the way refresh-provisioner.sh does, then prove the next
+    # run proceeds instead of hanging behind the daemon. The two-line count
+    # proves it ran its fragments rather than no-op'ing on a surviving marker.
+    rm -f "${WORK}/var/lib/pve-firstboot/complete"
+    run timeout 30 bash "${PROV_ROOT}/provision-host.sh"
+    [ "$status" -eq 0 ] || { echo "second run hung behind the daemon (or failed)" >&2; return 1; }
+    [ "$(wc -l < "${WORK}/frag-runs" | tr -d ' ')" -eq 2 ] || {
+        echo "second run did not execute its fragments" >&2; return 1
+    }
+
+    while read -r pid; do kill "$pid" 2>/dev/null || true; done < "${WORK}/daemon.pids"
 }
