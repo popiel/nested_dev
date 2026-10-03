@@ -607,6 +607,23 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.102 -p tcp --dport 443"
 }
 
+@test "the node hosts entry is maintained after lease changes" {
+    require_run_ok
+    # No reservations exist, so the provision-time entry rots on the next
+    # lease change. The same script maintains it: fired by a path unit on
+    # lease renewal, backed by cron. Installed bit-identical to the repo.
+    run cmp "$E2E_ROOT/usr/local/sbin/nested-node-hosts" \
+        "${PROJECT_ROOT}/provision/host/nested-node-hosts.sh"
+    [ "$status" -eq 0 ]
+    assert_file_contains "$E2E_ROOT/etc/cron.d/nested-node-hosts" \
+        "*/15 * * * * root /usr/local/sbin/nested-node-hosts"
+    assert_file_contains "$E2E_ROOT/etc/systemd/system/nested-node-hosts.service" \
+        "ExecStart=/usr/local/sbin/nested-node-hosts"
+    assert_file_contains "$E2E_ROOT/etc/systemd/system/nested-node-hosts.path" \
+        "dhclient.eno1.leases"
+    assert_file_contains "$E2E_STATE/journal" "enable --now nested-node-hosts.path"
+}
+
 @test "memory and swap are configured" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/etc/default/zramswap" "ALGO=zstd"

@@ -246,12 +246,13 @@ log "Host DNS configured to use dnsmasq (127.0.0.1)"
 # refuses to start when the node name resolves to 127.x (it needs a
 # non-loopback identity for the node), so the Debian 127.0.1.1 convention
 # bricks every reboot: the first boot works (the installer wrote a real
-# entry), this file clobbers it, and pve-cluster can never restart. Derive
-# the address from the detected LAN NIC; fail loudly with no address, since
-# nothing downstream of a missing LAN address can succeed either.
-NODE_IP="$(ip -o addr show dev "$PHYS_NIC" 2>/dev/null \
-    | awk -v nic="$PHYS_NIC" '$2 == nic && $3 == "inet" {split($4, a, "/"); print a[1]; exit}')"
-[ -n "$NODE_IP" ] || die "no IPv4 address on ${PHYS_NIC} — cannot write node hosts entry"
+# entry), this file clobbers it, and pve-cluster can never restart. The
+# address comes from nested-node-hosts.sh --print-ip (single implementation,
+# shared with the maintenance wiring below); fail loudly with no address,
+# since nothing downstream of a missing LAN address can succeed either.
+NODE_MAINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/nested-node-hosts.sh"
+NODE_IP="$(bash "$NODE_MAINT" --print-ip)" \
+    || die "cannot determine node LAN address — cannot write node hosts entry"
 cat > "${ROOT}/etc/hosts" <<HOSTS_EOF
 127.0.0.1       localhost
 
@@ -263,6 +264,39 @@ ${NODE_IP} lychee-host.wolfskeep.com lychee-host
 192.168.100.102 lychee-dev-template.wolfskeep.com lychee-dev-template
 HOSTS_EOF
 log "/etc/hosts updated with VM entries (node=${NODE_IP})"
+
+# --- 5b. Node-hosts maintenance: cron + lease-watcher ---
+# No DHCP reservations exist here, so the entry above rots on every lease
+# change and the next reboot fails in pmxcfs again. The same script maintains
+# it: a systemd path unit fires on lease renewal, cron covers anything else.
+install -m 0755 "$NODE_MAINT" "${ROOT}/usr/local/sbin/nested-node-hosts"
+mkdir -p "${ROOT}/etc/cron.d"
+cat > "${ROOT}/etc/cron.d/nested-node-hosts" <<'CRON_EOF'
+# Refresh the node's /etc/hosts entry from the live LAN address (pmxcfs
+# needs a non-loopback node identity). Installed by frag/90.
+*/15 * * * * root /usr/local/sbin/nested-node-hosts
+CRON_EOF
+LEASE_FILE="/var/lib/dhcp/dhclient.${PHYS_NIC}.leases"
+mkdir -p "${ROOT}/etc/systemd/system"
+cat > "${ROOT}/etc/systemd/system/nested-node-hosts.service" <<'SVC_EOF'
+[Unit]
+Description=Refresh node hosts entry after lease change
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nested-node-hosts
+SVC_EOF
+cat > "${ROOT}/etc/systemd/system/nested-node-hosts.path" <<PATH_EOF
+[Unit]
+Description=Watch DHCP lease for node-hosts maintenance
+[Path]
+PathChanged=${LEASE_FILE}
+[Install]
+WantedBy=multi-user.target
+PATH_EOF
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable --now nested-node-hosts.path 2>/dev/null \
+    || log "WARNING: could not enable lease-watcher (cron backstop still active)"
+log "node-hosts maintenance installed (cron + lease watcher on ${LEASE_FILE})"
 
 # ============================================================
 # 6. Hostname

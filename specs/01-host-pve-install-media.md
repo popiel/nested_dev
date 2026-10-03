@@ -257,6 +257,11 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   identically to a failed one, with no provisioner running anymore to report
   it. This is best effort — day-one connectivity does not depend on renewals
   — so failure warns instead of aborting.
+* **R-01.9.10** The node's own `/etc/hosts` entry tracks its LAN address,
+  never loopback (pmxcfs refuses a loopback node identity and the next
+  reboot then fails). No DHCP reservations are assumed, so the entry is
+  maintained after lease changes by a lease-watcher plus a cron backstop,
+  not only written at provision time.
 
 ### R-01.10 The host firewall is deny-by-default and per-guest
 
