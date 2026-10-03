@@ -406,16 +406,13 @@ main() {
         return 0
     }
     if ! qm status 101 >/dev/null 2>&1; then
-        LLM_HOSTPCI=()
-        DGPU_INDEX=0
-        if [ -n "$DGPU_IDS" ]; then
-            IFS=',' read -ra DGPU_LIST <<< "$DGPU_IDS"
-            for dgpu in "${DGPU_LIST[@]}"; do
-                LLM_HOSTPCI+=("--hostpci${DGPU_INDEX}" "host=${dgpu},pcie=1")
-                DGPU_INDEX=$((DGPU_INDEX + 1))
-            done
-        fi
-
+        # Install with the OS disk alone. With two data disks the installer's
+        # default layout picks the largest — it took the 500GB data volume
+        # over the 80GB OS disk, booting to a UEFI shell off the empty one.
+        # Passthrough GPUs stay off for the same reason: nouveau probes them
+        # while they serve nothing before first-boot. Data volume, dGPUs and
+        # the GeForce workaround attach after the install powers off, before
+        # the installed system boots (first-boot formats vdb itself).
         DATA_VOL_SIZE=500
 
         qm create 101 \
@@ -431,25 +428,32 @@ main() {
             --vga std \
             --serial0 socket \
             --agent enabled=1 \
-            ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
             --ide2 "${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom" \
             --ide0 "${ISO_DIR}/llm-seed.iso,media=cdrom" \
             --efidisk0 ${GUEST_STORAGE}:1 \
             --scsi0 ${GUEST_STORAGE}:80 \
-            --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE} \
             --boot "order=ide2;scsi0"
 
-        if [ -n "$DGPU_IDS" ]; then
-            qm set 101 --args '-cpu host,kvm=off,hidden=1'
-            log "Applied GeForce kvm=off,hidden=1 workaround"
-        fi
-
             qm start 101
-            log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, 80GB OS, ${DATA_VOL_SIZE}GB data"
+            log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, 80GB OS (data and GPUs attach post-install)"
             log "Install gate: waiting for VM 101 to power off at end of install (timeout: 1800s)"
             if ! wait_for_stopped 101 1800; then
                 die "VM 101 install did not finish in 1800s — inspect its console"
             fi
+            qm set 101 --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE}
+            log "VM 101 data volume attached (${DATA_VOL_SIZE}GB raw for first-boot to format)"
+        if [ -n "$DGPU_IDS" ]; then
+            LLM_HOSTPCI=()
+            DGPU_INDEX=0
+            IFS=',' read -ra DGPU_LIST <<< "$DGPU_IDS"
+            for dgpu in "${DGPU_LIST[@]}"; do
+                LLM_HOSTPCI+=("--hostpci${DGPU_INDEX}" "host=${dgpu},pcie=1")
+                DGPU_INDEX=$((DGPU_INDEX + 1))
+            done
+            qm set 101 ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
+                --args '-cpu host,kvm=off,hidden=1'
+            log "Applied dGPU passthrough and GeForce kvm=off,hidden=1 workaround"
+        fi
             qm set 101 --delete ide2
             log "VM 101 installer detached; booting installed system"
             qm start 101

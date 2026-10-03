@@ -394,7 +394,11 @@ require_run_ok() {
     local line
     line="$(grep "qm create 101 " "$E2E_STATE/qm-journal")"
     assert_contains "$line" "--name llm"
-    assert_contains "$line" "local-lvm:500"
+    # The data volume is NOT in the create: with two disks the installer's
+    # default layout takes the largest, so it attaches after the install
+    # powers off (first-boot formats it raw).
+    assert_not_contains "$line" "local-lvm:500"
+    assert_not_contains "$line" "scsi1"
     # Server guests keep an emulated display for console access.
     assert_contains "$line" "--vga std"
     assert_contains "$line" '--boot order=ide2;scsi0'
@@ -410,6 +414,7 @@ require_run_ok() {
     # detaches the installer and boots the disk from there. Without the
     # detach a reboot would re-enter the installer under ide2-first order.
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --delete ide2"
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --scsi1 local-lvm:500"
     # No GeForce workaround without a dGPU on the node.
     run grep -c "qm set 101 --args" "$E2E_STATE/qm-journal"
     [ "$output" = "0" ]

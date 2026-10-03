@@ -292,6 +292,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.11.1** vm 100 (`desktop`) and vm 101 (`llm`) are created and started
   during provisioning, with the iGPU and dGPU(s) attached respectively, an
   OS disk sized per Spec 00 §R-00.4, and a NoCloud seed attached (Spec 06).
+  `101`'s data volume and dGPUs attach after its OS install completes, so
+  the installer sees one disk and no passthrough hardware; `100` keeps
+  everything at create for its interactive install.
 * **R-01.11.2** vm 102 (`dev-template`) is created and started, **provisioned
   once, and then converted to a PVE template** (Spec 07 §6). It is never left
   as a running VM.
