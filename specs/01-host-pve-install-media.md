@@ -295,19 +295,25 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.11.2** vm 102 (`dev-template`) is created and started, **provisioned
   once, and then converted to a PVE template** (Spec 07 §6). It is never left
   as a running VM.
-* **R-01.11.3** A template cannot be started directly. This is the mechanism
+* **R-01.11.3** Server installs end powered off, never rebooted: with
+  installer-first boot order a reboot re-enters the installer and reinstalls
+  over the top, so completion is observed as a parked stopped VM (a
+  mid-install reboot keeps it running and never counts). The provisioner
+  then detaches the installer and boots the disk. The desktop's interactive
+  install is exempt.
+* **R-01.11.4** A template cannot be started directly. This is the mechanism
   that guarantees no dev VM is ever auto-started.
-* **R-01.11.4** vm 103 and above are **not** created by host provisioning. They
+* **R-01.11.5** vm 103 and above are **not** created by host provisioning. They
   are created on demand from the desktop (Spec 07).
-* **R-01.11.5** Re-running provisioning does not recreate a VM that already
+* **R-01.11.6** Re-running provisioning does not recreate a VM that already
   exists, and does not restart one that is already running.
-* **R-01.11.6** Before the template is converted, the guest agent answers and
+* **R-01.11.7** Before the template is converted, the guest agent answers and
   the guest's first-boot log reports completion. Conversion proceeds only
   after that gate, so the template is never captured half-provisioned.
-* **R-01.11.7** If the gate times out, the run logs a warning, leaves the VM
+* **R-01.11.8** If the gate times out, the run logs a warning, leaves the VM
   running for the operator to finish by hand, and **continues** to the
   firewall step. The template is not converted from an unprovisioned disk.
-* **R-01.11.8** The per-VM firewall flag is set on the guests whose egress is
+* **R-01.11.9** The per-VM firewall flag is set on the guests whose egress is
   restricted.
 * **R-01.11.9** **A host that cannot create a guest says so before any download
   or allocation is attempted, naming the missing prerequisite.** The guest set

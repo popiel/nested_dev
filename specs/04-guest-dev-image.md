@@ -155,7 +155,7 @@ and the hardware stays in a VM with no untrusted code on it.
 
 * **R-04.7.1** The first-boot unit is disabled on success, so a clone does not
   re-run it. Its log line announcing completion is the host's signal that the
-  template is safe to convert (R-01.11.6).
+  template is safe to convert (R-01.11.7).
 * **R-04.7.2** The first-boot script, the personalization file, and the two
   repository tool scripts are all present in the guest, at the same reference.
   A first-boot script that silently cannot find a tool it is supposed to

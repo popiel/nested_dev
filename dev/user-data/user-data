@@ -1,6 +1,12 @@
 #cloud-config
 autoinstall:
   version: 1
+  # Power off at end of install, never reboot: with ide2-first boot order a
+  # reboot re-enters the installer and reinstalls over the top forever. A
+  # parked stopped VM is an unambiguous, pollable completion signal (a
+  # mid-install reboot keeps it running and never trips it); the provisioner
+  # detaches the installer and boots the disk from there.
+  shutdown: poweroff
   locale: en_US.UTF-8
   keyboard: {layout: "us"}
   identity:

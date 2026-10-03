@@ -390,6 +390,21 @@ main() {
     fi
 
     # --- VM 101: LLM ---
+    # Server seeds end the install powered off (shutdown: poweroff): a parked
+    # stopped VM is the completion signal, unambiguous where a reboot would
+    # re-enter the installer under ide2-first order. A mid-install reboot
+    # keeps the VM running and never trips this wait.
+    wait_for_stopped() {
+        local vmid="$1" timeout="$2" elapsed=0
+        while qm status "$vmid" 2>/dev/null | grep -q "running"; do
+            sleep 10
+            elapsed=$((elapsed + 10))
+            if [ "$elapsed" -ge "$timeout" ]; then
+                return 1
+            fi
+        done
+        return 0
+    }
     if ! qm status 101 >/dev/null 2>&1; then
         LLM_HOSTPCI=()
         DGPU_INDEX=0
@@ -429,8 +444,16 @@ main() {
             log "Applied GeForce kvm=off,hidden=1 workaround"
         fi
 
-        qm start 101
-        log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, 80GB OS, ${DATA_VOL_SIZE}GB data"
+            qm start 101
+            log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, 80GB OS, ${DATA_VOL_SIZE}GB data"
+            log "Install gate: waiting for VM 101 to power off at end of install (timeout: 1800s)"
+            if ! wait_for_stopped 101 1800; then
+                die "VM 101 install did not finish in 1800s — inspect its console"
+            fi
+            qm set 101 --delete ide2
+            log "VM 101 installer detached; booting installed system"
+            qm start 101
+            log "VM 101 (llm) installed system booting; first-boot proceeds unattended"
     else
         log "VM 101 already exists — skipping"
     fi
@@ -463,6 +486,13 @@ main() {
             log "VM 102 (dev-template) created and starting for provisioning: ${DEV_MEM}MB, ${DEV_CORES} cores, 40GB OS"
 
             PROVISIONING_TIMEOUT=1800
+            log "Install gate: waiting for VM 102 to power off at end of install (timeout: ${PROVISIONING_TIMEOUT}s)"
+            if ! wait_for_stopped 102 "$PROVISIONING_TIMEOUT"; then
+                die "VM 102 install did not finish in ${PROVISIONING_TIMEOUT}s — inspect its console"
+            fi
+            qm set 102 --delete ide2
+            log "VM 102 installer detached; booting installed system"
+            qm start 102
             elapsed=0
             log "Provisioning gate: waiting for VM 102 first-boot (timeout: ${PROVISIONING_TIMEOUT}s)"
             while [ $elapsed -lt $PROVISIONING_TIMEOUT ]; do

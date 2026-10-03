@@ -187,3 +187,19 @@ assert_key_write_creates_ssh_dir_first() {
     assert_file_contains "${PROJECT_ROOT}/dev/dev-firstboot.sh" \
         'fakeroot'
 }
+
+@test "server seeds power off at end of install" {
+    # With ide2-first boot order a reboot re-enters the installer and
+    # reinstalls over the top forever; a parked stopped VM is the completion
+    # signal the provisioner waits on. Server Subiquity honors shutdown:
+    # poweroff — the desktop installer is a different codebase on a manual
+    # path, so its seed is deliberately left alone.
+    for guest in llm dev; do
+        assert_file_contains "${PROJECT_ROOT}/${guest}/user-data/user-data" \
+            'shutdown: poweroff'
+    done
+    if grep -q 'shutdown:' "${PROJECT_ROOT}/desktop/user-data/user-data"; then
+        echo "desktop seed sets shutdown — scoping change, update this test" >&2
+        return 1
+    fi
+}

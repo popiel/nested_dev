@@ -406,7 +406,12 @@ require_run_ok() {
     assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64.iso,media=cdrom"
     assert_not_contains "$line" "hostpci"
     assert_not_contains "$line" "--cdrom"
-    run grep -c "qm set 101" "$E2E_STATE/qm-journal"
+    # End of install powers the VM off (seed shutdown: poweroff); the run
+    # detaches the installer and boots the disk from there. Without the
+    # detach a reboot would re-enter the installer under ide2-first order.
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --delete ide2"
+    # No GeForce workaround without a dGPU on the node.
+    run grep -c "qm set 101 --args" "$E2E_STATE/qm-journal"
     [ "$output" = "0" ]
 }
 
@@ -424,6 +429,7 @@ require_run_ok() {
     done
     run grep -c "qm template 102" "$E2E_STATE/qm-journal"
     [ "$output" = "1" ]
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide2"
 }
 
 @test "guest seeds carry the hash and both keys, and no placeholders survive" {

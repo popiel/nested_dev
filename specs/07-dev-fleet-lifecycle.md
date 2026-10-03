@@ -136,7 +136,7 @@ pinned to one address.
   its ID; its MAC is derived from that ID; its registered hostname is the fleet
   name derived from its project.
 * **R-07.4.5** The dev VM's network interface is marked firewall-managed, so the
-  host's forwarding policy applies to it (R-01.11.8).
+  host's forwarding policy applies to it (R-01.11.9).
 * **R-07.4.6** Registration happens as part of creation, atomically with it:
   the address lease, both name resolutions, and the inventory row are all
   written before the operation reports success. A dev VM that resolves by
