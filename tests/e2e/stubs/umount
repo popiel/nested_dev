@@ -1,0 +1,5 @@
+#!/bin/bash
+# tests/e2e/stubs/umount — unmounting the overlay is a no-op (nothing mounted).
+# The extractor's trap tolerates the rmdir failing on the leftover copies;
+# scratch belongs to the suite temp dir either way.
+exit 0

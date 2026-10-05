@@ -1,0 +1,11 @@
+#!/bin/bash
+# tests/e2e/stubs/mount — overlays the fixture ISO tree instead of mounting.
+# The extractor mounts the server ISO read-only and reads grub.cfg plus the
+# boot files out of it; loop mounts need privilege the suite must never
+# require, so the last argument (the staging dir) gets the fixture tree
+# copied onto it. FAKEISO points at that tree (built in setup_file with
+# md5sums to match, so the manifest check runs for real).
+dest="${@: -1}"
+[ -n "${FAKEISO:-}" ] || { echo "e2e mount stub: FAKEISO not set" >&2; exit 1; }
+cp -r "${FAKEISO}/." "$dest/"
+exit 0
