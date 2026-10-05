@@ -62,6 +62,11 @@ menuentry "Install Ubuntu Server" {
 EOF
     (cd "$WORK/fakeiso" && md5sum casper/vmlinuz casper/initrd > md5sum.txt)
     export FAKEISO="$WORK/fakeiso"
+    # The ESP gate probes explicit devices (blkid never scans in the
+    # fragment): point it at a stub-visible fixture, whose blkid answers
+    # carry the EFI signature regardless of arguments.
+    touch "$WORK/fake-disk"
+    export VM_DISK_DEVS="$WORK/fake-disk"
 
     # --- the fixture host, as the installer leaves it ---
     mkdir -p "$ROOT/var/log" "$ROOT/root" \
@@ -459,6 +464,10 @@ require_run_ok() {
     # No GeForce workaround without a dGPU on the node.
     run grep -c "kvm=off" "$E2E_STATE/qm-journal"
     [ "$output" = "0" ]
+    # Serial capture degrades gracefully without socat (absent here by
+    # design): warned once per guest, never fatal, install proceeds.
+    assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
+        "serial install log for VM 101 will not be captured"
 }
 
 @test "the dev template is created, started and converted" {
@@ -481,6 +490,8 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/qm-journal" \
         "-append 'ro quiet splash --- autoinstall console=ttyS0 console=tty0'"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete args"
+    assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
+        "serial install log for VM 102 will not be captured"
     run grep -c "qm agent 102 ping" "$E2E_STATE/qm-journal"
     [ "$output" = "1" ]
     # Conversion sanitizes per-clone identity and detaches the seed ISO,

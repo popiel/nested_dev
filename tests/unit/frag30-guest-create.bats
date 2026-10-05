@@ -102,3 +102,46 @@ host_without_storage() {
     [ "$status" -eq 0 ]
     [ "$output" = "6" ]
 }
+
+# --- os_esp: the install gate's bootloader check ---
+#
+# Stopped alone is end-of-run, not end-of-success, so the gate requires an
+# EFI partition on the OS disk before detaching the installer. Probed per
+# device (blkid cache misses fresh tables; scan output spellings don't
+# survive), matched by content, candidates overridable via VM_DISK_DEVS.
+
+mock_blkid() {
+    # $1 = what the probe prints (empty for a disk with no ESP). Payload goes
+    # through a file because quoting blkid output inline nests double quotes
+    # inside double quotes and silently mangles the mock.
+    printf '%s\n' "$1" > "${BATS_TMPDIR}/blkid-out"
+    printf '#!/bin/bash\ncat "%s/blkid-out"\n' "$BATS_TMPDIR" \
+        > "${FIXTURES_DIR}/mock-bin/blkid"
+    chmod +x "${FIXTURES_DIR}/mock-bin/blkid"
+}
+
+@test "os_esp finds the bootloader signature on a partitioned disk" {
+    touch "${BATS_TMPDIR}/disk-101"
+    VM_DISK_DEVS="${BATS_TMPDIR}/disk-101" export VM_DISK_DEVS
+    mock_blkid '/dev/pve/vm-101-disk-1p1: PARTLABEL="EFI System Partition" PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"'
+    run os_esp 101
+    [ "$status" -eq 0 ]
+    unset VM_DISK_DEVS
+}
+
+@test "os_esp fails cleanly with no ESP anywhere" {
+    touch "${BATS_TMPDIR}/disk-102"
+    VM_DISK_DEVS="${BATS_TMPDIR}/disk-102" export VM_DISK_DEVS
+    mock_blkid ''
+    run os_esp 102
+    [ "$status" -ne 0 ]
+    unset VM_DISK_DEVS
+}
+
+@test "os_esp fails cleanly with no candidate devices at all" {
+    VM_DISK_DEVS="${BATS_TMPDIR}/does-not-exist" export VM_DISK_DEVS
+    mock_blkid '/dev/x: PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"'
+    run os_esp 103
+    [ "$status" -ne 0 ]
+    unset VM_DISK_DEVS
+}

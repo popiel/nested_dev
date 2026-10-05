@@ -67,6 +67,30 @@ partition_passthrough_devices() {
     return 0
 }
 
+# EFI System partition signature, for the install gate in main(): an install
+# that never partitioned has no ESP, and detaching the installer onto it
+# strands the guest at a UEFI shell. Probed per device, never cached and
+# never scanned: blkid's cache does not learn partitions a guest wrote
+# minutes ago, -p requires an explicit device, and scan output names devices
+# in spellings no match survives — so candidates are named, matched by
+# content (the GUID), and the glob is overridable for tests. Contract is
+# dual on purpose: prints the matching device (callers test emptiness) and
+# returns 0/1 (unit tests assert status).
+EFI_PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"
+os_esp() {
+    local vmid="$1" dev
+    # Unquoted by intent: the default is a glob, the override a list.
+    # shellcheck disable=SC2086
+    for dev in ${VM_DISK_DEVS:-/dev/pve/vm-${vmid}-disk-1 /dev/mapper/*vm--${vmid}--disk--1}; do
+        [ -e "$dev" ] || continue
+        if blkid -p -o full "$dev" 2>/dev/null | grep -qi "PARTTYPE=\"${EFI_PARTTYPE}\""; then
+            printf '%s\n' "$dev"
+            return 0
+        fi
+    done
+    return 1
+}
+
 download_iso() {
     local url="$1" dest="$2"
     if [ -f "$dest" ]; then
@@ -428,17 +452,8 @@ main() {
     # honors shutdown:poweroff all the same. Detaching the installer on a
     # disk with no bootloader strands the guest at a UEFI shell with the
     # evidence still on the disk — so an EFI System partition on the OS disk
-    # is required first, and only a booted system (agent answering) counts
-    # as installed afterward.
-    EFI_PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"
-    os_esp() {
-        # -p probes instead of trusting blkid's cache: partitions the guest
-        # created minutes ago are not in it yet, and a cached miss reads as
-        # "never partitioned" — failing a completed install at this gate.
-        local vmid="$1"
-        blkid -p -o device -t "PARTTYPE=${EFI_PARTTYPE}" 2>/dev/null \
-            | grep "vm-${vmid}-disk-1" | head -1
-    }
+    # is required first (os_esp, beside the pure functions above), and only
+    # a booted system (agent answering) counts as installed afterward.
     wait_for_agent() {
         local vmid="$1" timeout="$2" elapsed=0
         while ! qm agent "$vmid" ping >/dev/null 2>&1; do
@@ -449,6 +464,36 @@ main() {
             fi
         done
         return 0
+    }
+    # Install serial capture, started right after `qm start` while the
+    # installer is still booting (early oopses land ~2 min in — attaching
+    # later misses them; sockets keep no backlog). Stopped once the install
+    # powers off, at which point the socket is gone and socat exits itself;
+    # the explicit kill is for determinism, not cleanup. Left running on
+    # die paths on purpose: a hung installer keeps writing, and the capture
+    # log is where its last words land. No socat on PATH means no capture,
+    # warned once, never fatal — that is also the e2e posture (unavailable
+    # there by design, so the suite pins the graceful skip, not the stream).
+    SERIAL_CAP_PID=""
+    start_serial_capture() {
+        local vmid="$1"
+        if ! command -v socat >/dev/null 2>&1; then
+            log "WARNING: socat unavailable — serial install log for VM ${vmid} will not be captured"
+            return 0
+        fi
+        local sock="/var/run/qemu-server/${vmid}.serial"
+        local caplog="${ROOT}/var/log/pve-serial-${vmid}-install.log"
+        : > "$caplog"
+        nohup socat -u "UNIX-CONNECT:${sock}" "OPEN:${caplog},creat,append" >/dev/null 2>&1 &
+        SERIAL_CAP_PID=$!
+        log "serial capture started for VM ${vmid} -> ${caplog}"
+    }
+    stop_serial_capture() {
+        [ -n "${SERIAL_CAP_PID:-}" ] || return 0
+        kill "$SERIAL_CAP_PID" 2>/dev/null || true
+        wait "$SERIAL_CAP_PID" 2>/dev/null || true
+        log "serial capture stopped"
+        SERIAL_CAP_PID=""
     }
     if ! qm status 101 >/dev/null 2>&1; then
         # Install with the OS disk alone. With two data disks the installer's
@@ -483,10 +528,13 @@ main() {
             log "VM 101 direct-kernel boot configured (autoinstall, no prompt)"
             qm start 101
             log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, 80GB OS (data and GPUs attach post-install)"
+            start_serial_capture 101
             log "Install gate: waiting for VM 101 to power off at end of install (timeout: 1800s)"
             if ! wait_for_stopped 101 1800; then
-                die "VM 101 install did not finish in 1800s — inspect its console"
+                stop_serial_capture
+                die "VM 101 install did not finish in 1800s — install serial log at ${ROOT}/var/log/pve-serial-101-install.log; inspect its console"
             fi
+            stop_serial_capture
             if [ -z "$(os_esp 101)" ]; then
                 die "VM 101 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
             fi
@@ -547,12 +595,15 @@ main() {
             log "VM 102 direct-kernel boot configured (autoinstall, no prompt)"
             qm start 102
             log "VM 102 (dev-template) created and starting for provisioning: ${DEV_MEM}MB, ${DEV_CORES} cores, 40GB OS"
+            start_serial_capture 102
 
             PROVISIONING_TIMEOUT=1800
             log "Install gate: waiting for VM 102 to power off at end of install (timeout: ${PROVISIONING_TIMEOUT}s)"
             if ! wait_for_stopped 102 "$PROVISIONING_TIMEOUT"; then
-                die "VM 102 install did not finish in ${PROVISIONING_TIMEOUT}s — inspect its console"
+                stop_serial_capture
+                die "VM 102 install did not finish in ${PROVISIONING_TIMEOUT}s — install serial log at ${ROOT}/var/log/pve-serial-102-install.log; inspect its console"
             fi
+            stop_serial_capture
             if [ -z "$(os_esp 102)" ]; then
                 die "VM 102 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
             fi
