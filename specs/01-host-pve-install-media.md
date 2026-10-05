@@ -208,6 +208,18 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   provisioning (a marker, not a counter in memory, since memory does not
   survive it), and every fragment is idempotent so the post-boot pass is fast
   no-ops up to guest creation.
+* **R-01.7.7** Where endpoints share a group with host bridges that can never
+  be bound to `vfio-pci`, the group is not viable for assignment to anyone —
+  even a guest taking the whole group, since the bridges must stay host-owned.
+  Such devices may be separated with a PCIe ACS override
+  (`pcie_acs_override=downstream,multifunction` on the kernel cmdline), and
+  **only** when every endpoint thus separated goes to the same guest on this
+  single-tenant host: peer DMA then stays inside one trusted guest, and the
+  cross-guest case R-01.7.1 guards against does not arise. The override is
+  reversible (remove the flag), and attachment happens only after a reboot
+  verifies the split — never on the pre-override grouping. No reinstall is
+  involved: it is a boot flag, applied by the same GRUB management as the
+  IOMMU enablement itself.
 
 ### R-01.8 The host overcommits memory safely
 
