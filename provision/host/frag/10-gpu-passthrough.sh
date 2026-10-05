@@ -155,6 +155,35 @@ check_iommu_group_separable() {
         "$pci_addr" "$@"
 }
 
+iommu_group_blocked_by_host_bridge() {
+    # True (0) when a group member that may not follow the device into the
+    # guest is a PCI bridge (class 0604) — the ACS-splittable shape. Bridges
+    # stay host-owned, so the group is viable for nobody until an override
+    # splits it; endpoints bound elsewhere are a different refusal and do not
+    # count here. Mirrors the separability iteration above on purpose: the two
+    # predicates must agree on who is allowed in the group, and sharing the
+    # loop would couple them.
+    #   $1  the group directory
+    #   $2  the BDF being handed to VFIO
+    #   $3+ BDFs permitted to share the group with it
+    local group_path="$1" bdf="$2"
+    shift 2
+    local member allowed allowed_bdf cls
+    while IFS= read -r member; do
+        [ -n "$member" ] || continue
+        [ "$(pci_bdf_short "$member")" = "$(pci_bdf_short "$bdf")" ] && continue
+        allowed=false
+        for allowed_bdf in "$@"; do
+            [ "$(pci_bdf_short "$member")" = "$(pci_bdf_short "$allowed_bdf")" ] \
+                && { allowed=true; break; }
+        done
+        [ "$allowed" = true ] && continue
+        cls=$(lspci -n -s "$(pci_bdf_short "$member")" 2>/dev/null | awk '{print $2}' | cut -d: -f1 || true)
+        [ "$cls" = "0604" ] && return 0
+    done < <(iommu_group_member_bdfs "$group_path")
+    return 1
+}
+
 iommu_flag_for_vendor() {
     # Maps a lowercased lscpu Vendor ID to the kernel parameter that enables
     # IOMMU on it. Returns 1 for a vendor with no known flag, so the caller
@@ -202,6 +231,12 @@ main() {
     # the log says which group stopped it and what else was in it.
     PASSTHROUGH_IDS=()
     PASSTHROUGH_NAMES=()
+    # Set when a skipped candidate shares its group with host bridges: the
+    # override below splits exactly that shape. Never unset once set, and
+    # never removed from GRUB afterwards — removing it would un-split the
+    # groups on the next boot and flap working passthrough. Reversal is a
+    # deliberate manual edit, matching R-01.7.7.
+    ACS_NEEDED=false
 
     for name_entry in "${GPU_NAMES[@]}"; do
         PCI_ADDR=$(echo "$name_entry" | awk '{print $1}')
@@ -237,6 +272,11 @@ main() {
             log "  Permitted would be: $PCI_ADDR${ALLOWED_IN_GROUP[0]:+ and its companion audio function ${ALLOWED_IN_GROUP[0]}}"
             log "  The extra devices would follow it into the guest, so it is left to the host."
             log "  Fix: enable an ACS override in firmware to split the group, then re-run."
+            if iommu_group_blocked_by_host_bridge "$GPU_GROUP_PATH" "$PCI_ADDR" ${ALLOWED_IN_GROUP[@]+"${ALLOWED_IN_GROUP[@]}"}; then
+                ACS_NEEDED=true
+                log "  Blocked by host bridge(s): adding pcie_acs_override to GRUB, which splits this shape at boot."
+                log "  The devices attach only on a verified split after reboot — this run still skips them."
+            fi
             continue
         fi
 
@@ -340,7 +380,12 @@ main() {
         grep -q -- " $1[\" ]" "$GRUB_FILE" 2>/dev/null
     }
 
-    for token in "${IOMMU_FLAG}" "iommu=pt" "vfio-pci.ids=${VFIO_IDS}" "disable_vga=1"; do
+    GRUB_TOKENS=("${IOMMU_FLAG}" "iommu=pt" "vfio-pci.ids=${VFIO_IDS}" "disable_vga=1")
+    if [ "$ACS_NEEDED" = true ]; then
+        GRUB_TOKENS+=("pcie_acs_override=downstream,multifunction")
+    fi
+
+    for token in "${GRUB_TOKENS[@]}"; do
         if ! grub_has_token "$token"; then
             sed -i "s|${GRUB_LINE_MATCH}\(.*\)\"|${GRUB_LINE_PREFIX}\1 ${token}\"|" "$GRUB_FILE"
             GRUB_CHANGED=true

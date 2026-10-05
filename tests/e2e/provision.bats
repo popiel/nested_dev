@@ -329,6 +329,19 @@ require_run_ok() {
     assert_file_contains "$log" "00:01.0"
 }
 
+@test "bridge-shared groups earn the ACS override, same-run behavior kept" {
+    require_run_ok
+    local log="$E2E_ROOT/var/log/pve-firstboot.log"
+    local grub="$E2E_ROOT/etc/default/grub"
+    # The override lands in GRUB for the next boot — and this run still
+    # passes nothing but the iGPU: the token takes effect at boot, so the
+    # devices attach only on a verified split, never speculatively.
+    assert_file_contains "$grub" "pcie_acs_override=downstream,multifunction"
+    assert_file_contains "$log" "Blocked by host bridge"
+    assert_file_contains "$log" "devices attach only on a verified split"
+    [ "$(cat "$E2E_ROOT/var/lib/pve-firstboot/passthrough-devices")" = "0000:00:02.0" ]
+}
+
 # --- the guests ---
 
 @test "the private network is up with DHCP, DNS and egress" {

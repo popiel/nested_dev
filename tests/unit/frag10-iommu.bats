@@ -323,3 +323,59 @@ iommu_group() {
     run iommu_group_device_count "${tmpdir}/devices"
     [ "$output" = "6" ]
 }
+
+# --- ACS predicate: bridge-shared groups ---
+#
+# iommu_group_blocked_by_host_bridge answers the narrower question the ACS
+# override is conditioned on: is a non-permitted group member a PCI bridge
+# (class 0604), which stays host-owned, as opposed to an endpoint bound
+# elsewhere? Only the bridge shape justifies pcie_acs_override.
+
+mock_lspci_classes() {
+    # Answers `lspci -n -s <bdf>` with a class per BDF: 0604 for the two root
+    # ports, 0300 for everything else. Only the class is load-bearing here.
+    create_mock "lspci" 'bdf="${*: -1}"; case "$bdf" in 00:01.0|00:01.1) echo "$bdf 0604: 8086:5910";; *) echo "$bdf 0300: 10de:1b80";; esac'
+}
+
+@test "a group shared with host bridges is bridge-blocked" {
+    # The measured layout in miniature: 01:00.0 with its permitted audio
+    # function and two root ports that can never follow it into a guest.
+    local tmpdir="${BATS_TMPDIR}/bridge-blocked"
+    rm -rf "$tmpdir"
+    iommu_group "$tmpdir" 0000 01:00.0 01:00.1 00:01.0 00:01.1
+    mock_lspci_classes
+    run iommu_group_blocked_by_host_bridge "${tmpdir}/devices" 01:00.0 01:00.1
+    [ "$status" -eq 0 ]
+}
+
+@test "a group shared with endpoints is not bridge-blocked" {
+    # Same refusal shape, different cause: extra endpoints also fail
+    # separability, but splitting bridges is not what unblocks them, so the
+    # override must not be justified by them.
+    local tmpdir="${BATS_TMPDIR}/endpoint-shared"
+    rm -rf "$tmpdir"
+    iommu_group "$tmpdir" 0000 01:00.0 02:00.0
+    mock_lspci_classes
+    run iommu_group_blocked_by_host_bridge "${tmpdir}/devices" 01:00.0
+    [ "$status" -ne 0 ]
+}
+
+@test "a separable group is not bridge-blocked" {
+    local tmpdir="${BATS_TMPDIR}/bridge-clean"
+    rm -rf "$tmpdir"
+    iommu_group "$tmpdir" 0000 01:00.0
+    mock_lspci_classes
+    run iommu_group_blocked_by_host_bridge "${tmpdir}/devices" 01:00.0
+    [ "$status" -ne 0 ]
+}
+
+@test "a permitted audio function does not count as a bridge" {
+    # The allowed list is honored exactly: the companion is skipped by BDF,
+    # not waved through by class.
+    local tmpdir="${BATS_TMPDIR}/bridge-audio-allowed"
+    rm -rf "$tmpdir"
+    iommu_group "$tmpdir" 0000 01:00.0 01:00.1
+    mock_lspci_classes
+    run iommu_group_blocked_by_host_bridge "${tmpdir}/devices" 01:00.0 01:00.1
+    [ "$status" -ne 0 ]
+}
