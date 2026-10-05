@@ -351,6 +351,7 @@ main() {
     SERVER_INITRD="${ISO_DIR}/${SERVER_BASE}-initrd"
     QEMU_APPEND="${APPEND_ARGS:+$APPEND_ARGS }autoinstall"
     log "installer direct boot ready: ${SERVER_BASE} + autoinstall"
+    log "installer boot args: ${QEMU_APPEND}"
 
     # --- VM 100: Desktop ---
     # Boot order names the installer explicitly: PVE passes strict=on, so an
