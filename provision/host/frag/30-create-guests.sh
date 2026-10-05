@@ -349,9 +349,13 @@ main() {
         || die "installer kernel extraction failed"
     SERVER_KERNEL="${ISO_DIR}/${SERVER_BASE}-vmlinuz"
     SERVER_INITRD="${ISO_DIR}/${SERVER_BASE}-initrd"
-    QEMU_APPEND="${APPEND_ARGS:+$APPEND_ARGS }autoinstall"
+    QEMU_APPEND="${APPEND_ARGS:+$APPEND_ARGS }autoinstall console=ttyS0 console=tty0"
     log "installer direct boot ready: ${SERVER_BASE} + autoinstall"
     log "installer boot args: ${QEMU_APPEND}"
+    # Console order matters: kernel messages go to both, /dev/console (and
+    # the installer TUI) stays on VGA via the last entry, while the serial
+    # carries everything for host-side capture (qm terminal). A guest oops
+    # is otherwise readable only off VNC glass, unscrollable and uncopyable.
 
     # --- VM 100: Desktop ---
     # Boot order names the installer explicitly: PVE passes strict=on, so an

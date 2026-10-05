@@ -454,7 +454,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/qm-journal" \
         "qm set 101 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64-vmlinuz"
     assert_file_contains "$E2E_STATE/qm-journal" \
-        "-append 'ro quiet splash --- autoinstall'"
+        "-append 'ro quiet splash --- autoinstall console=ttyS0 console=tty0'"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --delete args"
     # No GeForce workaround without a dGPU on the node.
     run grep -c "kvm=off" "$E2E_STATE/qm-journal"
@@ -478,6 +478,8 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide2"
     assert_file_contains "$E2E_STATE/qm-journal" \
         "qm set 102 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64-vmlinuz"
+    assert_file_contains "$E2E_STATE/qm-journal" \
+        "-append 'ro quiet splash --- autoinstall console=ttyS0 console=tty0'"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete args"
     run grep -c "qm agent 102 ping" "$E2E_STATE/qm-journal"
     [ "$output" = "1" ]
