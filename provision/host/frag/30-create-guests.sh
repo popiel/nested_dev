@@ -91,6 +91,52 @@ os_esp() {
     return 1
 }
 
+# Install serial capture, started right after `qm start` while the installer
+# is still booting. socat on a not-yet-existing socket dies instantly (so a
+# bare call races QEMU socket creation and usually loses — the empty file
+# with nothing in it), hence the retry loop: early oopses land ~2 min in,
+# the window is 5 min, and a slow start burns retries, never the capture.
+# Stale readers are killed first (a previous failed run's orphan would split
+# the stream). Stopped once the install powers off; killed explicitly on die
+# paths too, so at most one reader ever exists. No socat on PATH means no
+# capture, warned once, never fatal — that is also the e2e posture.
+# Time-only seams for tests (production defaults).
+SERIAL_CAP_PID=""
+start_serial_capture() {
+    local vmid="$1"
+    if ! command -v socat >/dev/null 2>&1; then
+        log "WARNING: socat unavailable — serial install log for VM ${vmid} will not be captured"
+        return 0
+    fi
+    pkill -f "socat.*qemu-server/${vmid}\.serial" 2>/dev/null || true
+    local sock="/var/run/qemu-server/${vmid}.serial"
+    local caplog="${ROOT}/var/log/pve-serial-${vmid}-install.log"
+    : > "$caplog"
+    (
+        local attempt=0
+        local max="${SERIAL_RETRY_MAX:-60}" interval="${SERIAL_RETRY_INTERVAL:-5}"
+        while [ "$attempt" -lt "$max" ]; do
+            if socat -u "UNIX-CONNECT:${sock}" "OPEN:${caplog},creat,append" >/dev/null 2>&1; then
+                exit 0
+            fi
+            sleep "$interval"
+            attempt=$((attempt + 1))
+        done
+        log "WARNING: serial capture never connected for VM ${vmid}"
+    ) &
+    SERIAL_CAP_PID=$!
+    log "serial capture started for VM ${vmid} -> ${caplog}"
+}
+stop_serial_capture() {
+    local vmid="$1"
+    [ -n "${SERIAL_CAP_PID:-}" ] || return 0
+    kill "$SERIAL_CAP_PID" 2>/dev/null || true
+    pkill -f "socat.*qemu-server/${vmid}\.serial" 2>/dev/null || true
+    wait "$SERIAL_CAP_PID" 2>/dev/null || true
+    log "serial capture stopped"
+    SERIAL_CAP_PID=""
+}
+
 download_iso() {
     local url="$1" dest="$2"
     if [ -f "$dest" ]; then
@@ -465,36 +511,6 @@ main() {
         done
         return 0
     }
-    # Install serial capture, started right after `qm start` while the
-    # installer is still booting (early oopses land ~2 min in — attaching
-    # later misses them; sockets keep no backlog). Stopped once the install
-    # powers off, at which point the socket is gone and socat exits itself;
-    # the explicit kill is for determinism, not cleanup. Left running on
-    # die paths on purpose: a hung installer keeps writing, and the capture
-    # log is where its last words land. No socat on PATH means no capture,
-    # warned once, never fatal — that is also the e2e posture (unavailable
-    # there by design, so the suite pins the graceful skip, not the stream).
-    SERIAL_CAP_PID=""
-    start_serial_capture() {
-        local vmid="$1"
-        if ! command -v socat >/dev/null 2>&1; then
-            log "WARNING: socat unavailable — serial install log for VM ${vmid} will not be captured"
-            return 0
-        fi
-        local sock="/var/run/qemu-server/${vmid}.serial"
-        local caplog="${ROOT}/var/log/pve-serial-${vmid}-install.log"
-        : > "$caplog"
-        nohup socat -u "UNIX-CONNECT:${sock}" "OPEN:${caplog},creat,append" >/dev/null 2>&1 &
-        SERIAL_CAP_PID=$!
-        log "serial capture started for VM ${vmid} -> ${caplog}"
-    }
-    stop_serial_capture() {
-        [ -n "${SERIAL_CAP_PID:-}" ] || return 0
-        kill "$SERIAL_CAP_PID" 2>/dev/null || true
-        wait "$SERIAL_CAP_PID" 2>/dev/null || true
-        log "serial capture stopped"
-        SERIAL_CAP_PID=""
-    }
     if ! qm status 101 >/dev/null 2>&1; then
         # Install with the OS disk alone. With two data disks the installer's
         # default layout picks the largest — it took the 500GB data volume
@@ -531,10 +547,10 @@ main() {
             start_serial_capture 101
             log "Install gate: waiting for VM 101 to power off at end of install (timeout: 1800s)"
             if ! wait_for_stopped 101 1800; then
-                stop_serial_capture
+                stop_serial_capture 101
                 die "VM 101 install did not finish in 1800s — install serial log at ${ROOT}/var/log/pve-serial-101-install.log; inspect its console"
             fi
-            stop_serial_capture
+            stop_serial_capture 101
             if [ -z "$(os_esp 101)" ]; then
                 die "VM 101 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
             fi
@@ -600,10 +616,10 @@ main() {
             PROVISIONING_TIMEOUT=1800
             log "Install gate: waiting for VM 102 to power off at end of install (timeout: ${PROVISIONING_TIMEOUT}s)"
             if ! wait_for_stopped 102 "$PROVISIONING_TIMEOUT"; then
-                stop_serial_capture
+                stop_serial_capture 102
                 die "VM 102 install did not finish in ${PROVISIONING_TIMEOUT}s — install serial log at ${ROOT}/var/log/pve-serial-102-install.log; inspect its console"
             fi
-            stop_serial_capture
+            stop_serial_capture 102
             if [ -z "$(os_esp 102)" ]; then
                 die "VM 102 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
             fi

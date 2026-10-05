@@ -28,6 +28,7 @@ setup() {
 }
 
 teardown() {
+    rm -rf "${SWORK:-/nonexistent-serial-scratch}"
     cleanup_mocks
 }
 
@@ -144,4 +145,81 @@ mock_blkid() {
     run os_esp 103
     [ "$status" -ne 0 ]
     unset VM_DISK_DEVS
+}
+
+# --- start/stop_serial_capture: install serial to a host log ---
+#
+# socat on a not-yet-existing socket dies instantly, so the start is a retry
+# loop (stale readers killed first); the stop kills the loop and any
+# connected stream. Time-only env seams: SERIAL_RETRY_MAX/INTERVAL.
+
+serial_capture_fixture() {
+    # $1 = socat failures before success. Own scratch dir: this file's
+    # setup provides none (its tests never needed one). Re-sources the
+    # fragment AFTER exporting PVE_ROOT: ROOT snapshots it at source time,
+    # so sourcing first (as the shared setup does) would pin the log and
+    # capture paths to the wrong root.
+    SWORK="$(mktemp -d)"
+    export PVE_ROOT="$SWORK"
+    mkdir -p "${SWORK}/var/log"
+    # shellcheck disable=SC1090
+    source "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh"
+    log() { printf '%s\n' "$*"; }
+    export MOCK_JOURNAL="$SWORK" MOCK_COUNT="${SWORK}/socat-count"
+    printf '%s\n' "$1" > "$MOCK_COUNT"
+    install_mock socat "mock-socat.sh"
+    install_mock pkill "mock-pkill.sh"
+    export SERIAL_RETRY_MAX=4 SERIAL_RETRY_INTERVAL=1
+    SERIAL_CAP_PID=""
+}
+
+@test "capture starts on first connect and stops cleanly" {
+    serial_capture_fixture 0
+    start_serial_capture 101 >"${SWORK}/start.out" 2>&1
+    [ "$?" -eq 0 ]
+    [ -n "$SERIAL_CAP_PID" ]
+    wait "$SERIAL_CAP_PID"
+    run grep -c "^socat " "${SWORK}/socat-journal"
+    [ "$output" = "1" ]
+    run grep -q "qemu-server/101.serial" "${SWORK}/socat-journal"
+    [ "$status" -eq 0 ]
+    stop_serial_capture 101
+    [ -z "$SERIAL_CAP_PID" ]
+    unset PVE_ROOT MOCK_JOURNAL MOCK_COUNT SERIAL_RETRY_MAX SERIAL_RETRY_INTERVAL
+}
+
+@test "capture retries a missing socket then connects" {
+    serial_capture_fixture 2
+    start_serial_capture 101 >"${SWORK}/start.out" 2>&1
+    [ "$?" -eq 0 ]
+    wait "$SERIAL_CAP_PID"
+    run grep -c "^socat " "${SWORK}/socat-journal"
+    [ "$output" = "3" ]
+    stop_serial_capture 101
+    unset PVE_ROOT MOCK_JOURNAL MOCK_COUNT SERIAL_RETRY_MAX SERIAL_RETRY_INTERVAL
+}
+
+@test "capture gives up loudly after the cap, never fatally" {
+    serial_capture_fixture 99
+    export SERIAL_RETRY_MAX=2
+    start_serial_capture 101 >"${SWORK}/start.out" 2>&1
+    [ "$?" -eq 0 ]
+    wait "$SERIAL_CAP_PID"
+    run grep -c "^socat " "${SWORK}/socat-journal"
+    [ "$output" = "2" ]
+    assert_file_contains "${SWORK}/start.out" "never connected"
+    stop_serial_capture 101
+    unset PVE_ROOT MOCK_JOURNAL MOCK_COUNT SERIAL_RETRY_MAX SERIAL_RETRY_INTERVAL
+}
+
+@test "capture without socat warns once and proceeds" {
+    SWORK="$(mktemp -d)"
+    export PVE_ROOT="$SWORK"
+    mkdir -p "${SWORK}/var/log"
+    SERIAL_CAP_PID=""
+    PATH="${FIXTURES_DIR}/mock-bin" run start_serial_capture 101
+    [ "$status" -eq 0 ]
+    assert_contains "$output" "socat unavailable"
+    [ -z "$SERIAL_CAP_PID" ]
+    unset PVE_ROOT
 }
