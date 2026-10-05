@@ -47,6 +47,22 @@ setup_file() {
     cp "${E2E_DIR}/fixtures/template-llm" "$TEMPLATEDIR/llm"
     cp "${E2E_DIR}/fixtures/template-dev" "$TEMPLATEDIR/dev"
 
+    # Fake mounted server ISO for the kernel extractor (mount is stubbed to
+    # overlay this tree). md5sums are computed for real, so the manifest
+    # check the fragment depends on runs instead of being bypassed.
+    mkdir -p "$WORK/fakeiso/boot/grub" "$WORK/fakeiso/casper"
+    printf 'FAKEKERNELDATA' > "$WORK/fakeiso/casper/vmlinuz"
+    printf 'FAKEINITRDDATA' > "$WORK/fakeiso/casper/initrd"
+    cat > "$WORK/fakeiso/boot/grub/grub.cfg" <<'EOF'
+set default=0
+menuentry "Install Ubuntu Server" {
+    linux   /casper/vmlinuz  ro quiet splash ---
+    initrd  /casper/initrd
+}
+EOF
+    (cd "$WORK/fakeiso" && md5sum casper/vmlinuz casper/initrd > md5sum.txt)
+    export FAKEISO="$WORK/fakeiso"
+
     # --- the fixture host, as the installer leaves it ---
     mkdir -p "$ROOT/var/log" "$ROOT/root" \
         "$ROOT/etc/apt/sources.list.d" "$ROOT/etc/default" \
@@ -415,8 +431,20 @@ require_run_ok() {
     # detach a reboot would re-enter the installer under ide2-first order.
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --delete ide2"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --scsi1 local-lvm:500"
+    # Bootability gate: the installer detaches only onto a partitioned disk,
+    # and only a booted system (agent answering) counts as installed.
+    run grep -c "qm agent 101 ping" "$E2E_STATE/qm-journal"
+    [ "$output" = "1" ]
+    # Direct-kernel boot: the ISO's own kernel with a host-owned command
+    # line (the stock cmdline plus autoinstall — no prompt on any boot).
+    # Removed post-install, except where the GeForce set replaces it.
+    assert_file_contains "$E2E_STATE/qm-journal" \
+        "qm set 101 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64-vmlinuz"
+    assert_file_contains "$E2E_STATE/qm-journal" \
+        "-append 'ro quiet splash --- autoinstall'"
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --delete args"
     # No GeForce workaround without a dGPU on the node.
-    run grep -c "qm set 101 --args" "$E2E_STATE/qm-journal"
+    run grep -c "kvm=off" "$E2E_STATE/qm-journal"
     [ "$output" = "0" ]
 }
 
@@ -435,6 +463,11 @@ require_run_ok() {
     run grep -c "qm template 102" "$E2E_STATE/qm-journal"
     [ "$output" = "1" ]
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide2"
+    assert_file_contains "$E2E_STATE/qm-journal" \
+        "qm set 102 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64-vmlinuz"
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete args"
+    run grep -c "qm agent 102 ping" "$E2E_STATE/qm-journal"
+    [ "$output" = "1" ]
     # Conversion sanitizes per-clone identity and detaches the seed ISO,
     # which carries rendered private keys no clone may ever see.
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide0"

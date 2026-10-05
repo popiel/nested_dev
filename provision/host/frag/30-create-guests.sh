@@ -338,6 +338,20 @@ main() {
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_DESKTOP_ISO}" "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}"
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_SERVER_ISO}" "${ISO_DIR}/${UBUNTU_SERVER_ISO}"
 
+    # --- Extract installer kernel for QEMU direct boot (servers only) ---
+    # Stock ISOs boot without the `autoinstall` flag, so the installer waits
+    # on its yes/no prompt forever. The ISO's own kernel+initrd boot directly
+    # with a host-owned command line (R-01.11.13); the ISO stays attached as
+    # the package source. Desktop keeps interactive ISO boot.
+    EXTRACT_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/extract-installer-kernel.sh"
+    SERVER_BASE="${UBUNTU_SERVER_ISO%.iso}"
+    APPEND_ARGS="$(bash "$EXTRACT_SCRIPT" "${ISO_DIR}/${UBUNTU_SERVER_ISO}" "${ISO_DIR}")" \
+        || die "installer kernel extraction failed"
+    SERVER_KERNEL="${ISO_DIR}/${SERVER_BASE}-vmlinuz"
+    SERVER_INITRD="${ISO_DIR}/${SERVER_BASE}-initrd"
+    QEMU_APPEND="${APPEND_ARGS:+$APPEND_ARGS }autoinstall"
+    log "installer direct boot ready: ${SERVER_BASE} + autoinstall"
+
     # --- VM 100: Desktop ---
     # Boot order names the installer explicitly: PVE passes strict=on, so an
     # order naming only the empty disk parks the guest at a UEFI shell instead
@@ -405,6 +419,29 @@ main() {
         done
         return 0
     }
+    # A parked stopped VM is end-of-run, not end-of-success: a failed install
+    # honors shutdown:poweroff all the same. Detaching the installer on a
+    # disk with no bootloader strands the guest at a UEFI shell with the
+    # evidence still on the disk — so an EFI System partition on the OS disk
+    # is required first, and only a booted system (agent answering) counts
+    # as installed afterward.
+    EFI_PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"
+    os_esp() {
+        local vmid="$1"
+        blkid -o device -t "PARTTYPE=${EFI_PARTTYPE}" 2>/dev/null \
+            | grep "vm-${vmid}-disk-1" | head -1
+    }
+    wait_for_agent() {
+        local vmid="$1" timeout="$2" elapsed=0
+        while ! qm agent "$vmid" ping >/dev/null 2>&1; do
+            sleep 10
+            elapsed=$((elapsed + 10))
+            if [ "$elapsed" -ge "$timeout" ]; then
+                return 1
+            fi
+        done
+        return 0
+    }
     if ! qm status 101 >/dev/null 2>&1; then
         # Install with the OS disk alone. With two data disks the installer's
         # default layout picks the largest — it took the 500GB data volume
@@ -434,11 +471,16 @@ main() {
             --scsi0 ${GUEST_STORAGE}:80 \
             --boot "order=ide2;scsi0"
 
+            qm set 101 --args "-kernel ${SERVER_KERNEL} -initrd ${SERVER_INITRD} -append '${QEMU_APPEND}'"
+            log "VM 101 direct-kernel boot configured (autoinstall, no prompt)"
             qm start 101
             log "VM 101 (llm) created and started: ${LLM_MEM}MB, ${LLM_CORES} cores, 80GB OS (data and GPUs attach post-install)"
             log "Install gate: waiting for VM 101 to power off at end of install (timeout: 1800s)"
             if ! wait_for_stopped 101 1800; then
                 die "VM 101 install did not finish in 1800s — inspect its console"
+            fi
+            if [ -z "$(os_esp 101)" ]; then
+                die "VM 101 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
             fi
             qm set 101 --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE}
             log "VM 101 data volume attached (${DATA_VOL_SIZE}GB raw for first-boot to format)"
@@ -453,10 +495,17 @@ main() {
             qm set 101 ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
                 --args '-cpu host,kvm=off,hidden=1'
             log "Applied dGPU passthrough and GeForce kvm=off,hidden=1 workaround"
+        else
+            qm set 101 --delete args
+            log "VM 101 direct-kernel args removed; disk boot from here"
         fi
-            qm set 101 --delete ide2
+            qm set 101 --delete ide2 --boot "order=scsi0"
             log "VM 101 installer detached; booting installed system"
             qm start 101
+            log "Waiting for VM 101 installed system to answer (timeout: 600s)"
+            if ! wait_for_agent 101 600; then
+                die "VM 101 installed system never answered — reattach the installer with: qm set 101 --ide2 ${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom --boot \"order=ide2;scsi0\""
+            fi
             log "VM 101 (llm) installed system booting; first-boot proceeds unattended"
     else
         log "VM 101 already exists — skipping"
@@ -486,6 +535,8 @@ main() {
                 --scsi0 ${GUEST_STORAGE}:40 \
                 --boot "order=ide2;scsi0"
 
+            qm set 102 --args "-kernel ${SERVER_KERNEL} -initrd ${SERVER_INITRD} -append '${QEMU_APPEND}'"
+            log "VM 102 direct-kernel boot configured (autoinstall, no prompt)"
             qm start 102
             log "VM 102 (dev-template) created and starting for provisioning: ${DEV_MEM}MB, ${DEV_CORES} cores, 40GB OS"
 
@@ -494,9 +545,17 @@ main() {
             if ! wait_for_stopped 102 "$PROVISIONING_TIMEOUT"; then
                 die "VM 102 install did not finish in ${PROVISIONING_TIMEOUT}s — inspect its console"
             fi
-            qm set 102 --delete ide2
-            log "VM 102 installer detached; booting installed system"
+            if [ -z "$(os_esp 102)" ]; then
+                die "VM 102 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
+            fi
+            qm set 102 --delete ide2 --boot "order=scsi0"
+            qm set 102 --delete args
+            log "VM 102 installer detached and direct-kernel args removed; booting installed system"
             qm start 102
+            log "Waiting for VM 102 installed system to answer (timeout: 600s)"
+            if ! wait_for_agent 102 600; then
+                die "VM 102 installed system never answered — reattach the installer with: qm set 102 --ide2 ${ISO_DIR}/${UBUNTU_SERVER_ISO},media=cdrom --boot \"order=ide2;scsi0\""
+            fi
             elapsed=0
             log "Provisioning gate: waiting for VM 102 first-boot (timeout: ${PROVISIONING_TIMEOUT}s)"
             while [ $elapsed -lt $PROVISIONING_TIMEOUT ]; do

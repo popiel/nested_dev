@@ -1,0 +1,7 @@
+#!/bin/bash
+# tests/e2e/stubs/blkid — the fixture OS disks carry EFI partitions.
+# The fragment asks for EFI System partitions host-wide and greps its own
+# VM's OS disk out of the answer, so both fixture lines are always printed.
+printf '/dev/pve/vm-101-disk-1p1: PARTLABEL="EFI System Partition" PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"\n'
+printf '/dev/pve/vm-102-disk-1p1: PARTLABEL="EFI System Partition" PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"\n'
+exit 0
