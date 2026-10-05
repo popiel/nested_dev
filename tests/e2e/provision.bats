@@ -435,6 +435,10 @@ require_run_ok() {
     run grep -c "qm template 102" "$E2E_STATE/qm-journal"
     [ "$output" = "1" ]
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide2"
+    # Conversion sanitizes per-clone identity and detaches the seed ISO,
+    # which carries rendered private keys no clone may ever see.
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide0"
+    assert_file_contains "$E2E_STATE/qm-journal" "random-seed"
 }
 
 @test "guest seeds carry the hash and both keys, and no placeholders survive" {

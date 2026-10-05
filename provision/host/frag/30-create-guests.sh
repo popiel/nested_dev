@@ -530,9 +530,17 @@ main() {
                 log "  qm shutdown 102"
                 log "  qm template 102"
             else
-                qm guest exec 102 -- cloud-init clean 2>/dev/null || true
-                qm guest exec 102 -- /bin/bash -c 'truncate -s 0 /etc/machine-id && rm -f /etc/ssh/ssh_host_*' 2>/dev/null || true
+                # Sanitize template identity while the VM still runs (guest-exec):
+                # everything that must differ per clone is removed here, so no
+                # child can impersonate another. The seed ISO detaches below:
+                # it carries rendered private keys (vmctl, guest-id) that must
+                # never reach a clone. Local extras are never merged back from
+                # anywhere; revoking a key means editing the clone, not this.
+                qm guest exec 102 -- cloud-init clean --logs 2>/dev/null || true
+                qm guest exec 102 -- /bin/bash -c 'truncate -s 0 /etc/machine-id && rm -f /etc/ssh/ssh_host_* && rm -f /var/lib/systemd/random-seed && rm -f /var/lib/dhcp/*.leases /var/lib/dhcp/*.lease /var/lib/systemd/network/*.lease && truncate -s 0 /root/.bash_history /home/*/.bash_history 2>/dev/null; true' 2>/dev/null || true
                 log "VM 102 identity cleaned for future clones"
+                qm set 102 --delete ide0 2>/dev/null \
+                    || log "WARNING: seed ISO detach failed — template still carries rendered private keys"
 
                 qm shutdown 102 2>/dev/null || true
                 sleep 5

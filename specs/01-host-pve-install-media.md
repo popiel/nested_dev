@@ -220,8 +220,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 
 ### R-01.9 The host provides DNS and DHCP for the private subnet
 
-* **R-01.9.1** dnsmasq serves DHCP and DNS on `vmbr0`, enabled at boot and
-  passing its own configuration test.
+* **R-01.9.1** dnsmasq serves DHCP and DNS on `vmbr0`, and DNS on localhost
+  for the host itself (whose resolver points at `127.0.0.1`), enabled at
+  boot and passing its own configuration test.
 * **R-01.9.2** Every VM has a fixed lease and a DNS entry in both short and
   fully-qualified form.
 * **R-01.9.3** Upstream DNS is taken from the host's resolver at provision
@@ -297,11 +298,18 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   everything at create for its interactive install.
 * **R-01.11.2** vm 102 (`dev-template`) is created and started, **provisioned
   once, and then converted to a PVE template** (Spec 07 §6). It is never left
-  as a running VM.
+  as a running VM. Conversion sanitizes per-clone identity (machine-id, SSH
+  host keys, random seed, DHCP leases, shell histories, cloud-init state)
+  and detaches the seed ISO, which carries rendered private keys that must
+  never reach a clone.
 * **R-01.11.3** Server installs end powered off, never rebooted: with
   installer-first boot order a reboot re-enters the installer and reinstalls
   over the top, so completion is observed as a parked stopped VM (a
-  mid-install reboot keeps it running and never counts). The provisioner
+  mid-install reboot keeps it running and never counts). A failed install
+  parks stopped exactly the same way, so stopped alone is not completion:
+  the provisioner verifies a bootloader exists on the OS volume before
+  detaching the installer, and only a booted system (guest agent answering)
+  counts as installed. The provisioner
   then detaches the installer and boots the disk. The desktop's interactive
   install is exempt.
 * **R-01.11.4** A template cannot be started directly. This is the mechanism
@@ -318,33 +326,33 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   firewall step. The template is not converted from an unprovisioned disk.
 * **R-01.11.9** The per-VM firewall flag is set on the guests whose egress is
   restricted.
-* **R-01.11.9** **A host that cannot create a guest says so before any download
+* **R-01.11.10** **A host that cannot create a guest says so before any download
   or allocation is attempted, naming the missing prerequisite.** The guest set
   is created as a single unit, so a host that fails the check produces **no VMs
   at all** — and an assertion made only by the create call turns one wrong name
   into exactly that outcome, reported as a bare low-level error after the
   install media has been downloaded.
-* **R-01.11.10** A missing bridge or storage is **reported for the operator to
+* **R-01.11.11** A missing bridge or storage is **reported for the operator to
   provide, never improvised.** Automatically adopting a network interface can
   take the host's only network path down — the same reason R-01.4.1 forbids
   target-disk detection.
-* **R-01.11.11** Each guest's vCPU allocation is **capped at the node's per-VM
+* **R-01.11.12** Each guest's vCPU allocation is **capped at the node's per-VM
   maximum.** PVE refuses a create whose vCPU count exceeds it, so a profile
   written for a larger host would otherwise fail on a smaller one with no
   guests created. The cap is logged when it cuts the profile down.
-* **R-01.11.12** Guest autoinstalls **complete without console interaction.**
+* **R-01.11.13** Guest autoinstalls **complete without console interaction.**
   The installer prompts when it finds autoinstall data without the
   `autoinstall` kernel parameter, and a guest waiting on an invisible prompt
   (no display device, silent serial) never installs. Seeding the parameter
   is part of the boot configuration the fragment creates, not something
   answered by hand per guest.
-* **R-01.11.13** Guests boot the installer **by explicit boot order, not by
+* **R-01.11.14** Guests boot the installer **by explicit boot order, not by
   fallthrough.** PVE passes `strict=on`, so an order naming only the empty
   disk parks the guest at a UEFI shell instead of reaching the attached
   installer media. The installer ISO is detached after each guest's first
   boot completes, so a post-install reboot lands in the installed system
   rather than looping back into the installer.
-* **R-01.11.14** The server guests keep an emulated display. Headless fleet
+* **R-01.11.15** The server guests keep an emulated display. Headless fleet
   VMs gain nothing from it day to day, but every blind debugging session
   costs hours for want of a console, and an emulated VGA costs essentially
   nothing to carry. The desktop keeps none: its passed-through iGPU is its

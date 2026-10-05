@@ -47,3 +47,6 @@ nul
 
 # recovery mined data from failed install sequence
 /recovery-ref/
+
+# AI session continuation
+/continue.sh
