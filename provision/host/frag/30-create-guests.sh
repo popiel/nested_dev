@@ -428,8 +428,11 @@ main() {
     # as installed afterward.
     EFI_PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"
     os_esp() {
+        # -p probes instead of trusting blkid's cache: partitions the guest
+        # created minutes ago are not in it yet, and a cached miss reads as
+        # "never partitioned" — failing a completed install at this gate.
         local vmid="$1"
-        blkid -o device -t "PARTTYPE=${EFI_PARTTYPE}" 2>/dev/null \
+        blkid -p -o device -t "PARTTYPE=${EFI_PARTTYPE}" 2>/dev/null \
             | grep "vm-${vmid}-disk-1" | head -1
     }
     wait_for_agent() {
