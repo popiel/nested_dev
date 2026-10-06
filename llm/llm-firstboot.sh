@@ -26,6 +26,21 @@ log "=== llm first-boot starting ==="
 log "Installing NVIDIA driver..."
 export DEBIAN_FRONTEND=noninteractive
 
+# Nouveau holds any attached NVIDIA GPU and the proprietary driver refuses
+# to bind while it does (NVRM: already bound to nouveau). Blacklist it for
+# future boots, then try a live handover first: rmmod succeeds when nothing
+# holds the cards (headless passthrough), and then no reboot is needed.
+if ! grep -q "^blacklist nouveau" /etc/modprobe.d/nested-nouveau-blacklist.conf 2>/dev/null; then
+    printf 'blacklist nouveau\noptions nouveau modeset=0\n' > /etc/modprobe.d/nested-nouveau-blacklist.conf
+    update-initramfs -u 2>&1 | tee -a "$LOG"
+    log "nouveau blacklisted (initramfs rebuilt)"
+fi
+if modprobe -r nouveau 2>/dev/null; then
+    log "nouveau unloaded live"
+else
+    log "WARNING: nouveau still bound — reboot before expecting nvidia-smi"
+fi
+
 apt-get update -qq
 # Try ubuntu-drivers first, fall back to manual package selection
 if command -v ubuntu-drivers >/dev/null 2>&1; then

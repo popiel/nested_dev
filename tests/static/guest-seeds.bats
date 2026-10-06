@@ -188,6 +188,14 @@ assert_key_write_creates_ssh_dir_first() {
         'fakeroot'
 }
 
+@test "llm first-boot evicts nouveau before the NVIDIA driver" {
+    # The proprietary driver refuses to bind while nouveau holds the card
+    # (NVRM: already bound), so without this the bake completes driver-blind
+    # on passthrough hardware. Same pinning style as the test above.
+    assert_file_contains "${PROJECT_ROOT}/llm/llm-firstboot.sh" \
+        'blacklist nouveau'
+}
+
 @test "server seeds power off at end of install" {
     # With ide2-first boot order a reboot re-enters the installer and
     # reinstalls over the top forever; a parked stopped VM is the completion

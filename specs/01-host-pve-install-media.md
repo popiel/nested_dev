@@ -336,6 +336,8 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.11.8** If the gate times out, the run logs a warning, leaves the VM
   running for the operator to finish by hand, and **continues** to the
   firewall step. The template is not converted from an unprovisioned disk.
+  Every server install's serial output is captured to a host log from boot,
+  so a failure carries its own record instead of needing a watched console.
 * **R-01.11.9** The per-VM firewall flag is set on the guests whose egress is
   restricted.
 * **R-01.11.10** **A host that cannot create a guest says so before any download
