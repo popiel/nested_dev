@@ -223,3 +223,12 @@ serial_capture_fixture() {
     [ -z "$SERIAL_CAP_PID" ]
     unset PVE_ROOT
 }
+
+@test "passthrough device strings disable option ROMs" {
+    # OVMF executes PCI option ROMs at boot; consumer GOP takes the physical
+    # heads and never returns (guest vCPU pegged, zero disk I/O, blank
+    # consoles). The proprietary driver initializes the card itself.
+    run hostpci_device_arg "0000:01:00.0"
+    [ "$status" -eq 0 ]
+    [ "$output" = "host=0000:01:00.0,pcie=1,rombar=0" ]
+}

@@ -67,7 +67,19 @@ partition_passthrough_devices() {
     return 0
 }
 
-# EFI System partition signature, for the install gate in main(): an install
+hostpci_device_arg() {
+    # The qm device string for one passed-through PCI function. Option ROMs
+    # stay off: OVMF executes them at boot, consumer GOP takes the physical
+    # heads (invisible on the emulated console) and on this hardware never
+    # returns — a guest vCPU pegged at 100% with zero disk I/O and blank
+    # consoles. The proprietary driver initializes the card itself later.
+    # Passthrough bring-up failure modes, in the order to check them:
+    # blank consoles + pegged vCPU + zero disk I/O = firmware loop (this
+    # flag); FLR warnings at start = cosmetic on FLR-less silicon, but a
+    # stopped-then-started guest may need a host reboot to clear device
+    # state; driver refusing in-guest = the kvm=off hiding, not the attach.
+    printf 'host=%s,pcie=1,rombar=0\n' "$1"
+}
 # that never partitioned has no ESP, and detaching the installer onto it
 # strands the guest at a UEFI shell. Probed per device, never cached and
 # never scanned — and matched by GUID value alone, because probe output and
@@ -563,7 +575,7 @@ main() {
             DGPU_INDEX=0
             IFS=',' read -ra DGPU_LIST <<< "$DGPU_IDS"
             for dgpu in "${DGPU_LIST[@]}"; do
-                LLM_HOSTPCI+=("--hostpci${DGPU_INDEX}" "host=${dgpu},pcie=1")
+                LLM_HOSTPCI+=("--hostpci${DGPU_INDEX}" "$(hostpci_device_arg "$dgpu")")
                 DGPU_INDEX=$((DGPU_INDEX + 1))
             done
             qm set 101 ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
