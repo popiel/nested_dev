@@ -136,9 +136,12 @@ fi
 # --- 4. NVIDIA Container Toolkit ---
 log "Installing NVIDIA Container Toolkit..."
 # Add NVIDIA Container Toolkit repo (retries: a blipped fetch feeds gpg an
-# error page, and under pipefail that kills the whole bake on a transient)
+# error page, and under pipefail that kills the whole bake on a transient).
+# --batch --yes: gpg opens /dev/tty for potential prompts, which does not
+# exist under systemd (or docker build) — without these flags every run
+# dies here deterministically, not transiently.
 curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://nvidia.github.io/libnvidia-container/gpgkey \
-    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
+    | gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
 
 curl -s -L --retry 5 --retry-delay 5 --retry-all-errors https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
     | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \

@@ -204,6 +204,17 @@ assert_key_write_creates_ssh_dir_first() {
     [ "$output" = "2" ]
 }
 
+@test "gpg dearmor never needs a terminal" {
+    # gpg opens /dev/tty for potential prompts; under systemd (or docker
+    # build) there is none, so every run dies deterministically — not
+    # transiently. Both dearmor pipes in the tree run batch.
+    assert_file_contains "${PROJECT_ROOT}/llm/llm-firstboot.sh" \
+        'gpg --batch --yes --dearmor'
+    assert_file_contains \
+        "${PROJECT_ROOT}/provision/host/Dockerfile.autoinstall-assistant" \
+        'gpg --batch --yes --dearmor'
+}
+
 @test "server seeds power off at end of install" {
     # With ide2-first boot order a reboot re-enters the installer and
     # reinstalls over the top forever; a parked stopped VM is the completion
