@@ -441,7 +441,7 @@ require_run_ok() {
     assert_contains "$line" "--cores 4"
     assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \
         "capping allocation from 6 to 4"
-    assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64.iso,media=cdrom"
+    assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04.1-live-server-amd64.iso,media=cdrom"
     assert_not_contains "$line" "hostpci"
     assert_not_contains "$line" "--cdrom"
     # End of install powers the VM off (seed shutdown: poweroff); the run
@@ -457,7 +457,7 @@ require_run_ok() {
     # line (the stock cmdline plus autoinstall — no prompt on any boot).
     # Removed post-install, except where the GeForce set replaces it.
     assert_file_contains "$E2E_STATE/qm-journal" \
-        "qm set 101 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64-vmlinuz"
+        "qm set 101 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04.1-live-server-amd64-vmlinuz"
     assert_file_contains "$E2E_STATE/qm-journal" \
         "-append 'ro quiet splash --- autoinstall console=ttyS0 console=tty0'"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 101 --delete args"
@@ -486,7 +486,7 @@ require_run_ok() {
     [ "$output" = "1" ]
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide2"
     assert_file_contains "$E2E_STATE/qm-journal" \
-        "qm set 102 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-live-server-amd64-vmlinuz"
+        "qm set 102 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04.1-live-server-amd64-vmlinuz"
     assert_file_contains "$E2E_STATE/qm-journal" \
         "-append 'ro quiet splash --- autoinstall console=ttyS0 console=tty0'"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete args"
@@ -567,7 +567,7 @@ require_run_ok() {
     require_run_ok
     local isodir="$E2E_ROOT/var/lib/vz/template/iso"
     [ -f "$isodir/ubuntu-26.04-desktop-amd64.iso" ]
-    [ -f "$isodir/ubuntu-26.04-live-server-amd64.iso" ]
+    [ -f "$isodir/ubuntu-26.04.1-live-server-amd64.iso" ]
 }
 
 # --- control channel, service, host config ---

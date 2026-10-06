@@ -221,7 +221,9 @@ main() {
     }
     UBUNTU_BASE_URL="https://releases.ubuntu.com/${UBUNTU_VERSION}"
     UBUNTU_DESKTOP_ISO="ubuntu-${UBUNTU_VERSION}-desktop-amd64.iso"
-    UBUNTU_SERVER_ISO="ubuntu-${UBUNTU_VERSION}-live-server-amd64.iso"
+    # Pinned like ubuntu-release.conf (see it for why): point releases are
+    # discrete decisions, and this fallback must resolve the same file.
+    UBUNTU_SERVER_ISO="ubuntu-26.04.1-live-server-amd64.iso"
 
     # --- Detect host resources ---
     TOTAL_MEM_KB=$(awk '/MemTotal/{print $2}' "${PROC}/meminfo")

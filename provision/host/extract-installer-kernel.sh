@@ -31,7 +31,7 @@ LOG="${ROOT}/var/log/pve-firstboot.log"
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> "$LOG"; }
 die() { log "FATAL: $*"; printf 'FATAL: %s\n' "$*" >&2; exit 1; }
 
-# Basename without .iso: ubuntu-26.04-live-server-amd64
+# Basename without .iso, e.g. ubuntu-26.04.1-live-server-amd64
 iso_base() {
     local base
     base="$(basename "$1")"
