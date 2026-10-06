@@ -121,7 +121,9 @@ start_serial_capture() {
         return 0
     fi
     pkill -f "socat.*qemu-server/${vmid}\.serial" 2>/dev/null || true
-    local sock="/var/run/qemu-server/${vmid}.serial"
+    # The socket carries the device index (serial0 socket -> 101.serial0),
+    # unlike qga/qmp which have fixed names — a bare .serial never exists.
+    local sock="/var/run/qemu-server/${vmid}.serial0"
     local caplog="${ROOT}/var/log/pve-serial-${vmid}-install.log"
     : > "$caplog"
     (
