@@ -457,7 +457,7 @@ EOF
         PCI_ADDR=$(echo "$entry" | awk '{print $1}')
         VD=$(echo "$entry" | awk '{print $2}')
         if echo "$VD" | grep -qi "^10de:"; then
-            log "NVIDIA device $PCI_ADDR is in the passthrough set — will apply kvm=off,hidden=1 at VM creation"
+            log "NVIDIA device $PCI_ADDR is in the passthrough set — will apply kvm=off at VM creation (hides the hypervisor from the driver; the hidden=1 property no longer exists in current QEMU)"
         fi
     done
 

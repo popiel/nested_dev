@@ -70,12 +70,9 @@ partition_passthrough_devices() {
 # EFI System partition signature, for the install gate in main(): an install
 # that never partitioned has no ESP, and detaching the installer onto it
 # strands the guest at a UEFI shell. Probed per device, never cached and
-# never scanned: blkid's cache does not learn partitions a guest wrote
-# minutes ago, -p requires an explicit device, and scan output names devices
-# in spellings no match survives — so candidates are named, matched by
-# content (the GUID), and the glob is overridable for tests. Contract is
-# dual on purpose: prints the matching device (callers test emptiness) and
-# returns 0/1 (unit tests assert status).
+# never scanned — and matched by GUID value alone, because probe output and
+# cache output spell the key differently (PART_ENTRY_TYPE vs PARTTYPE) while
+# the value is identical. Three iterations failed on form, never substance.
 EFI_PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"
 os_esp() {
     local vmid="$1" dev
@@ -83,7 +80,7 @@ os_esp() {
     # shellcheck disable=SC2086
     for dev in ${VM_DISK_DEVS:-/dev/pve/vm-${vmid}-disk-1 /dev/mapper/*vm--${vmid}--disk--1}; do
         [ -e "$dev" ] || continue
-        if blkid -p -o full "$dev" 2>/dev/null | grep -qi "PARTTYPE=\"${EFI_PARTTYPE}\""; then
+        if blkid -p -o full "$dev" 2>/dev/null | grep -qi "${EFI_PARTTYPE}"; then
             printf '%s\n' "$dev"
             return 0
         fi
@@ -97,9 +94,12 @@ os_esp() {
 # with nothing in it), hence the retry loop: early oopses land ~2 min in,
 # the window is 5 min, and a slow start burns retries, never the capture.
 # Stale readers are killed first (a previous failed run's orphan would split
-# the stream). Stopped once the install powers off; killed explicitly on die
-# paths too, so at most one reader ever exists. No socat on PATH means no
-# capture, warned once, never fatal — that is also the e2e posture.
+# the stream). The socket takes one client: `qm terminal` holds it
+# exclusively, so during runs watch the FILE, never the terminal — attaching
+# both starves the capture while looking perfectly healthy. Stopped once the
+# install powers off; killed explicitly on die paths too, so at most one
+# reader ever exists. No socat on PATH means no capture, warned once, never
+# fatal — that is also the e2e posture.
 # Time-only seams for tests (production defaults).
 SERIAL_CAP_PID=""
 start_serial_capture() {
@@ -567,8 +567,8 @@ main() {
                 DGPU_INDEX=$((DGPU_INDEX + 1))
             done
             qm set 101 ${LLM_HOSTPCI[@]+"${LLM_HOSTPCI[@]}"} \
-                --args '-cpu host,kvm=off,hidden=1'
-            log "Applied dGPU passthrough and GeForce kvm=off,hidden=1 workaround"
+                --args '-cpu host,kvm=off'
+            log "Applied dGPU passthrough and GeForce kvm=off workaround (hypervisor hidden from the driver; no FLR on GP104, so a stopped-then-started 101 may need a host reboot to clear device state)"
         else
             qm set 101 --delete args
             log "VM 101 direct-kernel args removed; disk boot from here"
