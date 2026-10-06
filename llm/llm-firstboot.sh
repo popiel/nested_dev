@@ -135,11 +135,12 @@ fi
 
 # --- 4. NVIDIA Container Toolkit ---
 log "Installing NVIDIA Container Toolkit..."
-# Add NVIDIA Container Toolkit repo
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+# Add NVIDIA Container Toolkit repo (retries: a blipped fetch feeds gpg an
+# error page, and under pipefail that kills the whole bake on a transient)
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://nvidia.github.io/libnvidia-container/gpgkey \
     | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
 
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+curl -s -L --retry 5 --retry-delay 5 --retry-all-errors https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
     | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
     | tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
 

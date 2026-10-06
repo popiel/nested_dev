@@ -196,6 +196,14 @@ assert_key_write_creates_ssh_dir_first() {
         'blacklist nouveau'
 }
 
+@test "llm network fetches retry instead of dying on blips" {
+    # Two bare curl|gpg pipes under set -euo pipefail died the whole bake on
+    # one transient CDN answer (gpg exit 2 on an error page, curl SIGPIPEd).
+    # wget retries by default; these curls must too — both of them.
+    run grep -c "retry-all-errors" "${PROJECT_ROOT}/llm/llm-firstboot.sh"
+    [ "$output" = "2" ]
+}
+
 @test "server seeds power off at end of install" {
     # With ide2-first boot order a reboot re-enters the installer and
     # reinstalls over the top forever; a parked stopped VM is the completion
