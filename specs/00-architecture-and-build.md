@@ -49,7 +49,7 @@ media.
 |  RAM: 2 GB reserved for host; rest via balloon + ZRAM + swap          |
 |                                                                       |
 |  vm 100 desktop <-- iGPU (VFIO)                                       |
-|  '-- Ubuntu Desktop 26.04 + i3-gaps/dmenu + xrdp (:3389) + lightdm    |
+  |  '-- Ubuntu Desktop 26.04 + i3-gaps/dmenu + x11vnc (:5900) + lightdm    |
 |      Firefox + Chrome (snap); SSH client; X11 forwarding from dev VMs |
 |      192.168.100.100  lychee                                          |
 |                                                                       |

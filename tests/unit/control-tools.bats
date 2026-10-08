@@ -109,6 +109,18 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'ufw allow from 192.168.14.0/24 to any port 5900'
 }
 
+@test "desktop ships no RDP stack" {
+    # RDP is eliminated (R-02.2.1): no package, no unit, no firewall hole.
+    # Pinned on functional strings, not the bare word — comments may still
+    # name xrdp as the rationale for its absence.
+    local seed="${PROJECT_ROOT}/desktop/user-data/user-data"
+    assert_file_not_contains "$seed" 'xrdp'
+    assert_file_not_contains "$seed" '3389'
+    assert_file_not_contains "$DESKTOP_FIRSTBOOT" 'xorgxrdp'
+    assert_file_not_contains "$DESKTOP_FIRSTBOOT" '3389'
+    assert_file_not_contains "$DESKTOP_FIRSTBOOT" 'enable --now xrdp'
+}
+
 # --- devctl wiring ---
 
 @test "devctl uses the guest identity key for direct guest SSH" {

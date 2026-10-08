@@ -74,10 +74,6 @@ iptables -t nat -F POSTROUTING
 iptables -t nat -A PREROUTING -i "$PHYS_NIC" -p tcp --dport 22 \
     -j DNAT --to-destination 192.168.100.100:22
 
-# LAN → desktop: RDP (port 3389) DNAT
-iptables -t nat -A PREROUTING -i "$PHYS_NIC" -p tcp --dport 3389 \
-    -j DNAT --to-destination 192.168.100.100:3389
-
 # LAN → desktop: VNC console mirror (port 5900) DNAT. xrdp spawns separate
 # sessions and can never mirror the physical console (R-02.2.1); x11vnc
 # scrapes the live :0 instead, and this is how it is reached from the LAN.
@@ -132,9 +128,8 @@ iptables -A FORWARD -i vmbr0 -o vmbr0 -s 192.168.100.100 -j ACCEPT
 
 # LAN → desktop: the PREROUTING DNAT rules rewrite these destinations, but
 # rewritten packets still traverse FORWARD — without explicit accepts here the
-# documented SSH/RDP access is translated and then silently dropped.
+# documented SSH/VNC access is translated and then silently dropped.
 iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT
-iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT
 iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 5900 -j ACCEPT
 
 # --- Guest egress policy ---
@@ -366,7 +361,7 @@ cat > "${ROOT}/etc/motd" <<'EOF'
   PVE UI: https://<LAN-IP>:8006
   SSH to host: ssh -p 2222 root@<LAN-IP>
   SSH to desktop: ssh root@<LAN-IP> (DNAT)
-  RDP to desktop: mstsc <LAN-IP>:3389
+  VNC console mirror: <LAN-IP>:5900
   Logs: /var/log/pve-firstboot.log
   Dev control: devctl list/start/stop/add
 ========================================

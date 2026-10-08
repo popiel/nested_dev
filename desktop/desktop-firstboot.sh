@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # desktop-firstboot.sh — Desktop VM first-boot configuration
 # Runs inside VM 100 (lychee / ${PERSONALIZATION_USERNAME}) on first boot.
-# Sets up i3, xrdp, Chrome, X11 forwarding, PulseAudio, low-mem trims.
+# Sets up i3, VNC console mirror, Chrome, X11 forwarding, PulseAudio, low-mem trims.
 # Fetched at REF main; logs to /var/log/desktop-firstboot.log.
 set -euo pipefail
 
@@ -33,21 +33,12 @@ else
     log "glxinfo not available — skipping GPU assertion"
 fi
 
-# --- 2. xrdp + i3 session ---
-log "Configuring xrdp and i3 session"
-adduser xrdp ssl-cert 2>/dev/null || true
-
-# Ensure .xsession launches i3
+# --- 2. Session account home ---
+# No RDP stack is installed: xrdp spawns separate sessions by architecture
+# and can never mirror the physical console, so it is eliminated, not
+# configured. The home lookup stays — later sections address account paths
+# through it.
 DESKUSER_HOME=$(getent passwd "${PERSONALIZATION_USERNAME}" | cut -d: -f6)
-mkdir -p "${DESKUSER_HOME}/.config"
-cat > "${DESKUSER_HOME}/.xsession" <<'XSESSION_EOF'
-exec i3
-XSESSION_EOF
-chmod +x "${DESKUSER_HOME}/.xsession"
-chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${DESKUSER_HOME}/.xsession"
-
-systemctl enable --now xrdp
-log "xrdp enabled, .xsession set to i3"
 
 # VNC scrape of the physical console (R-02.2.1): xrdp spawns separate
 # sessions and can never mirror :0, so a remote view of anything else is
@@ -245,7 +236,8 @@ if ! command -v chromium >/dev/null 2>&1; then
     snap install chromium 2>&1 | tee -a "$LOG" || log "WARNING: Chrome snap install failed"
 fi
 
-# Disable GPU in Chrome (avoids xrdp GPU conflicts)
+# Disable GPU in Chrome (the passed-through GPU belongs to the session; a
+# sandboxed browser driving it produces rendering artifacts in both)
 cat > "${DESKUSER_HOME}/.config/chromium-flags.conf" <<'CHROME_EOF'
 --disable-gpu
 --no-sandbox
@@ -387,15 +379,13 @@ apt-get install -y --no-install-recommends ufw >/dev/null 2>&1 || true
 ufw default deny incoming 2>&1 | tee -a "$LOG"
 ufw default allow outgoing 2>&1 | tee -a "$LOG"
 ufw allow ssh 2>&1 | tee -a "$LOG"
-# Allow RDP from host only
-ufw allow from 192.168.100.1 to any port 3389 2>&1 | tee -a "$LOG"
 # Allow VNC console mirror from the LAN, not just the host: DNAT preserves the
 # client source IP, so a host-scoped rule drops Filbert's traffic at the
 # guest's default-deny. The host FORWARD admits the same subnet (R-01.10.4),
 # so this mirrors rather than widens the intended audience.
 ufw allow from 192.168.14.0/24 to any port 5900 2>&1 | tee -a "$LOG"
 echo "y" | ufw enable 2>&1 | tee -a "$LOG" || true
-log "Firewall configured (deny incoming, allow outgoing, allow ssh, allow RDP from host, allow VNC from LAN)"
+log "Firewall configured (deny incoming, allow outgoing, allow ssh, allow VNC from LAN)"
 
 # --- Self-disable ---
 log "=== desktop first-boot complete — disabling unit ==="

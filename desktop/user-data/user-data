@@ -36,9 +36,6 @@ autoinstall:
     - lightdm
     # Terminal
     - rxvt-unicode
-    # RDP
-    - xrdp
-    - xorgxrdp
     # VNC console mirror (R-02.2.1): x11vnc scrapes the live :0
     - x11vnc
     # Browsers
@@ -73,10 +70,6 @@ autoinstall:
     # has no bus, and enable is symlink creation anyway — sibling seeds use
     # ln -s for the same reason (-sf so retries overwrite silently).
     - "curtin in-target --target=/target -- sh -c 'ln -sf /usr/lib/systemd/system/lightdm.service /etc/systemd/system/display-manager.service && ln -sf /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target'"
-    # Configure xrdp to launch i3
-    - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/__PERSONALIZATION_USERNAME__/.config && echo \"exec i3\" > /home/__PERSONALIZATION_USERNAME__/.xsession && chmod +x /home/__PERSONALIZATION_USERNAME__/.xsession && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ /home/__PERSONALIZATION_USERNAME__/.xsession'"
-    # Enable xrdp (symlink, same reason as above)
-    - "curtin in-target --target=/target -- sh -c 'ln -sf /usr/lib/systemd/system/xrdp.service /etc/systemd/system/multi-user.target.wants/xrdp.service'"
     # Enable X11 forwarding in sshd (anchored: stock config has
     # "#X11Forwarding no", which the old pattern never matched — silently
     # leaving the default off while reporting success)

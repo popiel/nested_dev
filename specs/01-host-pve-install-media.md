@@ -287,9 +287,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   | Host INPUT | loopback, established, SSH 2222 from LAN, SSH 22 from the desktop only, web UI 8006 from LAN, ICMP echo. Everything else dropped. |
   | Host OUTPUT | loopback, established, 443, 53, 123. Everything else dropped. |
   | FORWARD, inter-VM | the desktop may reach any `vmbr0` peer. No guest may reach the desktop, and no guest may reach another guest. |
-  | FORWARD, ingress | SSH 22, RDP 3389 and VNC 5900 from the LAN to the desktop only. DNAT rewrites the destination but the filter still has to admit the packets — without these rules the documented remote access is translated and then dropped. |
+  | FORWARD, ingress | SSH 22 and VNC 5900 from the LAN to the desktop only. DNAT rewrites the destination but the filter still has to admit the packets — without these rules the documented remote access is translated and then dropped. |
   | FORWARD, egress | per R-00.2.6. |
-  | NAT | MASQUERADE for `vmbr0` to the LAN; DNAT from the LAN for the desktop's SSH, RDP and VNC console mirror. Host SSH on 2222 is served by sshd listening on 2222, not by DNAT (DNAT-to-self cannot work: the filter sees the rewritten port, so the admitting rule could never match). |
+  | NAT | MASQUERADE for `vmbr0` to the LAN; DNAT from the LAN for the desktop's SSH and VNC console mirror. Host SSH on 2222 is served by sshd listening on 2222, not by DNAT (DNAT-to-self cannot work: the filter sees the rewritten port, so the admitting rule could never match). |
 
 * **R-01.10.3** Host SSH on port 22 is accepted from the desktop's address
   only. The control channel that creates and starts dev VMs is privileged;
@@ -297,7 +297,7 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   irrelevant, since any guest could then clone, start and configure a
   template.
 * **R-01.10.4** The documented remote-access surface is: host SSH on 2222 from
-  the LAN, host web UI on 8006 from the LAN, and desktop SSH, RDP or VNC console
+  the LAN, host web UI on 8006 from the LAN, and desktop SSH and VNC console
   mirror DNAT'd from the LAN.
 
 ### R-01.11 The starting guest set is created unattended
@@ -423,7 +423,7 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 | A-01.9 | `qm list` shows 100 running, 101 running, 102 template, and no other VM. `qm start 102` is refused. |
 | A-01.10 | `vmbr0` holds `192.168.100.1/24` with no physical port. dnsmasq is active, passes its configuration test, and answers for every VM's short and FQDN. The host's resolver is the local dnsmasq. |
 | A-01.11 | All three filter chains default to DROP. INPUT accepts only the ports and sources in R-01.10.2; OUTPUT accepts only 443, 53 and 123. |
-| A-01.12 | From the LAN: host SSH on 2222, host web UI on 8006, desktop SSH, desktop RDP and desktop VNC console mirror all reachable. Host SSH on 22 is **not** reachable from the LAN. |
+| A-01.12 | From the LAN: host SSH on 2222, host web UI on 8006, desktop SSH and desktop VNC console mirror all reachable. Host SSH on 22 is **not** reachable from the LAN. |
 | A-01.13 | Host SSH on 22 **is** reachable from the desktop's address, and refused from another guest's. |
 | A-01.14 | Per R-00.2.6: the desktop and vm 101 reach the LAN; vm 101 cannot reach a port other than 53/80/443; vm 103 reaches 53/80/443; a dev VM on 104 or above reaches nothing. |
 | A-01.15 | No guest other than the desktop can reach another guest. |

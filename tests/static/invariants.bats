@@ -263,12 +263,21 @@ load '../lib/helpers'
 
 @test "DNAT'd LAN traffic to the desktop passes the filter" {
     # PREROUTING rewrites these destinations, but rewritten packets still
-    # traverse FORWARD: without explicit accepts the documented SSH/RDP/VNC
+    # traverse FORWARD: without explicit accepts the documented SSH/VNC
     # access is translated and then silently dropped.
     local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
     assert_file_contains "$frag" '-o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT'
-    assert_file_contains "$frag" '-o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT'
     assert_file_contains "$frag" '-o vmbr0 -p tcp -d 192.168.100.100 --dport 5900 -j ACCEPT'
+}
+
+@test "no RDP path remains anywhere in the firewall" {
+    # RDP is eliminated, not merely unforwarded: a 3389 rule in either the
+    # fragment or the reference would reopen a port the guest no longer
+    # serves and the spec no longer documents.
+    assert_file_not_contains "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
+        '3389'
+    assert_file_not_contains "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf" \
+        '3389'
 }
 
 @test "no dev VM at or above 104 is granted egress" {
