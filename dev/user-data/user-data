@@ -20,7 +20,10 @@ autoinstall:
     # Password auth is disabled above, so key auth is the only way in.
     # Injected by frag/30: the build machine's operator key, plus the
     # install-time guest identity key whose private half lives on the desktop.
-    ssh_authorized_keys:
+    # Dash form: Subiquity's autoinstall schema calls this key
+    # `authorized-keys`. The cloud-init underscore form is silently dropped —
+    # observed live as an empty list with no error.
+    authorized-keys:
       - "__ADMIN_PUBKEY__"
       - "__GUEST_ID_PUBKEY__"
   packages:

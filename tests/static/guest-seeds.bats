@@ -72,16 +72,20 @@ __VMCTL_PRIV_B64__"
     done
 }
 
-@test "every guest user-data declares ssh_authorized_keys with both keys" {
-    # allow-pw: false means ssh_authorized_keys is not optional — without it a
-    # guest has no working SSH authentication method at all.
+@test "every guest user-data declares authorized-keys with both keys" {
+    # allow-pw: false means key auth is not optional — without it a guest
+    # has no working SSH authentication method at all. Dash form: Subiquity's
+    # autoinstall schema calls this key `authorized-keys`; the cloud-init
+    # underscore form was silently dropped fleet-wide, observed live as an
+    # empty list with no error.
     local label file
     for label in desktop llm dev; do
         file="${PROJECT_ROOT}/${label}/user-data/user-data"
-        assert_file_contains "$file" 'ssh_authorized_keys:'
+        assert_file_contains "$file" 'authorized-keys:'
         assert_file_contains "$file" '- "__ADMIN_PUBKEY__"'
         assert_file_contains "$file" '- "__GUEST_ID_PUBKEY__"'
         assert_file_contains "$file" 'allow-pw: false'
+        assert_file_not_contains "$file" 'ssh_authorized_keys:'
     done
 }
 
