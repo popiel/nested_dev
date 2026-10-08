@@ -178,7 +178,6 @@ order += "disk /"
 order += "disk /home"
 order += "memory"
 order += "cpu_usage"
-order += "net_all"
 order += "tztime local"
 
 disk "/" {
@@ -197,10 +196,6 @@ memory {
 
 cpu_usage {
     format = "%usage"
-}
-
-net_all {
-    format_down = "No IP"
 }
 
 tztime local {
@@ -365,6 +360,8 @@ log "Firewall configured (deny incoming, allow outgoing, allow ssh, allow RDP fr
 
 # --- Self-disable ---
 log "=== desktop first-boot complete — disabling unit ==="
-systemctl disable --now desktop-firstboot 2>/dev/null || true
+# Disable only: --now would stop this still-running service, and systemd
+# would record the completed run as failed (SIGTERM after the final log).
+systemctl disable desktop-firstboot 2>/dev/null || true
 
 log "=== done ==="

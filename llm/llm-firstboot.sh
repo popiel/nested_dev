@@ -312,6 +312,8 @@ systemctl enable qemu-guest-agent 2>/dev/null || true
 
 # --- Self-disable ---
 log "=== llm first-boot complete — disabling unit ==="
-systemctl disable --now llm-firstboot 2>/dev/null || true
+# Disable only: --now would stop this still-running service, and systemd
+# would record the completed run as failed (SIGTERM after the final log).
+systemctl disable llm-firstboot 2>/dev/null || true
 
 log "=== done ==="

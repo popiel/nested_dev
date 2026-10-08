@@ -18,6 +18,19 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 
 # --- runtime verification on the desktop ---
 
+@test "no first-boot script stops itself on completion" {
+    # disable --now on the running service SIGTERMs it after the final log
+    # line, so systemd records a completed run as failed. Disable only.
+    local script
+    for script in "${PROJECT_ROOT}/desktop/desktop-firstboot.sh" \
+                  "${PROJECT_ROOT}/llm/llm-firstboot.sh" \
+                  "${PROJECT_ROOT}/dev/dev-firstboot.sh"; do
+        assert_file_not_contains "$script" 'disable --now desktop-firstboot'
+        assert_file_not_contains "$script" 'disable --now llm-firstboot'
+        assert_file_not_contains "$script" 'disable --now dev-firstboot'
+    done
+}
+
 @test "desktop-firstboot hard-fails when a seeded private key is missing" {
     assert_file_contains "$DESKTOP_FIRSTBOOT" \
         'die "Missing or empty private key ${key} at ${KEY_PATH}'
@@ -41,6 +54,23 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     # pvehost must stay on the restricted account.
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'User vmctl'
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'User root'
+}
+
+@test "desktop i3status config only uses modules i3status understands" {
+    # i3bar kills a status_command that exits non-zero — on the live guest
+    # that was a session with a dead bar and no obvious way to open windows,
+    # from a single bad module name (net_all, rejected by i3status 2.15).
+    # Behavior where possible: render the heredoc and run the real binary
+    # briefly. A config error exits immediately; a good config runs until
+    # killed (timeout 124).
+    require_command i3status
+    require_command timeout
+    local cfg="${BATS_TMPDIR}/i3status-live.conf"
+    sed -n "/<<'I3STATUS_EOF'$/,/^I3STATUS_EOF$/p" \
+        "${DESKTOP_FIRSTBOOT}" | sed '1d;$d' > "$cfg"
+    [ -s "$cfg" ] || { echo "i3status heredoc not found" >&2; return 1; }
+    run timeout 3 i3status -c "$cfg"
+    [ "$status" -eq 124 ] || { echo "$output" >&2; return 1; }
 }
 
 # --- devctl wiring ---
