@@ -1,0 +1,6 @@
+#!/bin/bash
+# tests/e2e/stubs/sfdisk — the fixture OS disks carry EFI partitions.
+# The fragment dumps each candidate device and matches the partition type
+# GUID, so this prints a realistic dump line regardless of arguments.
+printf 'start=        2048, size=     2201600, type=C12A4738-F02B-4B93-8FD5-043EF0E62C58, uuid=11111111-2222-3333-4444-555555555555, name="EFI System Partition"\n'
+exit 0

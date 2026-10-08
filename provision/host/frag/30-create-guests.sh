@@ -81,10 +81,12 @@ hostpci_device_arg() {
     printf 'host=%s,pcie=1,rombar=0\n' "$1"
 }
 # that never partitioned has no ESP, and detaching the installer onto it
-# strands the guest at a UEFI shell. Probed per device, never cached and
-# never scanned — and matched by GUID value alone, because probe output and
-# cache output spell the key differently (PART_ENTRY_TYPE vs PARTTYPE) while
-# the value is identical. Three iterations failed on form, never substance.
+# strands the guest at a UEFI shell. Read from the partition table itself
+# with sfdisk -d: blkid reports through cache (stale on fresh disks),
+# probe mode (superblocks, not tables), and device spellings that never
+# match — four iterations failed on the tool, never on the disk. sfdisk
+# dumps the table as bytes on the device; the GUID match is
+# case-insensitive, uppercase table output included.
 EFI_PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"
 os_esp() {
     local vmid="$1" dev
@@ -92,7 +94,7 @@ os_esp() {
     # shellcheck disable=SC2086
     for dev in ${VM_DISK_DEVS:-/dev/pve/vm-${vmid}-disk-1 /dev/mapper/*vm--${vmid}--disk--1}; do
         [ -e "$dev" ] || continue
-        if blkid -p -o full "$dev" 2>/dev/null | grep -qi "${EFI_PARTTYPE}"; then
+        if sfdisk -d "$dev" 2>/dev/null | grep -qi "${EFI_PARTTYPE}"; then
             printf '%s\n' "$dev"
             return 0
         fi
