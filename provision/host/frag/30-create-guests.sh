@@ -569,6 +569,11 @@ main() {
             fi
             stop_serial_capture 101
             if [ -z "$(os_esp 101)" ]; then
+                # Drop direct-kernel boot first: otherwise every later boot
+                # reloads the installer kernel, which cannot find its medium
+                # without the grub context (casper netboot prompt) — manual
+                # recovery wants the ISO grub path, not another direct boot.
+                qm set 101 --delete args 2>/dev/null || true
                 die "VM 101 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
             fi
             qm set 101 --scsi1 ${GUEST_STORAGE}:${DATA_VOL_SIZE}
@@ -638,6 +643,10 @@ main() {
             fi
             stop_serial_capture 102
             if [ -z "$(os_esp 102)" ]; then
+                # Same as 101 above: direct-kernel boot cannot find its medium
+                # without grub context, so restore normal ISO boot for manual
+                # recovery instead of another direct boot into netboot.
+                qm set 102 --delete args 2>/dev/null || true
                 die "VM 102 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
             fi
             qm set 102 --delete ide2 --boot "order=scsi0"
