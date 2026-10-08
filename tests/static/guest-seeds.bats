@@ -227,3 +227,18 @@ assert_key_write_creates_ssh_dir_first() {
             'shutdown: poweroff'
     done
 }
+
+@test "late-commands never invoke systemctl in-target" {
+    # in-target has no bus; enable/set-default are symlink creation anyway
+    # (sibling pattern), and one such call failed an install opaquely once.
+    # The check is on the invocation shape, not the word: comments mention
+    # systemctl legitimately.
+    local guest
+    for guest in desktop llm dev; do
+        if grep -q 'in-target -- systemctl' \
+            "${PROJECT_ROOT}/${guest}/user-data/user-data"; then
+            echo "$guest seed invokes systemctl in-target" >&2
+            return 1
+        fi
+    done
+}

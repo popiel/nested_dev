@@ -64,15 +64,18 @@ autoinstall:
     # already leaves root locked, but state it explicitly so a later seed
     # change cannot silently introduce a root credential.
     - "curtin in-target --target=/target -- passwd -l root"
-    # Enable lightdm as display manager
-    - "curtin in-target --target=/target -- systemctl enable lightdm"
-    - "curtin in-target --target=/target -- systemctl set-default graphical.target"
+    # Enable lightdm as display manager (symlinks, not systemctl: in-target
+    # has no bus, and enable is symlink creation anyway — sibling seeds use
+    # ln -s for the same reason (-sf so retries overwrite silently).
+    - "curtin in-target --target=/target -- sh -c 'ln -sf /usr/lib/systemd/system/lightdm.service /etc/systemd/system/display-manager.service && ln -sf /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target'"
     # Configure xrdp to launch i3
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /home/__PERSONALIZATION_USERNAME__/.config && echo \"exec i3\" > /home/__PERSONALIZATION_USERNAME__/.xsession && chmod +x /home/__PERSONALIZATION_USERNAME__/.xsession && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ /home/__PERSONALIZATION_USERNAME__/.xsession'"
-    # Enable xrdp
-    - "curtin in-target --target=/target -- systemctl enable xrdp"
-    # Enable X11 forwarding in sshd
-    - "curtin in-target --target=/target -- sed -i \"s/#X11Forwarding yes/X11Forwarding yes/\" /etc/ssh/sshd_config"
+    # Enable xrdp (symlink, same reason as above)
+    - "curtin in-target --target=/target -- sh -c 'ln -sf /usr/lib/systemd/system/xrdp.service /etc/systemd/system/multi-user.target.wants/xrdp.service'"
+    # Enable X11 forwarding in sshd (anchored: stock config has
+    # "#X11Forwarding no", which the old pattern never matched — silently
+    # leaving the default off while reporting success)
+    - "curtin in-target --target=/target -- sed -i \"s/^#X11Forwarding.*/X11Forwarding yes/\" /etc/ssh/sshd_config"
     # Set DNS to host dnsmasq (private network resolver)
     - "curtin in-target --target=/target -- sh -c 'mkdir -p /etc/NetworkManager/conf.d && printf \"[Network]\\nDNS=192.168.100.1\\n\" > /etc/NetworkManager/conf.d/nested-dev.conf'"
     # vmctl control key for dev fleet management (Spec 07)
