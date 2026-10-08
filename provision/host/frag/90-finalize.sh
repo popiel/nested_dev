@@ -78,6 +78,12 @@ iptables -t nat -A PREROUTING -i "$PHYS_NIC" -p tcp --dport 22 \
 iptables -t nat -A PREROUTING -i "$PHYS_NIC" -p tcp --dport 3389 \
     -j DNAT --to-destination 192.168.100.100:3389
 
+# LAN → desktop: VNC console mirror (port 5900) DNAT. xrdp spawns separate
+# sessions and can never mirror the physical console (R-02.2.1); x11vnc
+# scrapes the live :0 instead, and this is how it is reached from the LAN.
+iptables -t nat -A PREROUTING -i "$PHYS_NIC" -p tcp --dport 5900 \
+    -j DNAT --to-destination 192.168.100.100:5900
+
 # LAN → host SSH is on port 2222, served by sshd listening on 2222 directly
 # (frag/25). Deliberately NOT a DNAT 2222→host:22: DNAT rewrites the port in
 # PREROUTING, so the filter would see dport 22 from a LAN source and drop it
@@ -129,6 +135,7 @@ iptables -A FORWARD -i vmbr0 -o vmbr0 -s 192.168.100.100 -j ACCEPT
 # documented SSH/RDP access is translated and then silently dropped.
 iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT
 iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT
+iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 5900 -j ACCEPT
 
 # --- Guest egress policy ---
 # FORWARD governs traffic between a VM and the LAN; the OUTPUT chain below

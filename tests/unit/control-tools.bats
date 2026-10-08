@@ -73,6 +73,42 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     [ "$status" -eq 124 ] || { echo "$output" >&2; return 1; }
 }
 
+@test "keys/vnc-passwd.hash decodes to a valid 8-byte console secret" {
+    # The hash is stored as printf-octal text so the repo never holds raw
+    # bytes — and the decoded hex is itself a secret that must never appear
+    # in a tracked file. So this pins the shape (valid octal escapes
+    # decoding to exactly 8 bytes), never the value. A slip that changes
+    # length or syntax fails here; the value itself is checked only at the
+    # live viewer, the one place it is ever typed.
+    if [ ! -f "${PROJECT_ROOT}/keys/vnc-passwd.hash" ]; then
+        skip "keys/vnc-passwd.hash is local-only (gitignored)"
+    fi
+    run grep -E -q '^(\\[0-7]{3})+$' "${PROJECT_ROOT}/keys/vnc-passwd.hash"
+    [ "$status" -eq 0 ]
+    run bash -c 'printf "%b" "$(cat "$1")" | od -An -tx1 | tr -d " \n"' _ "${PROJECT_ROOT}/keys/vnc-passwd.hash"
+    [ "$status" -eq 0 ]
+    [ "${#output}" -eq 16 ]
+}
+
+@test "desktop first-boot serves the VNC console mirror" {
+    # R-02.2.1: the remote view must be the physical console session, which
+    # xrdp can never provide (separate sessions by architecture). x11vnc
+    # scrapes the live :0 instead, authenticated by the repo-pinned hash.
+    assert_file_contains "$DESKTOP_FIRSTBOOT" 'vnc-passwd.hash'
+    assert_file_contains "$DESKTOP_FIRSTBOOT" 'x11vnc.service'
+    assert_file_contains "$DESKTOP_FIRSTBOOT" 'WantedBy=graphical.target'
+    # keys/vnc-passwd.hash is storepasswd *output*, so it is written raw and
+    # served via -rfbauth; deriving a typed string plus -passwdfile would
+    # serve a different password than the one the hash encodes.
+    assert_file_contains "$DESKTOP_FIRSTBOOT" '-rfbauth /etc/x11vnc/passwd'
+    assert_file_not_contains "$DESKTOP_FIRSTBOOT" 'passwdfile'
+    assert_file_contains "$DESKTOP_FIRSTBOOT" 'to any port 5900'
+    # DNAT preserves the client source IP, so a host-scoped ufw rule would
+    # drop Filbert's traffic at the guest's default-deny (observed live:
+    # host FORWARD admitted, guest ufw denied). Pin the LAN scope.
+    assert_file_contains "$DESKTOP_FIRSTBOOT" 'ufw allow from 192.168.14.0/24 to any port 5900'
+}
+
 # --- devctl wiring ---
 
 @test "devctl uses the guest identity key for direct guest SSH" {

@@ -652,6 +652,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "iptables -P INPUT DROP"
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.100 -j ACCEPT"
     assert_file_contains "$E2E_STATE/journal" "--dport 3389"
+    assert_file_contains "$E2E_STATE/journal" "--dport 5900"
     assert_file_contains "$E2E_STATE/journal" "MASQUERADE"
     # LAN ingress to the desktop: DNAT rewrites these destinations in
     # PREROUTING, but the filter still has to admit them.
@@ -659,6 +660,8 @@ require_run_ok() {
         "-i eno1 -o vmbr0 -p tcp -d 192.168.100.100 --dport 22 -j ACCEPT"
     assert_file_contains "$E2E_STATE/journal" \
         "-i eno1 -o vmbr0 -p tcp -d 192.168.100.100 --dport 3389 -j ACCEPT"
+    assert_file_contains "$E2E_STATE/journal" \
+        "-i eno1 -o vmbr0 -p tcp -d 192.168.100.100 --dport 5900 -j ACCEPT"
     # Host SSH on 2222: sshd listens on the port directly (frag/25 drop-in)
     # and INPUT admits it from the LAN. A DNAT 2222→host:22 must NOT exist:
     # DNAT rewrites the port before the filter, so the filter would see dport

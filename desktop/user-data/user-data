@@ -39,6 +39,8 @@ autoinstall:
     # RDP
     - xrdp
     - xorgxrdp
+    # VNC console mirror (R-02.2.1): x11vnc scrapes the live :0
+    - x11vnc
     # Browsers
     - firefox
     # X11 forwarding
@@ -94,4 +96,4 @@ autoinstall:
     # Install first-boot service unit (runs desktop-firstboot.sh at boot)
     - "curtin in-target --target=/target -- sh -c 'cat > /etc/systemd/system/desktop-firstboot.service << \"UNIT\"\n[Unit]\nDescription=Desktop first-boot configuration\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/opt/nested-dev/desktop-firstboot.sh\nTimeoutStartSec=900\nRemainAfterExit=no\n\n[Install]\nWantedBy=multi-user.target\nUNIT\nln -s /etc/systemd/system/desktop-firstboot.service /etc/systemd/system/multi-user.target.wants/desktop-firstboot.service'"
     # Fetch first-boot script + personalization from GitHub at pinned REF
-    - "curtin in-target --target=/target -- sh -c 'mkdir -p /opt/nested-dev && cd /opt/nested-dev && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/desktop/desktop-firstboot.sh -O desktop-firstboot.sh && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/provision/personalization.sh -O personalization.sh && chmod +x desktop-firstboot.sh && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ desktop-firstboot.sh personalization.sh'"
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /opt/nested-dev && cd /opt/nested-dev && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/desktop/desktop-firstboot.sh -O desktop-firstboot.sh && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/provision/personalization.sh -O personalization.sh && wget -q https://raw.githubusercontent.com/popiel/nested_dev/__GITHUB_REF__/keys/vnc-passwd.hash -O vnc-passwd.hash && chmod +x desktop-firstboot.sh && chown __PERSONALIZATION_USERNAME__:__PERSONALIZATION_USERNAME__ desktop-firstboot.sh personalization.sh vnc-passwd.hash'"

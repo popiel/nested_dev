@@ -49,6 +49,40 @@ chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${DESKUSER_HOME
 systemctl enable --now xrdp
 log "xrdp enabled, .xsession set to i3"
 
+# VNC scrape of the physical console (R-02.2.1): xrdp spawns separate
+# sessions and can never mirror :0, so a remote view of anything else is
+# operationally no remote view. x11vnc attaches to the live lightdm/X
+# display instead. The console password is fixed per repo but the repo must
+# never hold it in plaintext: keys/vnc-passwd.hash is the *output* of
+# `x11vnc -storepasswd` for that password (backslash-octal bytes, exactly 8),
+# so it is written raw to the auth file and served via -rfbauth. Do not
+# "fix" this into a plaintext-password option plus a derived string — that serves a different
+# password than the one the hash encodes. Likewise `storepasswd -` does not
+# read stdin (the %- convention belongs to other options); the dash is stored
+# as the literal one-character password. A running daemon also never re-reads
+# the file, so any password change needs a daemon restart.
+log "Configuring x11vnc console mirror"
+VNC_HASH_FILE="${SCRIPT_DIR}/vnc-passwd.hash"
+[ -f "$VNC_HASH_FILE" ] || die "vnc-passwd.hash not found at ${VNC_HASH_FILE} — cannot continue"
+mkdir -p /etc/x11vnc
+printf '%b' "$(cat "$VNC_HASH_FILE")" > /etc/x11vnc/passwd
+chmod 600 /etc/x11vnc/passwd
+cat > /etc/systemd/system/x11vnc.service <<'UNIT_EOF'
+[Unit]
+Description=VNC mirror of the physical console
+After=display-manager.service
+Wants=display-manager.service
+[Service]
+ExecStart=/usr/bin/x11vnc -display :0 -auth guess -rfbauth /etc/x11vnc/passwd -forever -shared -o /var/log/x11vnc.log
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=graphical.target
+UNIT_EOF
+systemctl daemon-reload
+systemctl enable --now x11vnc
+log "x11vnc mirroring :0, password per keys/vnc-passwd.hash"
+
 # --- 3. i3 config ---
 log "Writing i3 config"
 mkdir -p "${DESKUSER_HOME}/.config/i3"
@@ -355,8 +389,13 @@ ufw default allow outgoing 2>&1 | tee -a "$LOG"
 ufw allow ssh 2>&1 | tee -a "$LOG"
 # Allow RDP from host only
 ufw allow from 192.168.100.1 to any port 3389 2>&1 | tee -a "$LOG"
+# Allow VNC console mirror from the LAN, not just the host: DNAT preserves the
+# client source IP, so a host-scoped rule drops Filbert's traffic at the
+# guest's default-deny. The host FORWARD admits the same subnet (R-01.10.4),
+# so this mirrors rather than widens the intended audience.
+ufw allow from 192.168.14.0/24 to any port 5900 2>&1 | tee -a "$LOG"
 echo "y" | ufw enable 2>&1 | tee -a "$LOG" || true
-log "Firewall configured (deny incoming, allow outgoing, allow ssh, allow RDP from host)"
+log "Firewall configured (deny incoming, allow outgoing, allow ssh, allow RDP from host, allow VNC from LAN)"
 
 # --- Self-disable ---
 log "=== desktop first-boot complete — disabling unit ==="
