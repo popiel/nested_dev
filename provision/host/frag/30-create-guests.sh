@@ -152,6 +152,37 @@ stop_serial_capture() {
     SERIAL_CAP_PID=""
 }
 
+# Install-completion waits, shared by all three guests (defined beside the
+# pure functions because VM 100 uses them before VM 101's section would
+# define them — a later definition reads as a timeout at the call site).
+wait_for_stopped() {
+    # A parked stopped VM is end-of-run: server seeds end the install
+    # powered off. A mid-install reboot keeps the VM running and never
+    # trips this wait.
+    local vmid="$1" timeout="$2" elapsed=0
+    while qm status "$vmid" 2>/dev/null | grep -q "running"; do
+        sleep 10
+        elapsed=$((elapsed + 10))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+wait_for_agent() {
+    # Only a booted system (agent answering) counts as installed afterward;
+    # detaching onto an unbootable disk strands the guest at a UEFI shell.
+    local vmid="$1" timeout="$2" elapsed=0
+    while ! qm agent "$vmid" ping >/dev/null 2>&1; do
+        sleep 10
+        elapsed=$((elapsed + 10))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
 download_iso() {
     local url="$1" dest="$2"
     if [ -f "$dest" ]; then
@@ -235,9 +266,9 @@ main() {
         UBUNTU_CODENAME="noble"
     }
     UBUNTU_BASE_URL="https://releases.ubuntu.com/${UBUNTU_VERSION}"
-    UBUNTU_DESKTOP_ISO="ubuntu-${UBUNTU_VERSION}-desktop-amd64.iso"
     # Pinned like ubuntu-release.conf (see it for why): point releases are
-    # discrete decisions, and this fallback must resolve the same file.
+    # discrete decisions, and this fallback must resolve the same files.
+    UBUNTU_DESKTOP_ISO="ubuntu-26.04.1-desktop-amd64.iso"
     UBUNTU_SERVER_ISO="ubuntu-26.04.1-live-server-amd64.iso"
 
     # --- Detect host resources ---
@@ -425,11 +456,12 @@ main() {
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_DESKTOP_ISO}" "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}"
     download_iso "${UBUNTU_BASE_URL}/${UBUNTU_SERVER_ISO}" "${ISO_DIR}/${UBUNTU_SERVER_ISO}"
 
-    # --- Extract installer kernel for QEMU direct boot (servers only) ---
+    # --- Extract installer kernels for QEMU direct boot ---
     # Stock ISOs boot without the `autoinstall` flag, so the installer waits
-    # on its yes/no prompt forever. The ISO's own kernel+initrd boot directly
-    # with a host-owned command line (R-01.11.13); the ISO stays attached as
-    # the package source. Desktop keeps interactive ISO boot.
+    # on its yes/no prompt forever. The ISOs' own kernel+initrd boot directly
+    # with a host-owned command line (R-01.11.13); each ISO stays attached as
+    # its own package source. Desktop included: its seed is Subiquity-valid
+    # and the wallpaper-sit was the same missing flag, never proof otherwise.
     EXTRACT_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/extract-installer-kernel.sh"
     SERVER_BASE="${UBUNTU_SERVER_ISO%.iso}"
     APPEND_ARGS="$(bash "$EXTRACT_SCRIPT" "${ISO_DIR}/${UBUNTU_SERVER_ISO}" "${ISO_DIR}")" \
@@ -439,6 +471,13 @@ main() {
     QEMU_APPEND="${APPEND_ARGS:+$APPEND_ARGS }autoinstall console=ttyS0 console=tty0"
     log "installer direct boot ready: ${SERVER_BASE} + autoinstall"
     log "installer boot args: ${QEMU_APPEND}"
+    DESKTOP_BASE="${UBUNTU_DESKTOP_ISO%.iso}"
+    DESKTOP_APPEND_ARGS="$(bash "$EXTRACT_SCRIPT" "${ISO_DIR}/${UBUNTU_DESKTOP_ISO}" "${ISO_DIR}")" \
+        || die "desktop installer kernel extraction failed"
+    DESKTOP_KERNEL="${ISO_DIR}/${DESKTOP_BASE}-vmlinuz"
+    DESKTOP_INITRD="${ISO_DIR}/${DESKTOP_BASE}-initrd"
+    DESKTOP_QEMU_APPEND="${DESKTOP_APPEND_ARGS:+$DESKTOP_APPEND_ARGS }autoinstall console=ttyS0 console=tty0"
+    log "desktop direct boot ready: ${DESKTOP_BASE} + autoinstall"
     # Console order matters: kernel messages go to both, /dev/console (and
     # the installer TUI) stays on VGA via the last entry, while the serial
     # carries everything for host-side capture (qm terminal). A guest oops
@@ -489,8 +528,30 @@ main() {
             --scsi0 ${GUEST_STORAGE}:40 \
             --boot "order=ide2;scsi0"
 
+        qm set 100 --args "-kernel ${DESKTOP_KERNEL} -initrd ${DESKTOP_INITRD} -append '${DESKTOP_QEMU_APPEND}'"
+        log "VM 100 direct-kernel boot configured (autoinstall, no prompt)"
         qm start 100
         log "VM 100 (desktop) created and started: ${DESKTOP_MEM}MB, ${DESKTOP_CORES} cores, 40GB OS, MAC 52:54:00:00:01:00"
+        start_serial_capture 100
+        log "Install gate: waiting for VM 100 to power off at end of install (timeout: 1800s)"
+        if ! wait_for_stopped 100 1800; then
+            stop_serial_capture 100
+            die "VM 100 install did not finish in 1800s — install serial log at ${ROOT}/var/log/pve-serial-100-install.log; inspect its console"
+        fi
+        stop_serial_capture 100
+        if [ -z "$(os_esp 100)" ]; then
+            qm set 100 --delete args 2>/dev/null || true
+            die "VM 100 has no EFI partition on its OS disk — install failed before partitioning; installer media left attached for forensics"
+        fi
+        qm set 100 --delete ide2 --boot "order=scsi0"
+        qm set 100 --delete args
+        log "VM 100 installer detached; booting installed system"
+        qm start 100
+        log "Waiting for VM 100 installed system to answer (timeout: 600s)"
+        if ! wait_for_agent 100 600; then
+            die "VM 100 installed system never answered — reattach the installer with: qm set 100 --ide2 ${ISO_DIR}/${UBUNTU_DESKTOP_ISO},media=cdrom --boot \"order=ide2;scsi0\""
+        fi
+        log "VM 100 (desktop) installed system booting; first-boot proceeds unattended"
     else
         log "VM 100 already exists — skipping"
     fi
@@ -500,34 +561,6 @@ main() {
     # stopped VM is the completion signal, unambiguous where a reboot would
     # re-enter the installer under ide2-first order. A mid-install reboot
     # keeps the VM running and never trips this wait.
-    wait_for_stopped() {
-        local vmid="$1" timeout="$2" elapsed=0
-        while qm status "$vmid" 2>/dev/null | grep -q "running"; do
-            sleep 10
-            elapsed=$((elapsed + 10))
-            if [ "$elapsed" -ge "$timeout" ]; then
-                return 1
-            fi
-        done
-        return 0
-    }
-    # A parked stopped VM is end-of-run, not end-of-success: a failed install
-    # honors shutdown:poweroff all the same. Detaching the installer on a
-    # disk with no bootloader strands the guest at a UEFI shell with the
-    # evidence still on the disk — so an EFI System partition on the OS disk
-    # is required first (os_esp, beside the pure functions above), and only
-    # a booted system (agent answering) counts as installed afterward.
-    wait_for_agent() {
-        local vmid="$1" timeout="$2" elapsed=0
-        while ! qm agent "$vmid" ping >/dev/null 2>&1; do
-            sleep 10
-            elapsed=$((elapsed + 10))
-            if [ "$elapsed" -ge "$timeout" ]; then
-                return 1
-            fi
-        done
-        return 0
-    }
     if ! qm status 101 >/dev/null 2>&1; then
         # Install with the OS disk alone. With two data disks the installer's
         # default layout picks the largest — it took the 500GB data volume

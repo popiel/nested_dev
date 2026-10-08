@@ -1,6 +1,12 @@
 #cloud-config
 autoinstall:
   version: 1
+  # Power off at end of install like the server seeds: with ide2-first boot
+  # order a reboot re-enters the installer and reinstalls over the top
+  # forever. The "manual install" era was triage over an undiagnosed
+  # wallpaper-sit (almost certainly the same missing-autoinstall-flag
+  # prompt), never proof the desktop installer can't run unattended.
+  shutdown: poweroff
   locale: en_US.UTF-8
   keyboard: {layout: "us"}
   identity:

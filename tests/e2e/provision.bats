@@ -403,7 +403,7 @@ require_run_ok() {
     assert_contains "$line" "--hostpci0 host=0000:00:02.0,pcie=1,x-vga=0"
     # Installer ISOs ride --ide2 with media=cdrom: --cdrom0 is not a qm
     # option and is rejected the same way.
-    assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04-desktop-amd64.iso,media=cdrom"
+    assert_contains "$line" "--ide2 $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04.1-desktop-amd64.iso,media=cdrom"
     assert_not_contains "$line" "--cdrom"
     assert_contains "$line" "bridge=vmbr0"
     assert_contains "$line" "local-lvm:40"
@@ -421,6 +421,15 @@ require_run_ok() {
     # Uncapped on the 8-core fixture host; the capping branch is covered in
     # tests/unit/frag30-guest-create.bats against a 4-core node.
     assert_contains "$line" "--cores 4"
+    # Direct-kernel boot like the servers (its seed is Subiquity-valid; the
+    # wallpaper-sit was the same missing flag): set at create, removed with
+    # the installer after the poweroff gate, agent proving the booted system.
+    assert_file_contains "$E2E_STATE/qm-journal" \
+        "qm set 100 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04.1-desktop-amd64-vmlinuz"
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 100 --delete ide2"
+    assert_file_contains "$E2E_STATE/qm-journal" "qm set 100 --delete args"
+    run grep -c "qm agent 100 ping" "$E2E_STATE/qm-journal"
+    [ "$output" = "1" ]
 }
 
 @test "the llm guest is created with no passthrough hardware" {
@@ -568,7 +577,7 @@ require_run_ok() {
 @test "the installer ISOs are fetched" {
     require_run_ok
     local isodir="$E2E_ROOT/var/lib/vz/template/iso"
-    [ -f "$isodir/ubuntu-26.04-desktop-amd64.iso" ]
+    [ -f "$isodir/ubuntu-26.04.1-desktop-amd64.iso" ]
     [ -f "$isodir/ubuntu-26.04.1-live-server-amd64.iso" ]
 }
 

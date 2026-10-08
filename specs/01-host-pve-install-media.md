@@ -323,8 +323,8 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   the provisioner verifies a bootloader exists on the OS volume before
   detaching the installer, and only a booted system (guest agent answering)
   counts as installed. The provisioner
-  then detaches the installer and boots the disk. The desktop's interactive
-  install is exempt.
+  then detaches the installer and boots the disk. Desktop included: its
+  installer is the same Subiquity core behind a different UI.
 * **R-01.11.4** A template cannot be started directly. This is the mechanism
   that guarantees no dev VM is ever auto-started.
 * **R-01.11.5** vm 103 and above are **not** created by host provisioning. They
