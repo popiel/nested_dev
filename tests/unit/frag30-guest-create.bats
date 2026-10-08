@@ -233,3 +233,17 @@ serial_capture_fixture() {
     [ "$status" -eq 0 ]
     [ "$output" = "host=0000:01:00.0,pcie=1,rombar=0" ]
 }
+
+@test "os_esp accepts curtin's EFI GUID alias too" {
+    # fdisk aliases both to "EFI System"; curtin writes C12A7328, not the
+    # textbook C12A4738 — and OVMF boots it, proven by a booted test-clone.
+    touch "${SWORK:-${BATS_TMPDIR}}/disk-alias"
+    local d="${SWORK:-${BATS_TMPDIR}}/disk-alias"
+    VM_DISK_DEVS="$d" export VM_DISK_DEVS
+    printf '%s\n' 'start=        2048, size=     2201600, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B' > "${BATS_TMPDIR}/sfdisk-out"
+    printf '#!/bin/bash\ncat "%s/sfdisk-out"\n' "$BATS_TMPDIR" > "${FIXTURES_DIR}/mock-bin/sfdisk"
+    chmod +x "${FIXTURES_DIR}/mock-bin/sfdisk"
+    run os_esp 104
+    [ "$status" -eq 0 ]
+    unset VM_DISK_DEVS
+}

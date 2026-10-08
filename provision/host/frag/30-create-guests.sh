@@ -82,19 +82,18 @@ hostpci_device_arg() {
 }
 # that never partitioned has no ESP, and detaching the installer onto it
 # strands the guest at a UEFI shell. Read from the partition table itself
-# with sfdisk -d: blkid reports through cache (stale on fresh disks),
-# probe mode (superblocks, not tables), and device spellings that never
-# match — four iterations failed on the tool, never on the disk. sfdisk
-# dumps the table as bytes on the device; the GUID match is
-# case-insensitive, uppercase table output included.
-EFI_PARTTYPE="c12a4738-f02b-4b93-8fd5-043ef0e62c58"
+# with sfdisk -d, matched by EITHER EFI GUID: fdisk aliases both to "EFI
+# System", curtin writes C12A7328 (not the textbook C12A4738), and OVMF boots
+# it — proven by a booted test-clone. Matching one GUID failed a completed
+# install with a populated ESP.
+EFI_PARTTYPES="c12a4738-f02b-4b93-8fd5-043ef0e62c58|c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 os_esp() {
     local vmid="$1" dev
     # Unquoted by intent: the default is a glob, the override a list.
     # shellcheck disable=SC2086
     for dev in ${VM_DISK_DEVS:-/dev/pve/vm-${vmid}-disk-1 /dev/mapper/*vm--${vmid}--disk--1}; do
         [ -e "$dev" ] || continue
-        if sfdisk -d "$dev" 2>/dev/null | grep -qi "${EFI_PARTTYPE}"; then
+        if sfdisk -d "$dev" 2>/dev/null | grep -qiE "${EFI_PARTTYPES}"; then
             printf '%s\n' "$dev"
             return 0
         fi
