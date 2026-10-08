@@ -311,7 +311,8 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.11.2** vm 102 (`dev-template`) is created and started, **provisioned
   once, and then converted to a PVE template** (Spec 07 §6). It is never left
   as a running VM. Conversion sanitizes per-clone identity (machine-id, SSH
-  host keys, random seed, DHCP leases, shell histories, cloud-init state)
+  host keys, random seed, DHCP leases, snapd device identity, docker daemon
+  key, shell histories, cloud-init state)
   and detaches the seed ISO, which carries rendered private keys that must
   never reach a clone.
 * **R-01.11.3** Server installs end powered off, never rebooted: with

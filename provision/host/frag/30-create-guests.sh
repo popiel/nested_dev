@@ -687,10 +687,8 @@ main() {
                 # never reach a clone. Local extras are never merged back from
                 # anywhere; revoking a key means editing the clone, not this.
                 qm guest exec 102 -- cloud-init clean --logs 2>/dev/null || true
-                qm guest exec 102 -- /bin/bash -c 'truncate -s 0 /etc/machine-id && rm -f /etc/ssh/ssh_host_* && rm -f /var/lib/systemd/random-seed && rm -f /var/lib/dhcp/*.leases /var/lib/dhcp/*.lease /var/lib/systemd/network/*.lease && truncate -s 0 /root/.bash_history /home/*/.bash_history 2>/dev/null; true' 2>/dev/null || true
-                log "VM 102 identity cleaned for future clones"
-                qm set 102 --delete ide0 2>/dev/null \
-                    || log "WARNING: seed ISO detach failed — template still carries rendered private keys"
+                qm guest exec 102 -- /bin/bash -c 'truncate -s 0 /etc/machine-id && rm -f /etc/ssh/ssh_host_* && rm -f /var/lib/systemd/random-seed && rm -f /var/lib/dhcp/*.leases /var/lib/dhcp/*.lease /var/lib/systemd/network/*.lease && rm -rf /var/lib/snapd/device /var/lib/snapd/device.json && rm -f /etc/docker/key.json && truncate -s 0 /root/.bash_history /home/*/.bash_history 2>/dev/null; true' 2>/dev/null || true
+                log "VM 102 identity cleaned for future clones (machine-id, ssh keys, seed, leases, snapd device, docker key, histories)"
 
                 qm shutdown 102 2>/dev/null || true
                 sleep 5
@@ -705,6 +703,12 @@ main() {
                         break
                     fi
                 done
+                # Seed ISO detaches last, immediately before conversion: it
+                # carries rendered private keys that must never reach a clone,
+                # and nothing after the install needs it. Detaching a stopped
+                # VM is pure config (no hot-eject involved).
+                qm set 102 --delete ide0 2>/dev/null \
+                    || die "seed ISO detach failed — refusing to convert a template that carries rendered private keys"
                 qm template 102
                 log "VM 102 converted to template (never auto-started)"
             fi

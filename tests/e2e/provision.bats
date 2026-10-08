@@ -498,6 +498,8 @@ require_run_ok() {
     # which carries rendered private keys no clone may ever see.
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 102 --delete ide0"
     assert_file_contains "$E2E_STATE/qm-journal" "random-seed"
+    assert_file_contains "$E2E_STATE/qm-journal" "snapd/device"
+    assert_file_contains "$E2E_STATE/qm-journal" "docker/key.json"
 }
 
 @test "guest seeds carry the hash and both keys, and no placeholders survive" {
