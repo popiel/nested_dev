@@ -310,14 +310,11 @@ mkdir -p "$BIN_DIR"
 
 # Copy devctl script
 DEVCTL_SRC="${SCRIPT_DIR}/devctl"
-if [ -f "$DEVCTL_SRC" ]; then
-    cp "$DEVCTL_SRC" "${BIN_DIR}/devctl"
-    chmod +x "${BIN_DIR}/devctl"
-    chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${BIN_DIR}/devctl"
-    log "devctl installed to ${BIN_DIR}/devctl"
-else
-    log "WARNING: devctl source not found at ${DEVCTL_SRC}"
-fi
+[ -f "$DEVCTL_SRC" ] || die "devctl source not found at ${DEVCTL_SRC} — re-fetch it with refresh-guests.sh and re-run this section's copy step, or rebuild; a desktop without fleet control is not a completed desktop"
+cp "$DEVCTL_SRC" "${BIN_DIR}/devctl"
+chmod +x "${BIN_DIR}/devctl"
+chown "${PERSONALIZATION_USERNAME}:${PERSONALIZATION_USERNAME}" "${BIN_DIR}/devctl"
+log "devctl installed to ${BIN_DIR}/devctl"
 
 # SSH config
 #   pvehost  — restricted vmctl credential (ForceCommand), dev-fleet control only

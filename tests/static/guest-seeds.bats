@@ -154,6 +154,15 @@ assert_key_write_creates_ssh_dir_first() {
         'wayland-sessions/ubuntu.desktop'
 }
 
+@test "the desktop seed fetches devctl alongside the first-boot script" {
+    # Firstboot installs devctl from beside itself and only warned when the
+    # source was absent — so the seed's failure to fetch it shipped a desktop
+    # with no fleet control, green suite and all. Pin the fetch, not just the
+    # installed script's content.
+    assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
+        'desktop/devctl -O devctl'
+}
+
 @test "the dev seed fetches both dev/tools scripts into the tools directory" {
     assert_file_contains "${PROJECT_ROOT}/dev/user-data/user-data" \
         'dev/tools/nested -O nested'

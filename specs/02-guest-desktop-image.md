@@ -188,8 +188,10 @@ reported
   them into one credential would give dev VM lifecycle control to anything
   holding it, including the key the desktop uses to reach guests.
 * **R-02.6.3** First boot **hard-fails** if either seeded private key is
-  missing or invalid, or if the authorised-keys entry is missing (Spec 06
-  §R-06.3.4).
+  missing or invalid, if the authorised-keys entry is missing (Spec 06
+  §R-06.3.4), or if the `devctl` source is absent from beside the first-boot
+  script. A desktop without fleet control is not a completed desktop, and
+  the previous warn-and-continue shipped exactly that, green.
 * **R-02.6.4** `devctl` takes the guest account name from the environment
   rather than embedding it, because it is not rendered through the
   personalization configuration and a hardcoded name would be a second

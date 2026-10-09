@@ -23,6 +23,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 SCRIPTS=(
     "desktop/desktop-firstboot.sh"
+    "desktop/devctl"
     "llm/llm-firstboot.sh"
     "dev/dev-firstboot.sh"
     "provision/personalization.sh"
@@ -33,7 +34,7 @@ for script in "${SCRIPTS[@]}"; do
     wget -q "${GITHUB_BASE}/${script}" -O "${TMPDIR}/$(basename "$script")" \
         || die "Failed to fetch ${script}"
 done
-chmod +x "${TMPDIR}"/*.sh
+chmod +x "${TMPDIR}"/*
 
 # --- SCP to running VMs ---
 GUESTS=(
@@ -58,11 +59,17 @@ for entry in "${GUESTS[@]}"; do
         102) GUEST_SCRIPT="dev-firstboot.sh" ;;
     esac
 
+    # Files to push: the first-boot script, personalization, and (desktop
+    # only) the devctl source firstboot installs from. The copy into
+    # ~/.local/bin stays manual — firstboot is one-shot by design.
+    push_files=("${TMPDIR}/${GUEST_SCRIPT}" "${TMPDIR}/personalization.sh")
+    [ "$vmid" = "100" ] && push_files+=("${TMPDIR}/devctl")
+
     # SCP to VM via qm guest exec (uses guest agent)
     log "Pushing scripts to VM ${vmid} (${name})..."
     qm guest exec "$vmid" -- mkdir -p /opt/nested-dev 2>/dev/null || true
 
-    for f in "${TMPDIR}/${GUEST_SCRIPT}" "${TMPDIR}/personalization.sh"; do
+    for f in "${push_files[@]}"; do
         fname=$(basename "$f")
         # Use qm guest file-write (guest agent) to push files
         CONTENT=$(base64 "$f")
