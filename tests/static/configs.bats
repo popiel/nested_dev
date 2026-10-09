@@ -88,8 +88,20 @@ load '../lib/helpers'
 
 @test "iptables-forwarding.conf passes iptables-restore --test" {
     require_command iptables-restore
-    run iptables-restore --test < "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"
-    [ "$status" -eq 0 ]
+    # Probe capability, not identity: --test may need kernel facilities this
+    # user/stack cannot provide. If even a minimal table won't validate, the
+    # tool cannot judge files here — skip, don't fail.
+    if ! printf '*filter\nCOMMIT\n' | iptables-restore --test >/dev/null 2>&1; then
+        skip "iptables-restore cannot validate tables on this host"
+    fi
+    # The reference names the LAN NIC by placeholder (substituted at
+    # provision; e2e proves the real substitution with eno1). Interface names
+    # are length-checked at parse and the placeholder exceeds IFNAMSIZ, so
+    # render with a dummy for the syntax check — the check is syntax, and
+    # anything else in the file is validated genuinely.
+    local conf="${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"
+    run bash -c 'sed "s/CHANGE_ME_DETECT_AT_PROVISION/lo/g" "$0" | iptables-restore --test 2>&1' "$conf"
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
 }
 
 @test "every DNAT has a filter admission for its rewritten tuple" {

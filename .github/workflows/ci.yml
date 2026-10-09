@@ -13,8 +13,17 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bats shellcheck python3 python3-yaml \
-            dnsmasq iptables
+          sudo apt-get install -y dnsmasq iptables python3 python3-yaml
+
+      - name: Install pinned test tools
+        # Same bats/shellcheck developers use (tests/wsl-setup.sh pins
+        # v1.13.0/v0.11.0): apt's builds lag and differ in behavior — TAP
+        # error shapes bats reports, shellcheck findings — which fails
+        # version-sensitive tests that pass locally. System packages stay
+        # on apt; only the scholar tools are pinned.
+        run: |
+          bash tests/wsl-setup.sh
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
       - name: Run test suite
         run: tests/run.sh

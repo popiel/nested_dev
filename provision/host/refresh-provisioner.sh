@@ -135,7 +135,11 @@ log "tree swapped: previous tree at ${PROVISION_DIR}.old"
 # provisioner no-ops while it exists.
 rm -f "$COMPLETE_MARKER"
 log "completion marker removed — running the provisioner"
-if ! /bin/sh "${PROVISION_DIR}/host/provision-host.sh"; then
+# Explicit bash, never /bin/sh: the provisioner is bash (pipefail and
+# beyond) and /bin/sh is dash on Debian/PVE. This passed locally only
+# because that shell happens to be bash there — a host accident, not a
+# guarantee (observed: green suite, red CI and a dead refresh path).
+if ! /bin/bash "${PROVISION_DIR}/host/provision-host.sh"; then
     die "provisioner failed — previous tree at ${PROVISION_DIR}.old, no completion marker written so a retry proceeds; see $LOG"
 fi
 
