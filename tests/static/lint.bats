@@ -114,3 +114,26 @@ load '../lib/helpers'
         return 1
     }
 }
+
+@test "bash entry points are invoked with bash, never sh" {
+    # /bin/sh is dash on Debian/PVE and dies on pipefail: two call sites ran
+    # the bash provisioner under sh, green wherever sh happens to be bash,
+    # red everywhere else (observed: dead e2e setup and dead refresh on CI).
+    # Positive pins on both known sites.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        '/bin/bash "${PROVISION_DIR}/host/provision-host.sh"'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/refresh-provisioner.sh" \
+        '/bin/bash "${PROVISION_DIR}/host/provision-host.sh"'
+}
+
+@test "CI installs the pinned test tools, not apt builds" {
+    # Apt's bats/shellcheck lag and differ in behavior (TAP error shapes,
+    # findings), failing version-sensitive tests that pass locally
+    # (observed: green suite, red CI). Parity comes from wsl-setup.sh;
+    # pin its use and keep both tools off the apt line.
+    local ci="${PROJECT_ROOT}/.github/workflows/ci.yml"
+    assert_file_contains "$ci" 'bash tests/wsl-setup.sh'
+    assert_file_contains "$ci" 'GITHUB_PATH'
+    assert_file_not_contains "$ci" 'install -y bats'
+    assert_file_not_contains "$ci" 'install -y shellcheck'
+}
