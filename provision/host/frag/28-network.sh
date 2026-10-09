@@ -196,6 +196,11 @@ dhcp-range=192.168.100.110,192.168.100.200,255.255.255.0,12h
 dhcp-option=option:router,192.168.100.1
 dhcp-option=option:dns-server,192.168.100.1
 
+# Search domain for DHCP clients (option 119). Guest resolvers never send
+# single-label names to unicast DNS at all, so without this a bare
+# `lychee-llm` never becomes a DNS query — only the FQDN resolves.
+dhcp-option=option:domain-search,wolfskeep.com
+
 # --- Static leases (MACs match frag/30 qm create --net0) ---
 dhcp-host=52:54:00:00:01:00,lychee,192.168.100.100
 dhcp-host=52:54:00:00:01:01,lychee-llm,192.168.100.101

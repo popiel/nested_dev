@@ -363,6 +363,10 @@ require_run_ok() {
     # that appears later — dnsmasq ends up answering DNS while deaf on DHCP.
     assert_file_contains "$E2E_ROOT/etc/dnsmasq.d/nested_dev.conf" "bind-dynamic"
     assert_file_not_contains "$E2E_ROOT/etc/dnsmasq.d/nested_dev.conf" "bind-interfaces"
+    # DHCP advertises the fleet search domain: bare guest names are
+    # single-label and never reach unicast DNS without it.
+    assert_file_contains "$E2E_ROOT/etc/dnsmasq.d/nested_dev.conf" \
+        "dhcp-option=option:domain-search,wolfskeep.com"
     # The LAN side is re-verified after the reconfiguration: the DHCP renewal
     # races the first apt call, which otherwise fails on every repository.
     assert_file_contains "$E2E_ROOT/var/log/pve-firstboot.log" \

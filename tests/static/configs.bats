@@ -53,6 +53,19 @@ load '../lib/helpers'
     assert_contains "$heredoc" 'interface=lo'
 }
 
+@test "dhcp advertises the fleet search domain" {
+    # Bare guest names are single-label, which resolvers never send to
+    # unicast DNS — without option 119 only FQDNs resolve. Same two sources
+    # as the tests above.
+    local ref="${PROJECT_ROOT}/provision/network/dnsmasq.conf"
+    assert_file_contains "$ref" 'dhcp-option=option:domain-search,wolfskeep.com'
+    local heredoc
+    heredoc="$(sed -n "/nested_dev.conf.*DNSMASQ_EOF/,/^DNSMASQ_EOF$/p" \
+        "${PROJECT_ROOT}/provision/host/frag/28-network.sh")"
+    [ -n "$heredoc" ] || { echo "frag/28 dnsmasq heredoc not found" >&2; return 1; }
+    assert_contains "$heredoc" 'dhcp-option=option:domain-search,wolfskeep.com'
+}
+
 @test "public upstreams are a fallback tier, not the policy" {
     # The lease-provided resolver is primary; the public servers exist only
     # for a broken LAN resolver (observed: TCP/53 answered, UDP/53

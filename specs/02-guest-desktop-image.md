@@ -59,7 +59,8 @@ separating browsing from development.
 * **R-02.1.5** SSH password authentication is disabled, and the seed trusts
   the operator key and the guest-identity key (Spec 06 §R-06.3).
 * **R-02.1.6** The guest's resolver is the host's dnsmasq, not the LAN's. VM
-  names resolve only there.
+  names resolve only there. Bare names resolve via the `wolfskeep.com`
+  search domain (Spec 01 §R-01.9.2).
 * **R-02.1.7** The hostname is fixed and matches the host's DNS entry for this
   VM.
 

@@ -236,7 +236,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   for the host itself (whose resolver points at `127.0.0.1`), enabled at
   boot and passing its own configuration test.
 * **R-01.9.2** Every VM has a fixed lease and a DNS entry in both short and
-  fully-qualified form.
+  fully-qualified form. DHCP also advertises `wolfskeep.com` as the search
+  domain (option 119): guest resolvers never send single-label names to
+  unicast DNS, so without it a bare name is never even a query.
 * **R-01.9.3** Upstream DNS is taken from the host's resolver at provision
   time, written to `/run/resolv.conf` for dnsmasq from the DHCP lease, and
   the host then resolves through dnsmasq. Public resolvers are configured as
