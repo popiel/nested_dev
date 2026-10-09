@@ -246,6 +246,9 @@ EOF
     # self-sufficient (it appends the system dirs itself).
     unset SSH_ORIGINAL_COMMAND
     export PATH="$bin:/usr/bin:/bin"
+    # The suite runs unprivileged; the hatch bypasses the root refusal below
+    # (unreachable via SSH, so production keeps the trap armed).
+    export VMCTL_ALLOW_NONROOT=1
     run bash "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" list
     [ "$status" -eq 0 ]
     local line100 line101 line104
@@ -272,12 +275,42 @@ EOF
     # errexit abort after the header with empty stderr (observed live).
     unset SSH_ORIGINAL_COMMAND
     export PATH="/usr/bin:/bin"
+    export VMCTL_ALLOW_NONROOT=1
     run bash "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" list
     [ "$status" -eq 0 ]
     local line100
     line100="$(printf '%s\n' "$output" | awk '$1 == "100"')"
     [ -n "$line100" ]
     [[ "$line100" == *"unknown" ]]
+}
+
+@test "vmctl-host refuses unprivileged execution loudly" {
+    # The trap this suite was missing: without the root refusal, a privilege
+    # failure degrades into empty results with a bare nonzero exit — the
+    # exact live failure, invisible to every layer. The suite itself runs
+    # unprivileged, so no user-switching machinery is needed: run raw.
+    # Status only here: die() speaks on stderr, whose capture is shell-
+    # dependent; the message text is pinned statically below.
+    unset SSH_ORIGINAL_COMMAND
+    unset VMCTL_ALLOW_NONROOT
+    export PATH="/usr/bin:/bin"
+    run bash "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" list
+    [ "$status" -ne 0 ]
+    assert_file_contains "$VMCTL_HOST" 'must run as root via the vmctl sudoers entry'
+}
+
+@test "the control channel composes: sudo invocation, sudoers grant, env" {
+    # The three artifacts must agree or the channel runs unprivileged and
+    # every verb fails: ForceCommand invokes through sudo, sudoers grants
+    # exactly the wrapper plus the verb channel, in the repo source AND the
+    # fallback heredoc (which fires precisely when the source is missing).
+    local frag="${PROJECT_ROOT}/provision/host/frag/25-desktop-control.sh"
+    assert_file_contains "$frag" 'command="sudo /usr/local/sbin/vmctl-host"'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/sudoers" \
+        'vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/sudoers" \
+        'env_keep += "SSH_ORIGINAL_COMMAND"'
+    assert_file_contains "$frag" 'env_keep += "SSH_ORIGINAL_COMMAND"'
 }
 
 @test "the dev range boundaries are enforced on every ID-taking verb" {

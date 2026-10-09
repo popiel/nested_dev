@@ -67,7 +67,11 @@ pinned to one address.
 * **R-07.1.4** The account has no privilege beyond invoking the control
   program, and the control program is owned by `root` and not writable by the
   account. The restriction must not be removable by the credential it
-  restricts.
+  restricts. Invocation is sudo-mediated (`command="sudo …/vmctl-host"`,
+  sudoers granting exactly the wrapper), and the verb channel
+  (`SSH_ORIGINAL_COMMAND`) is the only environment preserved across the sudo
+  boundary — without both, the channel runs unprivileged and every verb
+  fails (observed live: empty listing, bare nonzero exit, empty stderr).
 * **R-07.1.5** The account is created idempotently, including correcting a
   shell left wrong by an earlier run.
 

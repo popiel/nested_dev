@@ -1,2 +1,4 @@
-# /etc/sudoers.d/vmctl — vmctl can only run vmctl-host as root
+# /etc/sudoers.d/vmctl — vmctl can only run vmctl-host as root, and only the
+# verb channel survives the sudo boundary (sudo scrubs everything else).
 vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host
+Defaults:vmctl env_keep += "SSH_ORIGINAL_COMMAND"

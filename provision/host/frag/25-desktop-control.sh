@@ -65,11 +65,17 @@ else
 fi
 
 # --- authorized_keys with ForceCommand restriction ---
+# The forced command runs through sudo: qm is root-only, and the sudoers
+# entry below grants exactly this script, so sudo-mediated invocation IS the
+# privilege design (not an escalation of it). Without sudo the script runs
+# unprivileged and every qm call fails — observed live as an empty list with
+# a nonzero exit and no stderr. The verb arrives via SSH_ORIGINAL_COMMAND,
+# preserved across the sudo boundary by the env_keep rule in sudoers.
 mkdir -p "${ROOT}/home/vmctl/.ssh"
 chmod 700 "${ROOT}/home/vmctl/.ssh"
 PUB_KEY=$(cat "${VMCTL_KEY_DIR}/vmctl_ed25519.pub")
 cat > "${ROOT}/home/vmctl/.ssh/authorized_keys" <<AUTH_EOF
-command="/usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ${PUB_KEY}
+command="sudo /usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ${PUB_KEY}
 AUTH_EOF
 chmod 600 "${ROOT}/home/vmctl/.ssh/authorized_keys"
 chown -R vmctl:vmctl "${ROOT}/home/vmctl/.ssh"
@@ -94,6 +100,7 @@ else
     # file it cannot write.
     install -m 440 /dev/stdin "$VMCTL_SUDOERS_DST" <<'SUDOERS_EOF'
 vmctl ALL=(root) NOPASSWD: /usr/local/sbin/vmctl-host
+Defaults:vmctl env_keep += "SSH_ORIGINAL_COMMAND"
 SUDOERS_EOF
 fi
 log "sudoers drop-in written"

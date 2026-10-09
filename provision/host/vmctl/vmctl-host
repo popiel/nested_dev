@@ -19,6 +19,16 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" >> /var/log/nested-dev-vmctl.log; }
 
 die() { echo "ERROR: $*" >&2; log "REJECT: $*"; exit 1; }
 
+# Refuse unprivileged execution loudly. Every verb shells to qm, which is
+# root-only; without this guard a privilege failure degrades into empty
+# results with a bare nonzero exit (observed live: header-only list, no
+# stderr). VMCTL_ALLOW_NONROOT exists solely for the test suite, which runs
+# unprivileged; it is unreachable through the SSH channel (sshd scrubs the
+# environment to LANG/LC_*), so it cannot weaken the production boundary.
+if [ "$(id -u)" -ne 0 ] && [ "${VMCTL_ALLOW_NONROOT:-}" != "1" ]; then
+    die "must run as root via the vmctl sudoers entry (got euid $(id -u))"
+fi
+
 # Wait for the guest agent to answer, then set the guest's hostname to the
 # PVE VM name. Runs detached; every outcome is logged. Failure is not fatal:
 # the VM is running and usable, and the name can be set by hand.

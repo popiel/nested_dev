@@ -625,7 +625,7 @@ require_run_ok() {
     require_run_ok
     local authkeys="$E2E_ROOT/home/vmctl/.ssh/authorized_keys"
     run cat "$authkeys"
-    [ "$output" = 'command="/usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 E2EPUB-vmctl_ed25519 e2e@test' ]
+    [ "$output" = 'command="sudo /usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 E2EPUB-vmctl_ed25519 e2e@test' ]
     [ "$(stat -c %a "$authkeys")" = "600" ]
     run cmp "$E2E_ROOT/etc/sudoers.d/vmctl" "${PROJECT_ROOT}/provision/host/vmctl/sudoers"
     run cmp "$E2E_ROOT/usr/local/sbin/vmctl-host" "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host"
