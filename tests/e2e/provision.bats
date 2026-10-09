@@ -702,6 +702,10 @@ require_run_ok() {
         "INPUT -p tcp --dport 2222 -s 192.168.14.0/24 -j ACCEPT"
     assert_file_contains "$E2E_ROOT/etc/ssh/sshd_config.d/nested-dev-2222.conf" \
         "Port 2222"
+    # ...and 22 alongside it: any Port line suppresses sshd's default 22, so
+    # a 2222-only drop-in silently kills the desktop's path (observed live).
+    assert_file_contains "$E2E_ROOT/etc/ssh/sshd_config.d/nested-dev-2222.conf" \
+        "Port 22"
     run grep "DNAT --to-destination 192.168.100.1:22" "$E2E_STATE/journal"
     [ "$status" -ne 0 ] || {
         echo "DNAT-to-self for host SSH is back — it can never admit traffic" >&2
