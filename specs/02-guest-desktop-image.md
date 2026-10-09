@@ -93,6 +93,22 @@ separating browsing from development.
   the greeter enumerates sessions on its own and neither `user-session` nor
   `sessions-directory` reaches its list (observed live: Ubuntu stayed
   choosable with both set).
+* **R-02.2.5** The console stack stays X11 (lightdm, Xorg, x11vnc) until a
+  further incident forces re-evaluation. A Wayland move (Sway plus
+  wayvnc/w0vncserver, with dmenu/urxvt/picom replaced by Wayland-native
+  equivalents) was evaluated and deferred: it re-opens session, mirror,
+  input, auth, and shutdown validation from zero against a months-old
+  server, while the X11 stack is validated end to end. Revisit on a second
+  x11vnc incident of the shutdown-hang class, or on a concrete need the X11
+  stack cannot meet (per-output capture, encrypted VNC).
+* **R-02.2.6** Key repeat is server-owned and operator-toggled, not
+  automated. x11vnc re-applies autorepeat-off per client connection, so the
+  operator re-enables it with `xset r on` as needed; no hook does this, by
+  decision. Repeat must live in exactly one place: the viewer (TightVNC)
+  contributes no client-side repeat, which is what makes server ownership
+  safe — a repeating viewer would double every character. BackSpace travels
+  the identical path (verified live via repeat mask plus timestamped hold:
+  never special, despite appearances).
 
 ### R-02.3 GPU passthrough is verified, and a software-rendered desktop is
 reported
