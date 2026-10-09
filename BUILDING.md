@@ -348,3 +348,60 @@ output/
 | Guest first-boot stuck | Check `/var/log/desktop-firstboot.log` (or llm/dev variant); ensure host MASQUERADE is working |
 | PVE validation error on answer file | Ensure `keys/root-password-hash` exists; the answer requires exactly one of `root-password` or `root-password-hashed` |
 | `Guest VMs not created` after a rename | `frag/30` aborts if `/root/.personalization-password-hash` is missing on the host — check the bootstrap log and re-run `systemctl start pve-firstboot` |
+
+## Addendum: diagnosing a red CI gate
+
+Every push and pull request runs the full suite on a clean Ubuntu runner
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): checkout, system
+dependencies from apt, the pinned `bats`/`shellcheck` from
+`tests/wsl-setup.sh`, then `tests/run.sh` over all tiers. A red gate means
+the suite and the runner disagree about something — the runner is a
+different machine than the ones the suite was last green on, so treat the
+difference as evidence, not noise.
+
+### Reading a failed run
+
+In the repository's Actions tab, open the failed run and expand the
+**Run test suite** step:
+
+- One summary line per suite (pass/fail with counts), in run order.
+- Below it, the full TAP output of each failing suite, including the
+  failing assertion — a failing suite is printed in full, so there is no
+  separate log to hunt for.
+- Then the `=== timing ===` report and the `=== result ===` block of
+  `key=value` pairs.
+
+For searching, download the run's log archive (the run page offers it as a
+zip) and search the step file for `not ok`. The per-suite summary lines
+name the failing suites; work outward from the first one — later failures
+are often cascades of an earlier suite's breakage (a static content failure
+can resurface inside meta-suites that execute the harness itself).
+
+### Environment deltas to check first
+
+Most CI-only reds have been one of these:
+
+- **Tool versions.** Developers pin `bats`/`shellcheck` via
+  `tests/wsl-setup.sh`; CI installs the same pins. If a failure smells
+  version-shaped (changed diagnostics, new findings on untouched code,
+  TAP shapes the parser doesn't recognize), verify both sides resolve the
+  same versions before touching suite code.
+- **`/bin/sh` is dash on the runner.** Any shell invoked without an
+  explicit interpreter, or via `/bin/sh`, runs under dash there — while a
+  dev machine may silently provide bash as `sh`. Bash scripts must name
+  `bash` at every invocation site, including usage documentation.
+- **Optional tools are present on CI.** Checks that skip locally for lack
+  of `dnsmasq`/`iptables-restore`/etc. *run* on the runner — against the
+  runner's kernel and privileges, not yours. A check that never executed
+  locally can fail there on content no one ever validated (overlong
+  fixture values, kernel-gated operations). Capability probes with skip
+  fallbacks beat identity checks (`root` vs not) for these.
+- **Clean-machine assumptions.** The runner has no prior timing history,
+  no host quirks, no warm caches. Anything the suite reads outside the
+  repo and its temp dirs is suspect on first sight.
+
+### Fixing direction
+
+Fix the code or the test, not the gate: keep the workflow running the full
+suite on the pinned runner. Version pins move forward deliberately (see the
+pin comment in `ci.yml`), never by accepting whatever apt happens to carry.
