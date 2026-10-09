@@ -5,6 +5,12 @@
 # This script is root-owned and installed by frag/25-desktop-control.sh.
 set -euo pipefail
 
+# ForceCommand arrives with a barren PATH (notably no /usr/sbin, where qm
+# lives), so resolve tooling deterministically instead of inheriting the
+# channel. Append-only: anything already on PATH keeps precedence.
+PATH="$PATH:/usr/sbin:/sbin"
+export PATH
+
 INVENTORY="/etc/nested-dev/inventory"
 DEV_MIN=103
 DEV_MAX=249
@@ -47,7 +53,10 @@ case "$VERB" in
         # and reported a stopped 101 as running (observed live via devctl
         # list). 102 stays literal: a template's status is structural, and qm
         # refuses to start it.
-        QMLIST=$(qm list 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {print $1, $2, $3}')
+        QMLIST=$(qm list 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {print $1, $2, $3}' || true)
+        # The || true is load-bearing, not leniency: a runtime qm failure
+        # (cluster FS down) must degrade to "unknown" rows, never abort
+        # silently after the header with an empty stderr (observed live).
         for vmid in 100 101; do
             case "$vmid" in
                 100) NAME=desktop; HOST=lychee; IP=192.168.100.100 ;;

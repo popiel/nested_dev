@@ -241,9 +241,11 @@ EOF
     # inheritance or run-builtin semantics. The script reads the verb from
     # $@ when SSH_ORIGINAL_COMMAND is unset, and the stub qm rides an
     # explicitly exported PATH. Each bats test runs isolated, so the exports
-    # cannot leak into neighboring tests.
+    # cannot leak into neighboring tests. Deliberately no /usr/sbin here:
+    # the ForceCommand channel carries none, and the script must be
+    # self-sufficient (it appends the system dirs itself).
     unset SSH_ORIGINAL_COMMAND
-    export PATH="$bin:$PATH"
+    export PATH="$bin:/usr/bin:/bin"
     run bash "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" list
     [ "$status" -eq 0 ]
     local line100 line101 line104
@@ -262,6 +264,20 @@ EOF
     ! grep -q "^status" "$QM_CALLS"
     ! grep -q "^config" "$QM_CALLS"
     unset QM_CALLS
+}
+
+@test "vmctl list degrades to unknown when qm is absent" {
+    # No stub, no /usr/sbin: the ForceCommand channel. A runtime qm failure
+    # must yield unknown rows and exit 0 — never the silent death of an
+    # errexit abort after the header with empty stderr (observed live).
+    unset SSH_ORIGINAL_COMMAND
+    export PATH="/usr/bin:/bin"
+    run bash "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" list
+    [ "$status" -eq 0 ]
+    local line100
+    line100="$(printf '%s\n' "$output" | awk '$1 == "100"')"
+    [ -n "$line100" ]
+    [[ "$line100" == *"unknown" ]]
 }
 
 @test "the dev range boundaries are enforced on every ID-taking verb" {
