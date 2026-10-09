@@ -99,3 +99,18 @@ load '../lib/helpers'
         fi
     done
 }
+
+@test "the CI entry point is executable in the git index" {
+    # CI invokes tests/run.sh directly; without the exec bit that is
+    # permission denied on a Linux runner. Undetectable by running the
+    # suite: WSL's DrvFs presents every file as executable, and the
+    # documented invocation (`bash tests/run.sh`) never checks the bit.
+    # Only the git index tells the truth, so assert on it, not -x.
+    require_command git
+    local mode
+    mode="$(git -C "$PROJECT_ROOT" ls-files -s -- tests/run.sh | cut -d' ' -f1)"
+    [ "$mode" = "100755" ] || {
+        echo "tests/run.sh mode in git index: ${mode:-untracked}" >&2
+        return 1
+    }
+}
