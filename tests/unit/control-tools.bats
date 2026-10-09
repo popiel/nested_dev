@@ -121,6 +121,13 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_not_contains "$DESKTOP_FIRSTBOOT" 'enable --now xrdp'
 }
 
+@test "desktop i3 mod key is Alt, not Super" {
+    # VNC is the only input path and no Windows VNC client forwards Super,
+    # so a Mod4 config leaves every $mod binding dead (observed live:
+    # TightVNC swallows it). i3's upstream Mod1 default is the working one.
+    assert_file_contains "$DESKTOP_FIRSTBOOT" 'set $mod Mod1'
+}
+
 # --- devctl wiring ---
 
 @test "devctl uses the guest identity key for direct guest SSH" {

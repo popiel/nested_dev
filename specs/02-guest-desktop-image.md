@@ -34,7 +34,7 @@ separating browsing from development.
 | Audio | PulseAudio with pavucontrol |
 | iGPU driver | None baked in. The distro's own driver for the detected vendor, from the Ubuntu archive |
 | Disk | 40 GB virtio |
-| Session | Optional GNOME profile with `gnome-remote-desktop` is available where hardware encoding is wanted; i3 is the default |
+| Session | i3 only. The GNOME/Wayland session is diverted out of the chooser: LightDM cannot host it, and a login into it kills the console (R-02.2.4). |
 | Identity | The account from Spec 05; guest `root` locked |
 | Egress | Unrestricted (Spec 00 §R-00.2.6) |
 
@@ -82,6 +82,16 @@ separating browsing from development.
   reconfigured.
 * **R-02.2.3** The compositor is started from the window manager session, not
   as a separate service.
+* **R-02.2.4** The display manager's default session is i3, set at install
+  time — never GNOME, never Wayland. LightDM cannot host Wayland sessions:
+  a login into one opens displayless with no `DISPLAY`, the `:0` X server
+  exits, the physical console drops to text, and the VNC mirror has no
+  framebuffer to scrape (observed live: first-ever login selected Ubuntu on
+  Wayland and produced exactly this). Belt and suspenders: the default is
+  pinned *and* the Wayland session file is diverted out of visibility, since
+  the greeter enumerates sessions on its own and neither `user-session` nor
+  `sessions-directory` reaches its list (observed live: Ubuntu stayed
+  choosable with both set).
 
 ### R-02.3 GPU passthrough is verified, and a software-rendered desktop is
 reported

@@ -79,7 +79,9 @@ log "Writing i3 config"
 mkdir -p "${DESKUSER_HOME}/.config/i3"
 cat > "${DESKUSER_HOME}/.config/i3/config" <<'I3_EOF'
 # i3 config for nested_dev desktop (lychee)
-set $mod Mod4
+# i3 upstream default (Mod1/Alt): VNC is the only input path and no Windows
+# VNC client forwards Super, so Mod4 would leave every $mod binding dead.
+set $mod Mod1
 
 # Terminal
 bindsym $mod+Return exec urxvt

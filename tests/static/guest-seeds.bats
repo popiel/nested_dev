@@ -136,6 +136,24 @@ assert_key_write_creates_ssh_dir_first() {
         'chmod 600 /home/__PERSONALIZATION_USERNAME__/.ssh/nested-dev-id'
 }
 
+@test "desktop user-data pins the lightdm default session to i3" {
+    # First-ever login defaulted to Ubuntu on Wayland, which LightDM cannot
+    # host: displayless session, dead :0, text console, no VNC framebuffer.
+    assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
+        'user-session=i3'
+}
+
+@test "desktop user-data diverts the Wayland session out of the chooser" {
+    # user-session and sessions-directory never reach the gtk-greeter's own
+    # listing: Ubuntu stayed selectable with both set, until its .desktop
+    # was diverted (observed live). The divert must be retry-silent like the
+    # neighboring symlinks.
+    assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
+        'dpkg-divert'
+    assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
+        'wayland-sessions/ubuntu.desktop'
+}
+
 @test "the dev seed fetches both dev/tools scripts into the tools directory" {
     assert_file_contains "${PROJECT_ROOT}/dev/user-data/user-data" \
         'dev/tools/nested -O nested'

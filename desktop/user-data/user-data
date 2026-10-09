@@ -70,6 +70,16 @@ autoinstall:
     # has no bus, and enable is symlink creation anyway — sibling seeds use
     # ln -s for the same reason (-sf so retries overwrite silently).
     - "curtin in-target --target=/target -- sh -c 'ln -sf /usr/lib/systemd/system/lightdm.service /etc/systemd/system/display-manager.service && ln -sf /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target'"
+    # Pin the default session to i3. Without this the greeter defaults to the
+    # Ubuntu (Wayland) session, and LightDM cannot host Wayland sessions: the
+    # login opens displayless, the :0 X server exits, the console drops to
+    # text, and the VNC mirror has no framebuffer (observed live).
+    - "curtin in-target --target=/target -- sh -c 'mkdir -p /etc/lightdm/lightdm.conf.d && printf \"[Seat:*]\\nuser-session=i3\\n\" > /etc/lightdm/lightdm.conf.d/99-nested-dev-session.conf'"
+    # Divert the Wayland session out of visibility. user-session and
+    # sessions-directory never reach lightdm-gtk-greeter's own listing —
+    # Ubuntu stayed selectable until its .desktop was diverted (observed
+    # live). Guarded so install retries stay silent.
+    - "curtin in-target --target=/target -- sh -c 'dpkg-divert --list /usr/share/wayland-sessions/ubuntu.desktop | grep -q . || dpkg-divert --local --rename --add /usr/share/wayland-sessions/ubuntu.desktop'"
     # Enable X11 forwarding in sshd (anchored: stock config has
     # "#X11Forwarding no", which the old pattern never matched — silently
     # leaving the default off while reporting success)
