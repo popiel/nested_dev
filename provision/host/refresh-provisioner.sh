@@ -15,7 +15,7 @@
 # host running the previous working tree, still marked complete.
 #
 # Usage (on the host, as root):
-#   /bin/sh /root/refresh-provisioner.sh
+#   /bin/bash /root/refresh-provisioner.sh
 #
 # Bootstrap (first use only — this script is not in the host's tree yet, and it
 # lives outside the swapped tree so later fetches never move it):

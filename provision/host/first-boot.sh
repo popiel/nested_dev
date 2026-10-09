@@ -220,7 +220,10 @@ systemctl enable pve-firstboot.service >/dev/null 2>&1 || true
 # for manual re-runs and for `systemctl status` diagnostics) but drive the
 # provisioner directly. Fragments are idempotent, so a later re-run is safe.
 log "running provisioner"
-if ! /bin/sh "${PROVISION_DIR}/host/provision-host.sh"; then
+# Explicit bash, never /bin/sh: the provisioner is bash (pipefail and
+# beyond) and /bin/sh is dash on Debian/PVE (observed: e2e setup dead on CI
+# while green wherever /bin/sh happens to be bash).
+if ! /bin/bash "${PROVISION_DIR}/host/provision-host.sh"; then
     die "provisioner failed — see ${ROOT}/var/log/pve-firstboot.log"
 fi
 
