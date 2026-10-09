@@ -102,6 +102,11 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     # serve a different password than the one the hash encodes.
     assert_file_contains "$DESKTOP_FIRSTBOOT" '-rfbauth /etc/x11vnc/passwd'
     assert_file_not_contains "$DESKTOP_FIRSTBOOT" 'passwdfile'
+    # A connected x11vnc ignored SIGTERM for the full 90s default (observed
+    # live: 85s stall to SIGKILL on shutdown, viewer attached throughout).
+    # Bound the stop; the block site is undetermined and irrelevant to a
+    # stateless mirror.
+    assert_file_contains "$DESKTOP_FIRSTBOOT" 'TimeoutStopSec=10'
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'to any port 5900'
     # DNAT preserves the client source IP, so a host-scoped ufw rule would
     # drop Filbert's traffic at the guest's default-deny (observed live:

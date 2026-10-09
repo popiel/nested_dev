@@ -67,6 +67,11 @@ Wants=display-manager.service
 ExecStart=/usr/bin/x11vnc -display :0 -auth guess -rfbauth /etc/x11vnc/passwd -forever -shared -o /var/log/x11vnc.log
 Restart=always
 RestartSec=5
+# Bound the stop: x11vnc ignored SIGTERM for the full 90s default with a
+# live viewer connected (observed live: 85s stall to SIGKILL on shutdown).
+# The block site is undetermined — stateless mirror, so a SIGKILL fallback
+# after 10s is harmless regardless of cause.
+TimeoutStopSec=10
 [Install]
 WantedBy=graphical.target
 UNIT_EOF
