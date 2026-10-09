@@ -187,11 +187,50 @@ download_iso() {
     local url="$1" dest="$2"
     if [ -f "$dest" ]; then
         log "ISO already present: $(basename "$dest")"
-        return
+        return 0
     fi
     log "Downloading $(basename "$dest")..."
     wget -q --show-progress -O "$dest" "$url" 2>&1 | tee -a "${ROOT}/var/log/pve-firstboot.log"
     log "Downloaded: $(sha256sum "$dest" | awk '{print $1}')"
+}
+
+# --- Rack input detection (R-02.2.7) ---------------------------------------
+# Physical keyboard/mouse by-id paths for VM 100 evdev routing. The directory
+# is a parameter (default: the live tree) so tests exercise this against
+# fixtures instead of the provision host's own devices. Never fatal: a
+# headless host has no by-id input links, and then the guest keeps VNC-only
+# input. Environment overrides win over detection (operators, e2e).
+detect_rack_keyboard() {
+    local dir="${1:-/dev/input/by-id}" link
+    [ -d "$dir" ] || return 1
+    # Prefer the main keyboard interface; secondary USB interfaces (media
+    # keys, e.g. *-if01-event-kbd) are not the typing keyboard.
+    for link in "$dir"/*-event-kbd; do
+        [ -L "$link" ] || continue
+        case "${link##*/}" in
+            *-if[0-9]*-*) continue ;;
+        esac
+        printf '%s\n' "$link"
+        return 0
+    done
+    for link in "$dir"/*-event-kbd; do
+        [ -L "$link" ] || continue
+        printf '%s\n' "$link"
+        return 0
+    done
+    return 1
+}
+
+detect_rack_mouse() {
+    local dir="${1:-/dev/input/by-id}" link
+    [ -d "$dir" ] || return 1
+    # The evdev node (-event-mouse), never the legacy mousedev joint (-mouse).
+    for link in "$dir"/*-event-mouse; do
+        [ -L "$link" ] || continue
+        printf '%s\n' "$link"
+        return 0
+    done
+    return 1
 }
 
 # --- Prerequisites -------------------------------------------------------
@@ -546,6 +585,20 @@ main() {
         qm set 100 --delete ide2 --boot "order=scsi0"
         qm set 100 --delete args
         log "VM 100 installer detached; booting installed system"
+        # --- VM 100: rack input routing (R-02.2.7) ---
+        # evdev passthrough with operator grab-toggle, set while stopped so it
+        # applies at the start below. repeat=off keeps the guest X server the
+        # single repeat owner (R-02.2.6): host-kernel repeats would arrive as
+        # extra presses on top of it. Absent devices keep VNC-only input and
+        # never fail provisioning.
+        RACK_KBD_EVIDEV="${RACK_KBD_EVIDEV:-$(detect_rack_keyboard || true)}"
+        RACK_MOUSE_EVIDEV="${RACK_MOUSE_EVIDEV:-$(detect_rack_mouse || true)}"
+        if [ -n "$RACK_KBD_EVIDEV" ] && [ -n "$RACK_MOUSE_EVIDEV" ]; then
+            qm set 100 --args "-object input-linux,id=rkbd,evdev=${RACK_KBD_EVIDEV},grab_all=on,repeat=off,grab-toggle=ctrl-ctrl -object input-linux,id=rmouse,evdev=${RACK_MOUSE_EVIDEV},grab_all=on -device virtio-keyboard-pci,id=rkbd-dev -device virtio-tablet-pci,id=rmouse-dev"
+            log "VM 100 rack input attached (ctrl-ctrl toggles host/guest): kbd=${RACK_KBD_EVIDEV} mouse=${RACK_MOUSE_EVIDEV}"
+        else
+            log "WARNING: no rack keyboard/mouse detected — VM 100 keeps VNC-only input"
+        fi
         qm start 100
         log "Waiting for VM 100 installed system to answer (timeout: 600s)"
         if ! wait_for_agent 100 600; then

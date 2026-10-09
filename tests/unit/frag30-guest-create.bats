@@ -247,3 +247,58 @@ serial_capture_fixture() {
     [ "$status" -eq 0 ]
     unset VM_DISK_DEVS
 }
+
+# --- Rack input detection (R-02.2.7): fixture by-id trees, never the host's.
+
+@test "rack keyboard detection prefers the main interface" {
+    # A USB keyboard exposes its typing interface and a media-keys interface;
+    # evdev must take the former (observed live: Microsoft 600 main + if01).
+    local d
+    d="$(mktemp -d)"
+    ln -s event-stub "$d/usb-Demo_Keyboard-event-kbd"
+    ln -s event-stub "$d/usb-Demo_Keyboard-if01-event-kbd"
+    run detect_rack_keyboard "$d"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$d/usb-Demo_Keyboard-event-kbd" ]
+    rm -rf "$d"
+}
+
+@test "rack keyboard detection falls back to a secondary interface" {
+    # Media-keys-only hardware still types; a fallback beats VNC-only.
+    local d
+    d="$(mktemp -d)"
+    ln -s event-stub "$d/usb-Odd_Keyboard-if01-event-kbd"
+    run detect_rack_keyboard "$d"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$d/usb-Odd_Keyboard-if01-event-kbd" ]
+    rm -rf "$d"
+}
+
+@test "rack mouse detection takes the evdev node, not the joint" {
+    # The legacy -mouse joint is a mousedev aggregate, not an evdev source
+    # input-linux can consume.
+    local d
+    d="$(mktemp -d)"
+    ln -s event-stub "$d/usb-Demo_Mouse-event-mouse"
+    ln -s event-stub "$d/usb-Demo_Mouse-mouse"
+    run detect_rack_mouse "$d"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$d/usb-Demo_Mouse-event-mouse" ]
+    rm -rf "$d"
+}
+
+@test "rack input detection degrades on headless hosts" {
+    # No by-id tree (absent dir) or no input links (empty dir) keeps VNC-only
+    # input and never fails provisioning.
+    run detect_rack_keyboard "/nonexistent-by-id-tree"
+    [ "$status" -ne 0 ]
+    run detect_rack_mouse "/nonexistent-by-id-tree"
+    [ "$status" -ne 0 ]
+    local d
+    d="$(mktemp -d)"
+    run detect_rack_keyboard "$d"
+    [ "$status" -ne 0 ]
+    run detect_rack_mouse "$d"
+    [ "$status" -ne 0 ]
+    rm -rf "$d"
+}

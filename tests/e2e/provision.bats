@@ -67,6 +67,12 @@ EOF
     # carry the EFI signature regardless of arguments.
     touch "$WORK/fake-disk"
     export VM_DISK_DEVS="$WORK/fake-disk"
+    # Rack input fixtures: the fragment honors these overrides over live
+    # detection (operators use the same contract), so the emitted QEMU input
+    # wiring is deterministic here regardless of the machine running the suite.
+    mkdir -p "$WORK/fake-by-id"
+    touch "$WORK/fake-by-id/usb-E2E_Keyboard-event-kbd"
+    touch "$WORK/fake-by-id/usb-E2E_Mouse-event-mouse"
 
     # --- the fixture host, as the installer leaves it ---
     mkdir -p "$ROOT/var/log" "$ROOT/root" \
@@ -137,6 +143,8 @@ EOF
 export E2E_WORK="${WORK}"
 export E2E_ROOT="${ROOT}"
 export E2E_STATE="${STATE}"
+export RACK_KBD_EVIDEV="${WORK}/fake-by-id/usb-E2E_Keyboard-event-kbd"
+export RACK_MOUSE_EVIDEV="${WORK}/fake-by-id/usb-E2E_Mouse-event-mouse"
 EOF
 
     # --- run the real thing, once ---
@@ -150,6 +158,8 @@ EOF
     E2E_MOCKBIN="${MOCKBIN}" \
     E2E_TARBALL="${WORK}/fetch.tgz" \
     E2E_TEMPLATES="${TEMPLATEDIR}" \
+    RACK_KBD_EVIDEV="${WORK}/fake-by-id/usb-E2E_Keyboard-event-kbd" \
+    RACK_MOUSE_EVIDEV="${WORK}/fake-by-id/usb-E2E_Mouse-event-mouse" \
     bash "${WORK}/first-boot.sh" >"${WORK}/run.out" 2>&1; then
         echo "0" > "${WORK}/exit"
     else
@@ -178,6 +188,8 @@ EOF
     E2E_MOCKBIN="${MOCKBIN}" \
     E2E_TARBALL="${WORK}/fetch.tgz" \
     E2E_TEMPLATES="${TEMPLATEDIR}" \
+    RACK_KBD_EVIDEV="${WORK}/fake-by-id/usb-E2E_Keyboard-event-kbd" \
+    RACK_MOUSE_EVIDEV="${WORK}/fake-by-id/usb-E2E_Mouse-event-mouse" \
     bash "${ROOT}/root/provision/host/provision-host.sh" >>"${WORK}/run.out" 2>&1; then
         echo "0" > "${WORK}/exit2"
     else
@@ -432,6 +444,16 @@ require_run_ok() {
         "qm set 100 --args -kernel $E2E_ROOT/var/lib/vz/template/iso/ubuntu-26.04.1-desktop-amd64-vmlinuz"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 100 --delete ide2"
     assert_file_contains "$E2E_STATE/qm-journal" "qm set 100 --delete args"
+    # Rack input routing (R-02.2.7): evdev objects on the fixture paths with
+    # guest-owned repeat (repeat=off, R-02.2.6) and the documented toggle.
+    assert_file_contains "$E2E_STATE/qm-journal" \
+        "input-linux,id=rkbd,evdev=$RACK_KBD_EVIDEV"
+    assert_file_contains "$E2E_STATE/qm-journal" \
+        "input-linux,id=rmouse,evdev=$RACK_MOUSE_EVIDEV"
+    assert_file_contains "$E2E_STATE/qm-journal" "repeat=off"
+    assert_file_contains "$E2E_STATE/qm-journal" "grab-toggle=ctrl-ctrl"
+    assert_file_contains "$E2E_STATE/qm-journal" "virtio-keyboard-pci"
+    assert_file_contains "$E2E_STATE/qm-journal" "virtio-tablet-pci"
     run grep -c "qm agent 100 ping" "$E2E_STATE/qm-journal"
     [ "$output" = "1" ]
 }
