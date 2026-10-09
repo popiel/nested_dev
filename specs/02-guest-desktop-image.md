@@ -29,6 +29,7 @@ separating browsing from development.
 | Window manager | i3-gaps with dmenu, i3status, i3blocks, picom |
 | Display manager | lightdm |
 | Remote console | x11vnc VNC mirror of the physical console (same pixels, verified live) |
+| Physical input | Rack keyboard/mouse shared by evdev passthrough with ctrl-ctrl grab-toggle (R-02.2.7) |
 | Terminal | urxvt |
 | Browsers | Firefox from the Ubuntu archive; Chrome as a snap, installed on first boot |
 | Audio | PulseAudio with pavucontrol |
@@ -108,7 +109,22 @@ separating browsing from development.
   contributes no client-side repeat, which is what makes server ownership
   safe — a repeating viewer would double every character. BackSpace travels
   the identical path (verified live via repeat mask plus timestamped hold:
-  never special, despite appearances).
+  never special, despite appearances). The evdev keyboard object carries
+  `repeat=off` for the same single-owner reason: host-kernel repeats would
+  arrive as extra presses on top of the guest X server's autorepeat.
+* **R-02.2.7** The physical rack keyboard and mouse are shared with the
+  desktop by evdev passthrough (`input-linux` objects on stable by-id paths,
+  plus virtio-keyboard and virtio-mouse — relative, not a tablet: REL events
+  route to relative devices only, and on a tablet motion drops while clicks
+  survive), toggled by the operator with
+  ctrl-ctrl (both Ctrls together, not a double-tap). The by-id paths are detected at provision, never hardcoded.
+  While toggled to the guest the host console is keyboardless (accepted:
+  host display is already gone and SSH is unaffected); toggling back keeps
+  host repair usable, including on the dGPU monitor. No GPU changes are part
+  of this: the iGPU stays with the desktop, the dGPUs with 101. Static USB
+  attachment and X-state-conditional routing are rejected by decision — the
+  former strands host repair, the latter flaps on every service restart and
+  inverts for the VNC-gap case it would serve.
 
 ### R-02.3 GPU passthrough is verified, and a software-rendered desktop is
 reported

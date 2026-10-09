@@ -83,6 +83,17 @@ load '../lib/helpers'
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'DEV_CORES=4'
 }
 
+@test "evdev toggle propagates because only the keyboard grabs all" {
+    # QEMU's group propagation skips every object carrying grab_all, so a
+    # mouse object with grab_all never follows the toggle (observed live:
+    # keyboard flipped, mouse stayed grabbed). grab_all belongs on the
+    # toggle-owning keyboard alone; the mouse follows with defaults.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" \
+        'id=rkbd,evdev=${RACK_KBD_EVIDEV},grab_all=on'
+    assert_file_not_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" \
+        'id=rmouse,evdev=${RACK_MOUSE_EVIDEV},grab_all'
+}
+
 @test "user-data templates contain required placeholders" {
     # Every token frag/30 substitutes. A guest seed that reaches the installer
     # with a surviving token boots without its login hash, its operator key or

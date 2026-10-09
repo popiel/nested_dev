@@ -594,7 +594,16 @@ main() {
         RACK_KBD_EVIDEV="${RACK_KBD_EVIDEV:-$(detect_rack_keyboard || true)}"
         RACK_MOUSE_EVIDEV="${RACK_MOUSE_EVIDEV:-$(detect_rack_mouse || true)}"
         if [ -n "$RACK_KBD_EVIDEV" ] && [ -n "$RACK_MOUSE_EVIDEV" ]; then
-            qm set 100 --args "-object input-linux,id=rkbd,evdev=${RACK_KBD_EVIDEV},grab_all=on,repeat=off,grab-toggle=ctrl-ctrl -object input-linux,id=rmouse,evdev=${RACK_MOUSE_EVIDEV},grab_all=on -device virtio-keyboard-pci,id=rkbd-dev -device virtio-tablet-pci,id=rmouse-dev"
+            # Two hard-won pairings, both observed live. Devices: virtio-mouse
+            # (relative), NOT virtio-tablet — a physical mouse emits REL
+            # events and the input core routes those to relative devices
+            # only, so on a tablet motion drops while clicks survive.
+            # grab_all ONLY on the keyboard: QEMU's group propagation skips
+            # every object carrying grab_all (endless-loop guard), so a mouse
+            # object with grab_all never follows the toggle and stays grabbed
+            # while the keyboard flips. The toggle chord is only visible on
+            # the keyboard's evdev anyway.
+            qm set 100 --args "-object input-linux,id=rkbd,evdev=${RACK_KBD_EVIDEV},grab_all=on,repeat=off,grab-toggle=ctrl-ctrl -object input-linux,id=rmouse,evdev=${RACK_MOUSE_EVIDEV} -device virtio-keyboard-pci,id=rkbd-dev -device virtio-mouse-pci,id=rmouse-dev"
             log "VM 100 rack input attached (ctrl-ctrl toggles host/guest): kbd=${RACK_KBD_EVIDEV} mouse=${RACK_MOUSE_EVIDEV}"
         else
             log "WARNING: no rack keyboard/mouse detected — VM 100 keeps VNC-only input"

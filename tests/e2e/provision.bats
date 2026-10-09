@@ -453,7 +453,11 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/qm-journal" "repeat=off"
     assert_file_contains "$E2E_STATE/qm-journal" "grab-toggle=ctrl-ctrl"
     assert_file_contains "$E2E_STATE/qm-journal" "virtio-keyboard-pci"
-    assert_file_contains "$E2E_STATE/qm-journal" "virtio-tablet-pci"
+    assert_file_contains "$E2E_STATE/qm-journal" "virtio-mouse-pci"
+    # The mouse object must not carry grab_all: QEMU skips grab_all objects
+    # during toggle propagation, stranding the mouse grabbed (observed live).
+    run grep -c "id=rmouse,evdev=$RACK_MOUSE_EVIDEV,grab_all" "$E2E_STATE/qm-journal"
+    [ "$output" = "0" ]
     run grep -c "qm agent 100 ping" "$E2E_STATE/qm-journal"
     [ "$output" = "1" ]
 }
