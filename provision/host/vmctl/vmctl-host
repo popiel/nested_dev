@@ -41,20 +41,26 @@ case "$VERB" in
     list)
         printf "%-5s %-18s %-24s %-17s %s\n" "VMID" "NAME" "HOSTNAME" "IP" "STATUS"
         printf "%-5s %-18s %-24s %-17s %s\n" "----" "----" "--------" "--" "------"
-        # Static entries (always present)
-        printf "%-5s %-18s %-24s %-17s %s\n" 100 desktop lychee "192.168.100.100" "running"
-        printf "%-5s %-18s %-24s %-17s %s\n" 101 llm lychee-llm "192.168.100.101" "running"
+        # One inventory read for everything: `qm list` already carries VMID,
+        # NAME and STATUS per guest, so per-VM `qm status`/`qm config` probing
+        # is pure overhead. Worse, the static entries once hardcoded "running"
+        # and reported a stopped 101 as running (observed live via devctl
+        # list). 102 stays literal: a template's status is structural, and qm
+        # refuses to start it.
+        QMLIST=$(qm list 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {print $1, $2, $3}')
+        for vmid in 100 101; do
+            case "$vmid" in
+                100) NAME=desktop; HOST=lychee; IP=192.168.100.100 ;;
+                101) NAME=llm; HOST=lychee-llm; IP=192.168.100.101 ;;
+            esac
+            STATUS=$(printf '%s\n' "$QMLIST" | awk -v id="$vmid" '$1 == id {print $3}')
+            printf "%-5s %-18s %-24s %-17s %s\n" "$vmid" "$NAME" "$HOST" "$IP" "${STATUS:-unknown}"
+        done
         printf "%-5s %-18s %-24s %-17s %s\n" 102 dev-template lychee-dev-template "192.168.100.102" "template"
-        # Dynamic entries: read the cluster's VM inventory once. Probing the
-        # whole 103-249 range with `qm status` costs two subprocesses per ID
-        # (~294 calls) on every `list`, and `devctl` calls it again for each
-        # name lookup.
-        for vid in $(qm list 2>/dev/null | awk -v lo="$DEV_MIN" -v hi="$DEV_MAX" \
-                          '$1 ~ /^[0-9]+$/ && $1 >= lo && $1 <= hi {print $1}'); do
-            STATUS=$(qm status "$vid" 2>/dev/null | awk '{print $2}')
-            NAME=$(qm config "$vid" 2>/dev/null | grep '^name:' | awk '{print $2}')
-            HOST="${NAME:-dev-${vid}}"
-            printf "%-5s %-18s %-24s %-17s %s\n" "$vid" "$NAME" "$HOST" "192.168.100.${vid}" "$STATUS"
+        printf '%s\n' "$QMLIST" | awk -v lo="$DEV_MIN" -v hi="$DEV_MAX" \
+            '$1 >= lo && $1 <= hi {print $1, $2, $3}' | while read -r vid name status; do
+            HOST="${name:-dev-${vid}}"
+            printf "%-5s %-18s %-24s %-17s %s\n" "$vid" "$name" "$HOST" "192.168.100.${vid}" "$status"
         done
         ;;
 

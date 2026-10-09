@@ -213,6 +213,57 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     fi
 }
 
+@test "vmctl list reads every status from one qm list" {
+    # The static entries once hardcoded "running" (a stopped 101 reported
+    # running, observed live); the first fix probed each VM, which is still
+    # one call per VM too many — qm list already carries VMID, NAME and
+    # STATUS. Runs the real list verb with qm recording every invocation:
+    # the only call may be `list`, and a dev-range row must resolve from the
+    # same read.
+    local bin="$BATS_TMPDIR/vmctl-qm-stub"
+    mkdir -p "$bin"
+    export QM_CALLS="$bin/calls"
+    : > "$QM_CALLS"
+    cat > "$bin/qm" <<'EOF'
+#!/usr/bin/env bash
+echo "$@" >> "${QM_CALLS:?}"
+if [ "$1" = "list" ]; then
+    printf '%s\n' \
+        "VMID NAME STATUS MEM(MB) BOOTDISK(GB) PID" \
+        "100 desktop running 8192 40.00 123" \
+        "101 llm stopped 16384 80.00 0" \
+        "104 dev-proj running 4096 10.00 456"
+fi
+exit 0
+EOF
+    chmod +x "$bin/qm"
+    # Direct execution (not source): no dependence on positional-parameter
+    # inheritance or run-builtin semantics. The script reads the verb from
+    # $@ when SSH_ORIGINAL_COMMAND is unset, and the stub qm rides an
+    # explicitly exported PATH. Each bats test runs isolated, so the exports
+    # cannot leak into neighboring tests.
+    unset SSH_ORIGINAL_COMMAND
+    export PATH="$bin:$PATH"
+    run bash "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" list
+    [ "$status" -eq 0 ]
+    local line100 line101 line104
+    line100="$(printf '%s\n' "$output" | awk '$1 == "100"')"
+    line101="$(printf '%s\n' "$output" | awk '$1 == "101"')"
+    line104="$(printf '%s\n' "$output" | awk '$1 == "104"')"
+    [ -n "$line100" ]
+    [ -n "$line101" ]
+    [ -n "$line104" ]
+    [[ "$line100" == *"running" ]]
+    [[ "$line101" == *"stopped" ]]
+    [[ "$line101" != *"running" ]]
+    [[ "$line104" == *"dev-proj"* ]]
+    [[ "$line104" == *"running" ]]
+    # No per-VM probing of any kind may have happened.
+    ! grep -q "^status" "$QM_CALLS"
+    ! grep -q "^config" "$QM_CALLS"
+    unset QM_CALLS
+}
+
 @test "the dev range boundaries are enforced on every ID-taking verb" {
     # The range starts above the static fleet, so an out-of-range ID cannot
     # reach the desktop, the LLM VM or the template.
