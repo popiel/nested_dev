@@ -3,9 +3,12 @@ on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned, not floating: ubuntu-latest migrates under us (26 on
+    # 2026-10-19), and a gate that changes environments silently is not a
+    # gate. Re-pin deliberately when moving.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
