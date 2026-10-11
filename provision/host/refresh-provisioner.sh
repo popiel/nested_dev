@@ -15,7 +15,8 @@
 # host running the previous working tree, still marked complete.
 #
 # Usage (on the host, as root):
-#   /bin/bash /root/refresh-provisioner.sh
+#   /bin/bash /root/refresh-provisioner.sh [--ref <branch|tag|sha>]
+# Defaults to the recorded build SHA in /etc/nested-dev/ref-sha.
 #
 # Bootstrap (first use only — this script is not in the host's tree yet, and it
 # lives outside the swapped tree so later fetches never move it):
@@ -64,12 +65,23 @@ if [ -z "${PVE_ROOT:-}" ]; then
 fi
 [ -d "$PROVISION_DIR" ] || die "no live tree at $PROVISION_DIR — nothing to refresh"
 
-# Repo and branch: explicit env wins, then the live tree's own record of where
+# Repo and ref: explicit env/CLI wins, then the recorded build SHA (a rebuild
+# defaults to what built the host), then the live tree's own record of where
 # it came from, then the project defaults. Grepped, not sourced:
 # personalization.sh is shell code, and executing it for two variables would
 # run whatever else it does.
 REPO="${REFRESH_REPO:-}"
 REF="${REFRESH_REF:-}"
+if [ $# -gt 0 ]; then
+    case "${1:-}" in
+        --ref) REF="${2:-}"; shift 2 || true ;;
+        -h|--help) echo "Usage: refresh-provisioner.sh [--ref <branch|tag|sha>]"; exit 0 ;;
+    esac
+fi
+if [ -z "$REF" ] && [ -s "${ROOT}/etc/nested-dev/ref-sha" ]; then
+    REF="$(tr -d '\n' < "${ROOT}/etc/nested-dev/ref-sha")"
+    log "using recorded build SHA ${REF} (override with --ref or REFRESH_REF)"
+fi
 if [ -z "$REPO" ] && [ -f "${PROVISION_DIR}/personalization.sh" ]; then
     REPO="$(grep -E '^PERSONALIZATION_REPO=' "${PROVISION_DIR}/personalization.sh" \
         | cut -d= -f2- | tr -d '"' || true)"
@@ -91,6 +103,9 @@ if [ -n "${REFRESH_TARBALL_SRC:-}" ]; then
         || die "REFRESH_TARBALL_SRC=${REFRESH_TARBALL_SRC} is not a file"
     cp "$REFRESH_TARBALL_SRC" "$TARBALL"
     log "using staged tarball ${REFRESH_TARBALL_SRC}"
+elif [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+    wget -qO "$TARBALL" "https://codeload.github.com/${REPO}/tar.gz/${REF}" \
+        || die "failed to fetch ${REPO}@${REF} — live tree untouched, marker still in place"
 elif ! wget -qO "$TARBALL" "https://codeload.github.com/${REPO}/tar.gz/refs/heads/${REF}"; then
     die "failed to fetch ${REPO}@${REF} — live tree untouched, marker still in place"
 fi

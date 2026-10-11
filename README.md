@@ -20,7 +20,7 @@ to contain any corruption that might occur.
 The desktop VM controls dev VM lifecycle through the host via `devctl`:
 
 ```bash
-devctl add <project>    # create new dev VM from template (stopped)
+devctl create <project> # create new dev VM from template (stopped)
 devctl start <name>     # start a dev VM
 devctl stop <name>      # graceful shutdown
 devctl ssh <name>       # SSH to a running dev VM

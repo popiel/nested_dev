@@ -1,6 +1,6 @@
 #cloud-config
-# Canned dev user-data for the end-to-end test; same placeholder contract as
-# the desktop template.
+# Canned dev user-data for the end-to-end test; mirrors the live template:
+# non-desktop guests trust the desktop guest-identity key only.
 hostname: e2e-dev
 manage_etc_hosts: true
 users:
@@ -12,7 +12,6 @@ users:
     lock_passwd: false
     passwd: CHANGE_ME_HASHED
     ssh_authorized_keys:
-      - __ADMIN_PUBKEY__
       - __GUEST_ID_PUBKEY__
 write_files:
   - path: /home/__PERSONALIZATION_USERNAME__/.ssh/vmctl_ed25519

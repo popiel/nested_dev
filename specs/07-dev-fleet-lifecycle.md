@@ -28,27 +28,26 @@ host firewall (Spec 01), the desktop's own installation (Spec 02).
 | Hostname | Matches the registered name, set on first start once the guest agent answers |
 | DNS | Registered on the host for both the short name and the fleet domain |
 | Control credential | A dedicated account whose only capability is the control program |
-| Admin credential | A separate credential that reaches host `root`, pinned to the desktop's address |
-| Guest shell access | The guest-identity key, not either control credential |
+| Host-root credential | The desktop guest-identity key, pinned to the desktop's address |
+| Guest shell access | The desktop guest-identity key, not the control credential |
 | Audit | Every accepted and every rejected control operation is logged on the host |
 
 ### 2.1 The credential matrix
 
-This is the security core of the fleet. Four credentials, four different
+This is the security core of the fleet. Three credentials, three different
 blast radii:
 
 | Credential | Lives on | Can do | Cannot do |
 |---|---|---|---|
-| Operator key | Operator's machine, trusted by the host account | Log in as the operator account on the host and every guest | Nothing privileged on its own |
+| Filbert operator key | Operator's machine (Filbert), trusted by the host account + host root + desktop account | Log in to host and desktop directly | Reach LLM/dev guests directly (proxied via desktop; host uses `qm guest exec`) |
+| Desktop (guest-identity) key | Desktop only (private half seeded there) | Open a shell in any guest as the account; host `root` from the desktop's address only | Operate the fleet through the control program |
 | Control key | Desktop only | List, inspect, start, stop, create and read logs of dev VMs — through the control program and nothing else | Open a shell on the host; touch any VM outside the dev range; do anything the control program does not implement |
-| Admin key | Desktop only | Host `root`; guest shells on any VM | Nothing beyond that |
-| Guest-identity key | Desktop, and the public half in every guest | Open a shell in a guest as the account; host `root` from the desktop's address only | Operate the fleet through the control program |
 
 The separation is the point. The control key is what fleet automation would
 hold; giving it a shell would turn a bug in one project's dev VM into root on
-the hypervisor. The admin key is the operator's escape hatch and is
-deliberately the most powerful credential in the fleet, which is why it is
-pinned to one address.
+the hypervisor. The desktop key is the operator's escape hatch and is
+deliberately the most powerful credential in the fleet, which is why its host-
+root use is pinned to one address.
 
 ## 3. Requirements
 
@@ -56,22 +55,20 @@ pinned to one address.
 
 * **R-07.1.1** A dedicated, non-human account on the host exists solely to
   carry the control key. It has a locked password and is reachable by key only.
-* **R-07.1.2** Its key entry carries a forced command naming the control
-  program, plus options disabling agent, port and X11 forwarding. Anything the
-  client asks for is replaced by the forced command; the client's own command
-  string is passed as arguments to it.
-* **R-07.1.3** The account's login shell is a real shell, not a "no login"
-  shell. A forced command is executed *by* the login shell; a shell that refuses
-  to run refuses the forced command too, so the entire control channel fails
-  closed with an error that looks like a permissions problem.
-* **R-07.1.4** The account has no privilege beyond invoking the control
-  program, and the control program is owned by `root` and not writable by the
-  account. The restriction must not be removable by the credential it
-  restricts. Invocation is sudo-mediated (`command="sudo …/vmctl-host"`,
-  sudoers granting exactly the wrapper), and the verb channel
-  (`SSH_ORIGINAL_COMMAND`) is the only environment preserved across the sudo
-  boundary — without both, the channel runs unprivileged and every verb
-  fails (observed live: empty listing, bare nonzero exit, empty stderr).
+* **R-07.1.2** The control credential can invoke the control program and
+  nothing else: any client-requested command is replaced by the forced
+  command with the client's string passed as arguments, and all forwarding
+  is disabled.
+* **R-07.1.3** The control account has a working login shell, because the
+  forced command executes through it: a shell that refuses to run fails the
+  entire control channel closed with an error that looks like a permissions
+  problem. Current mechanism: real shell, never a "no login" shell.
+* **R-07.1.4** The control credential cannot escalate or persist its own
+  privilege: the control program is host-owned and not writable by the
+  account, and unprivileged invocation fails every verb instead of silently
+  degrading. Current mechanism: sudo-mediated invocation with exactly the
+  wrapper granted and only the verb channel (`SSH_ORIGINAL_COMMAND`)
+  preserved.
 * **R-07.1.5** The account is created idempotently, including correcting a
   shell left wrong by an earlier run.
 
@@ -88,36 +85,36 @@ pinned to one address.
   currently stopped and that its name matches the dev naming pattern. Both
   checks exist because a name change is how a VM would be moved across the
   fleet's trust boundary.
-* **R-07.2.4** The program never passes unvalidated input to the
-  hypervisor's tooling. Project names and IDs are pattern-checked first.
-* **R-07.2.5** Reading a guest log goes through the guest agent and degrades
-  to a clear message when the VM is stopped or the agent is not up yet, rather
-  than an error the operator has to interpret.
-* **R-07.2.6** The program is installed at a fixed path and its installation is
-  **fatal** if it cannot be found in the provision tree. A missing control
-  program is not a warning: every control verb then fails against a forced
-  command that does not exist, and the failure surfaces on the desktop as an
-  unexplained channel failure.
+* **R-07.2.4** Operator-supplied text never reaches hypervisor tooling
+  unvalidated. Current mechanism: project names and IDs pattern-checked
+  first.
+* **R-07.2.5** Reading a guest log degrades to a clear runnable-state message
+  when the VM is stopped or its agent is not up yet. Current mechanism: read
+  through the guest agent.
+* **R-07.2.6** A missing control program fails provisioning loudly: every
+  control verb would otherwise fail against a forced command that does not
+  exist, surfacing on the desktop as an unexplained channel failure.
+  Current mechanism: fixed install path; missing source is fatal.
 
 ### R-07.3 `devctl` is the desktop's interface
 
-* **R-07.3.1** The desktop presents the fleet operations as named subcommands,
-  grouped in its own help text by the credential they use. The grouping is the
-  security documentation: the operator can see which operations are restricted
-  and which are full-privilege without reading the source.
+* **R-07.3.1** The desktop documents, in its own help, which operations are
+  restricted and which are full-privilege, so the operator sees the privilege
+  split without reading source. Current mechanism: subcommands grouped by
+  credential in `devctl` help.
 * **R-07.3.2** A VM may be named by its name or by its ID, for every operation
   that takes one. Requiring the operator to remember IDs is how IDs get copied
   wrong.
-* **R-07.3.3** Name resolution goes through the control channel's own listing,
-  so a name the host does not know is reported as unknown rather than passed
-  through.
+* **R-07.3.3** Unknown names are reported as unknown against the host's own
+  listing, never passed through. Current mechanism: name resolution via the
+  control channel's listing.
 * **R-07.3.4** Starting a dev VM tells the operator that the first boot takes
   several minutes and how to watch it. A start that returns instantly looks
   like it failed.
-* **R-07.3.5** Shelling into a guest uses the guest-identity key and reaches
-  the guest by its own address, never by a control credential. Guests refuse
-  password authentication, so this key is the only way in.
-* **R-07.3.6** Running a command on the host uses the admin credential, and
+* **R-07.3.5** Guest shells use the guest credential and address the guest
+  directly, never a control credential. Current mechanism: guest-identity key
+  to the guest's own address.
+* **R-07.3.6** Running a command on the host uses the desktop (host-root) credential, and
   requires the guest-identity key to be present. Both operations fail with a
   named error naming the missing key rather than an opaque SSH failure.
 * **R-07.3.7** The wrapper takes the guest account name from its environment
@@ -136,22 +133,23 @@ pinned to one address.
 * **R-07.4.3** The dev VM is a full clone of the template. It is created
   **stopped** and never started by the create operation, so a VM that is
   created is not yet running, untrusted code.
-* **R-07.4.4** Its name is `dev-<project>`; its address is the last octet of
-  its ID; its MAC is derived from that ID; its registered hostname is the fleet
-  name derived from its project.
-* **R-07.4.5** The dev VM's network interface is marked firewall-managed, so the
-  host's forwarding policy applies to it (R-01.11.9).
-* **R-07.4.6** Registration happens as part of creation, atomically with it:
-  the address lease, both name resolutions, and the inventory row are all
-  written before the operation reports success. A dev VM that resolves by
-  neither name is a dev VM the operator cannot reach.
+* **R-07.4.4** A created VM's name, address, link address and registered
+  hostname all derive deterministically from its project and ID, so no two
+  siblings collide. Current mechanism: `dev-<project>`, last-octet-equals-ID
+  address, ID-derived MAC, fleet hostname.
+* **R-07.4.5** The host's forwarding policy applies to every dev VM interface.
+  Current mechanism: interface marked firewall-managed (R-01.11.9).
+* **R-07.4.6** A created VM is immediately reachable by both its names: the
+  address lease, both resolutions and the inventory row are all written before
+  success is reported. Current mechanism: registration atomic with creation.
 * **R-07.4.7** The host's name service is reloaded after registration, so the
   new name resolves without waiting for a restart.
-* **R-07.4.8** The inventory row records the ID, name, hostname, address, MAC,
-  status and project, so the fleet can be reconstructed from one file.
-* **R-07.4.9** A clone's hostname is set to its registered name once the guest
-  agent first answers, without blocking the start operation. A clone that
-  reports the template's hostname makes every log line in the fleet ambiguous.
+* **R-07.4.8** The fleet is reconstructible from one record per VM carrying
+  ID, name, hostname, address, MAC, status and project. Current mechanism:
+  inventory row.
+* **R-07.4.9** A started clone reports its registered name without delaying
+  the start for agent readiness. Current mechanism: hostname set once the
+  guest agent first answers, in the background.
 * **R-07.4.10** A guest agent that never answers is a logged warning, not a
   failed start. The VM is running and usable; only its self-reported name is
   wrong, and the log says exactly which VM and what to run.
@@ -167,27 +165,26 @@ pinned to one address.
 * **R-07.5.4** A dev VM's MAC is unique among the fleet by construction, so a
   clone's name and address cannot be confused with a sibling's.
 
-### R-07.6 The admin credential is address-pinned
+### R-07.6 The host-root (desktop) credential is address-pinned
 
-* **R-07.6.1** The host trusts the guest-identity public key for host `root`
-  only from the desktop's fixed address. A copy of that key presented from any
-  other address is refused.
-* **R-07.6.2** The forwarding options on that entry match the control
-  credential's. An entry that forwards ports would let the same key be used to
-  pivot out of the private subnet.
+* **R-07.6.1** The host `root` credential is usable only from the desktop:
+  the same key presented from any other address is refused. Current
+  mechanism: guest-identity trust entry pinned with `from="<desktop-IP>"`.
+* **R-07.6.2** The host-`root` credential cannot be repurposed to pivot out
+  of the private subnet. Current mechanism: forwarding options on the trust
+  entry match the control credential's.
 * **R-07.6.3** The desktop's address is asserted against the host's name-service
   configuration by a test, because the pin and the lease must agree. If the
   desktop's address ever changes and only one of the two is updated, the key is
   still present and access still silently fails.
-* **R-07.6.4** Trusting the key is idempotent: a re-run does not add a second
-  entry.
+* **R-07.6.4** Re-trusting is idempotent: a re-run never stacks a second
+  entry. Current mechanism: content-checked append.
 
 ### R-07.7 Staged key material
 
-* **R-07.7.1** The control key and the guest-identity key are generated on the
-  host at install time, in a root-only location, and are retained across
-  re-runs so that re-provisioning does not invalidate a credential a guest
-  already trusts.
+* **R-07.7.1** Re-provisioning never invalidates credentials guests already
+  trust. Current mechanism: control and guest-identity keypairs generated
+  once on the host in a root-only location and retained.
 * **R-07.7.2** Their private halves are staged for the desktop seed and
   destroyed once the seeds are built (Spec 06 §R-06.6).
 * **R-07.7.3** The guest-identity key is a **different key** from the control
@@ -202,11 +199,11 @@ pinned to one address.
   operation, the ID and, where relevant, the name.
 * **R-07.8.2** Every refused operation is logged as refused, with the reason.
   A refusal log is what makes an attempt to reach a non-dev VM visible.
-* **R-07.8.3** The control log is separate from the provisioning log, because
-  the control channel is used for the whole life of the fleet while
-  provisioning runs once.
-* **R-07.8.4** Logging records which credential class acted: control operations
-  and administrative operations are distinguishable in the log.
+* **R-07.8.3** Control history and provisioning history are separable: the
+  control channel lives for the life of the fleet while provisioning runs
+  once. Current mechanism: separate control log.
+* **R-07.8.4** Audit distinguishes which credential class acted.
+  Current mechanism: control vs administrative operations logged distinctly.
 
 ### R-07.9 Sizing and limits
 
@@ -246,9 +243,9 @@ pinned to one address.
 | A-07.14 | The inventory's static rows survive a re-provision. |
 | A-07.15 | A dev VM's MAC differs from every other fleet VM's. |
 | A-07.16 | The guest-identity key opens a shell in a guest; the control key does not. |
-| A-07.17 | Host `root` over the admin credential works from the desktop and is **refused** from another guest, using the same key. |
+| A-07.17 | Host `root` over the desktop credential works from the desktop and is **refused** from another guest, using the same key. |
 | A-07.18 | Re-running provisioning does not regenerate either keypair, and does not duplicate the host's trust entry. |
-| A-07.19 | The test that asserts the admin pin matches the name-service lease fails when either one is changed alone. |
+| A-07.19 | The test that asserts the host-root pin matches the name-service lease fails when either one is changed alone. |
 | A-07.20 | The control log shows accepted and refused operations, and distinguishes control operations from administrative ones. |
 | A-07.21 | The dev range is exhausted: the create operation reports that no ID is free. |
 | A-07.22 | `devctl` refuses to run with no account name in its environment, and an unknown verb prints the grouped help. |
@@ -270,9 +267,8 @@ pinned to one address.
 | Risk | Mitigation |
 |---|---|
 | A leaked control key becomes a host shell | The credential is forced-command-only with a real shell, so a shell is not reachable (R-07.1.2, R-07.1.3). A "no login" shell is not used, because it would break the control channel in a way that looks like a permissions fault |
-| A project compromises its dev VM and pivots to the host | No dev VM holds a control or admin credential, and dev VMs cannot address anything outside their range (I-07.1, I-07.3) |
-| The control key is repurposed as a guest-login key | It is a different key from the guest-identity key (R-07.7.3) |
-| A leaked admin key is usable from any guest | The host trust entry is pinned to the desktop's address (R-07.6.1) |
+| A project compromises its dev VM and pivots to the host | No dev VM holds a control or host-root credential, and dev VMs cannot address anything outside their range (I-07.1, I-07.3) |
+| A leaked desktop key is usable from any guest | The host trust entry is pinned to the desktop's address (R-07.6.1) |
 | The desktop's address changes and the pin and the lease disagree | A test asserts the two agree, and a re-run does not duplicate the entry (R-07.6.3) |
 | A missing control program looks like a control-channel failure | Its installation is fatal, naming the consequence (R-07.2.6) |
 | A dev VM reports the template's hostname | The name is set once the agent answers, and an unanswered agent is a named warning (R-07.4.9, R-07.4.10) |

@@ -17,6 +17,7 @@ teardown() {
     cleanup_mocks
 }
 
+# Covers: R-05.8.2, R-09.3.1, A-05.15
 @test "resolve_ref_to_sha returns SHA for branch" {
     create_mock "git" \
         '# Only return SHA for refs/heads/ queries
@@ -27,6 +28,7 @@ fi'
     [ "$output" = "abc123def456789012345678901234567890abcd" ]
 }
 
+# Covers: R-05.8.2, R-09.3.1, A-05.15
 @test "resolve_ref_to_sha returns SHA for tag" {
     create_mock "git" \
         '# Only return SHA for refs/tags/ queries
@@ -37,6 +39,7 @@ fi'
     [ "$output" = "deadbeef1234567890abcdef1234567890abcdef" ]
 }
 
+# Covers: R-05.8.6, A-05.15
 @test "resolve_ref_to_sha prefers a branch over a tag of the same name" {
     create_mock "git" \
         'if [[ "$*" == *"refs/heads/"* ]]; then
@@ -48,18 +51,21 @@ fi'
     [ "$output" = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ]
 }
 
+# Covers: R-05.8.5, A-05.15
 @test "resolve_ref_to_sha passes through 40-hex SHA" {
     local sha="deadbeef1234567890abcdef1234567890abcdef"
     run resolve_ref_to_sha "popiel/nested_dev" "$sha"
     [ "$output" = "$sha" ]
 }
 
+# Covers: R-05.8.4, A-05.15
 @test "resolve_ref_to_sha returns empty on unresolvable" {
     create_mock "git" 'echo ""'
     run resolve_ref_to_sha "popiel/nested_dev" "nonexistent"
     [ -z "$output" ]
 }
 
+# Covers: R-05.8.4, R-09.3.5, A-05.15
 @test "resolve_ref_to_sha succeeds when git is not installed" {
     # The contract that frag/30's private copy violated: under `set -euo
     # pipefail` a missing git used to fail the command substitution and abort
@@ -92,6 +98,7 @@ fi'
     )
 }
 
+# Covers: R-05.8.4, R-09.3.5, A-05.15
 @test "resolve_ref_to_sha survives a failing git without tripping set -e" {
     # Same contract, second cause: a network error or a GitHub 5xx makes
     # `git ls-remote` exit non-zero. With pipefail and no `|| true` this

@@ -41,6 +41,7 @@ teardown() {
     cleanup_mocks
 }
 
+# Covers: R-01.11.13
 @test "happy path copies verified files and prints base args" {
     core_from_dir "$ISO" "$DEST" fake
     [ -f "${DEST}/fake-vmlinuz" ]
@@ -51,6 +52,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.11.13
 @test "cache_current gates the skip path" {
     run cache_current "${ISO}/nonexistent.iso" "$DEST" fake
     [ "$status" -ne 0 ]
@@ -60,6 +62,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.11.13
 @test "missing grub config dies naming it" {
     rm -rf "${ISO}/boot"
     run core_from_dir "$ISO" "$DEST" fake
@@ -67,6 +70,7 @@ teardown() {
     [[ "$output" == *"grub.cfg"* ]]
 }
 
+# Covers: R-01.11.13
 @test "tampered kernel fails the manifest check" {
     core_from_dir "$ISO" "$DEST" fake
     printf 'TAMPERED' > "${ISO}/casper/vmlinuz"
@@ -75,6 +79,7 @@ teardown() {
     [[ "$output" == *"mismatch"* ]]
 }
 
+# Covers: R-01.11.13
 @test "manifest without the boot files dies loudly" {
     printf 'd41d8cd98f00b204e9800998ecf8427e  casper/other\n' > "${ISO}/md5sum.txt"
     run core_from_dir "$ISO" "$DEST" fake
@@ -82,6 +87,7 @@ teardown() {
     [[ "$output" == *"manifest covers no"* ]]
 }
 
+# Covers: R-01.11.13
 @test "initrd beside the kernel is found without a grub initrd line" {
     sed -i '/^[[:space:]]*initrd[[:space:]]/d' "${ISO}/boot/grub/grub.cfg"
     run core_from_dir "$ISO" "$DEST" fake

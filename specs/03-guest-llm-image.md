@@ -1,7 +1,7 @@
 # Spec 03 — Guest: LLM serving VM (vm 101)
 
 Status: Draft
-Applies to: vm 101 `llm`, hostname `llm-vm`
+Applies to: vm 101 `llm`, hostname `lychee-llm`
 Pinned versions: Ubuntu Server **26.04 LTS**, Proxmox VE **9.2**
 Implementation: `llm/user-data/user-data`, `llm/llm-firstboot.sh`,
 `provision/host/frag/30-create-guests.sh`
@@ -28,7 +28,7 @@ scope: host VFIO wiring and IOMMU verification (Spec 01), seed assembly
 | CUDA | NVIDIA's own repository for the guest's release, toolkit only — never the distro's `nvidia-cuda-toolkit` |
 | Runtime | Docker CE with the NVIDIA Container Toolkit |
 | Serving baseline | One Ollama container on port 11434 |
-| GPU visibility to the host | `vga none`; the guest has no emulated display, only the passed-through card |
+| GPU visibility to the host | Emulated display kept (`vga std`) plus the passed-through dGPU(s); serial console for install capture |
 | Data volume | Second virtio disk, mounted at `/data/models`; `/opt/models` is a symlink to it |
 | OS disk | 80 GB |
 | Identity | The account from Spec 05; guest `root` locked |
@@ -62,10 +62,9 @@ what failed.
   operation on that account's files.
 * **R-03.1.4** SSH password authentication is disabled, so the two injected
   public keys are the only way in.
-* **R-03.1.5** A serial console is enabled and autologs the account, and the
-  guest is created with a serial console socket rather than a VGA device. The
-  VM has no physical display, so the serial console is its only console, and it
-  is the way an operator gets in when the first-boot script has failed.
+* **R-03.1.5** A serial console is enabled and autologs the account, alongside the
+  emulated display kept per Spec 01 §R-01.11.15. The serial console is the way
+  an operator gets in when the first-boot script has failed.
 
 ### R-03.2 The GPU stack is installed at first boot and verified per layer
 
@@ -75,24 +74,25 @@ what failed.
   container checks below. Without a driver the rest of the stack is
   meaningless, and the operator needs to know now rather than after a 20-minute
   container install.
-* **R-03.2.3** The CUDA toolkit is installed from NVIDIA's own repository for
-  the guest's release, at a pinned minor version, with a documented fallback to
-  an earlier pinned minor when the newest is not yet published for the release.
-  The installed version is recorded in the log. The distro's toolkit package is
-  not used: it pins a different driver branch than the one the guest has.
-* **R-03.2.4** The toolkit's `bin` and `lib64` directories are on the login
-  environment's `PATH` and library path, so `nvcc` is usable from a shell
-  without further setup.
-* **R-03.2.5** Docker CE is installed from Docker's own repository after any
-  conflicting distribution container packages are removed. Its daemon log
-  rotation is bounded, and its storage driver is set explicitly. An unbounded
-  JSON log on a long-lived inference host eventually fills the filesystem that
-  holds the models.
-* **R-03.2.6** The NVIDIA Container Toolkit is installed from NVIDIA's
-  repository, registered as a Docker runtime, and the daemon restarted.
-* **R-03.2.7** GPU access is verified **from inside a container**, not only on
-  the host. Host-level `nvidia-smi` succeeding while containers see no GPU is
-  the failure this check exists to catch.
+* **R-03.2.3** The CUDA toolkit matches the installed driver branch at a
+  pinned minor version, with a documented fallback when the newest is not
+  yet published for the guest release. The installed version is recorded in
+  the log. Current mechanism: NVIDIA's own release repository, toolkit only
+  (never the distro's `nvidia-cuda-toolkit`, which pins a different branch).
+* **R-03.2.4** The toolkit is usable from a fresh login shell without further
+  setup. Current mechanism: toolkit `bin`/`lib64` on `PATH`/library path so
+  `nvcc` resolves.
+* **R-03.2.5** The container runtime is installed cleanly and its disk usage
+  stays bounded on a long-lived inference host. Current mechanism: Docker CE
+  from Docker's repository after removing conflicting distro packages, with
+  bounded daemon log rotation and explicit storage driver.
+* **R-03.2.6** Containers can see the GPUs through the runtime. Current
+  mechanism: NVIDIA Container Toolkit from NVIDIA's repository, registered
+  as a Docker runtime, daemon restarted.
+* **R-03.2.7** GPU access is proven for the workload path, not just the host.
+  Host-level success while containers see no GPU is the failure this check
+  exists to catch. Current mechanism: enumerate GPUs from inside a test
+  container.
 * **R-03.2.8** A failed container-runtime or toolkit check is reported as a
   warning, not a failure. The guest is still a working SSH host and still has
   its model volume; refusing to finish leaves no way to diagnose.
@@ -104,15 +104,14 @@ what failed.
 * **R-03.3.2** The volume is formatted only when it has no existing
   filesystem, and mounted only when it is not already mounted. Re-running first
   boot must not reformat a volume full of models.
-* **R-03.3.3** The mount is persisted with a `nofail` option, so a volume that
-  is detached — or a VM cloned before its volume exists — still boots to a
-  working login.
+* **R-03.3.3** The mount never blocks boot when the volume is absent.
+  Current mechanism: persisted with a `nofail` option.
 * **R-03.3.4** An absent volume is a warning. The guest installs and runs
   without it; models are then unavailable and the operator attaches a volume and
   re-runs.
-* **R-03.3.5** `/opt/models` resolves to the data volume, so both path
-  spellings refer to one set of models. Two paths with two filesystems is a
-  way to fill the OS disk with models by accident.
+* **R-03.3.5** Both model path spellings refer to one set of models, so model
+  writes cannot silently fill the OS disk. Current mechanism: `/opt/models`
+  symlinked to the data volume.
 * **R-03.3.6** The volume is owned by the account, so models written by the
   serving container are readable and removable by the operator without `root`.
 
@@ -135,9 +134,9 @@ what failed.
 
 ### R-03.5 The serving baseline
 
-* **R-03.5.1** One Ollama container runs, is configured to start again after a
-  reboot, and is created with GPU access and its model store on the data
-  volume.
+* **R-03.5.1** One inference container serves models, returns after a reboot
+  without operator action, and keeps its model store on the data volume with
+  GPU access. Current mechanism: Ollama container with restart policy.
 * **R-03.5.2** The API is published on the private subnet, not on all
   interfaces. Publishing on all interfaces would put an unauthenticated
   inference API on the LAN regardless of the host's forwarding rules.
@@ -145,9 +144,9 @@ what failed.
   first boot completes, and first boot reports whether it is answering.
 * **R-03.5.4** An existing Ollama container is started rather than replaced,
   so a re-run does not discard a container the operator has configured.
-* **R-03.5.5** The guest itself holds no baked Ollama service and no systemd
-  unit for one. The container is the only serving path, so there is one thing
-  that serves models.
+* **R-03.5.5** There is exactly one serving path: the container. The guest
+  holds no second baked service for it. Current mechanism: no host-level
+  Ollama service or systemd unit.
 
 ### R-03.6 Guest firewall
 
@@ -158,13 +157,12 @@ what failed.
   (Spec 00 §R-00.2.6).
 * **R-03.6.3** Outgoing traffic is unrestricted by the guest firewall; the
   host's forwarding chain is the authority for this guest's egress.
-* **R-03.6.4** Guest `root` is locked.
+* **R-03.6.4** Guest `root` is locked per Spec 05 §R-05.5.
 
 ### R-03.7 Sizing
 
 * **R-03.7.1** The VM receives 16 GB and 6 cores on a 32 GB host, and 24 GB and
-  8 cores on a 64 GB or larger host. The remaining memory is the host's own
-  2 GB cap plus GPU passthrough working space.
+  8 cores on a 64 GB or larger host. The host always has at least 32 GB RAM.
 * **R-03.7.2** The OS disk is 80 GB and the model volume is 500 GB.
 
 ## 4. Invariants
@@ -195,7 +193,7 @@ what failed.
 | A-03.13 | The container starts again after a guest reboot without operator action. |
 | A-03.14 | The guest firewall denies unsolicited inbound, accepts SSH and the inference port from the private subnet, and refuses the inference port from the LAN. |
 | A-03.15 | On a 32 GB host the VM has 16 GB and 6 cores; on a 64 GB host, 24 GB and 8 cores. |
-| A-03.16 | The guest's only console is its serial console; no emulated display device is present. |
+| A-03.16 | The guest keeps its emulated display plus serial console; no physical display is attached. |
 
 ## 6. Cross-references
 

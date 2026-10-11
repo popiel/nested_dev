@@ -51,6 +51,7 @@ teardown() {
 
 # --- one-line format ---
 
+# Covers: R-01.3.1b
 @test "the suite is read out of a one-line enterprise entry, not hardcoded" {
     # PVE moves to a new Debian release periodically. A hardcoded suite is
     # wrong the day that happens, and cannot be fixed without editing code on
@@ -62,6 +63,7 @@ EOF
     [ "$output" = "trixie" ]
 }
 
+# Covers: R-01.3.1b
 @test "the suite is read through signed-by options" {
     # PVE ships these lines with a keyring option in front, and a positional
     # read would take the option as the suite and then write a no-subscription
@@ -74,6 +76,7 @@ EOF
     [ "$output" = "trixie" ]
 }
 
+# Covers: R-01.3.1b
 @test "a commented-out line supplies no suite" {
     cat > "$APT_DIR/pve.list" <<'EOF'
 # deb http://enterprise.proxmox.com/debian/pve trixie pve-enterprise
@@ -82,6 +85,7 @@ EOF
     [ -z "$output" ]
 }
 
+# Covers: R-01.3.1b
 @test "a non-enterprise line supplies no suite" {
     # The installer puts plain Debian entries in the same directories. Reading
     # a suite out of one would write a no-subscription repository for Debian's
@@ -105,12 +109,14 @@ Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
 EOF
 }
 
+# Covers: R-01.3.1b
 @test "the suite is read out of a DEB822 enterprise stanza" {
     write_pve_sources
     run deb822_enterprise_suites "$APT_DIR/pve-enterprise.sources"
     [ "$output" = "trixie" ]
 }
 
+# Covers: R-01.3.1b
 @test "every enabled enterprise stanza reports its suite" {
     cat > "$APT_DIR/two.sources" <<'EOF'
 Types: deb
@@ -128,6 +134,7 @@ EOF
 trixie" ]
 }
 
+# Covers: R-01.3.1b
 @test "a stanza with Enabled: no is not an enabled entry" {
     cat > "$APT_DIR/off.sources" <<'EOF'
 Types: deb
@@ -140,6 +147,7 @@ EOF
     [ -z "$output" ]
 }
 
+# Covers: R-01.3.1b
 @test "comments and blank lines do not confuse the stanza scan" {
     cat > "$APT_DIR/messy.sources" <<'EOF'
 # PVE enterprise repository
@@ -154,6 +162,7 @@ EOF
     [ "$output" = "trixie" ]
 }
 
+# Covers: R-01.3.1b
 @test "a non-enterprise stanza supplies no suite" {
     cat > "$APT_DIR/debian.sources" <<'EOF'
 Types: deb
@@ -167,6 +176,7 @@ EOF
 
 # --- file discovery ---
 
+# Covers: R-01.3.1b
 @test "enterprise_files finds enabled entries in both formats" {
     cat > "$APT_DIR/a.list" <<'EOF'
 deb http://enterprise.proxmox.com/debian/pve trixie pve-enterprise
@@ -177,6 +187,7 @@ EOF
     [[ "$output" == *"$APT_DIR/pve-enterprise.sources"* ]]
 }
 
+# Covers: R-01.3.1b
 @test "enterprise_files ignores inert and unrelated files" {
     cat > "$APT_DIR/off.list" <<'EOF'
 # deb http://enterprise.proxmox.com/debian/pve trixie pve-enterprise
@@ -193,6 +204,7 @@ EOF
 
 # --- main() ---
 
+# Covers: R-01.3.1b
 @test "main moves enabled enterprise files aside and writes no-subscription" {
     cat > "$APT_DIR/a.list" <<'EOF'
 deb http://enterprise.proxmox.com/debian/pve trixie pve-enterprise
@@ -213,6 +225,7 @@ EOF
         "$NOSUB_LIST"
 }
 
+# Covers: R-01.3.1b
 @test "main is a no-op when no enterprise entry is enabled" {
     # The fragment is idempotent, and the second run of a host's first boot
     # sees its own work: the first run moved the files to names apt ignores.
@@ -225,6 +238,7 @@ EOF
     [[ "$output" == *"nothing to do"* ]]
 }
 
+# Covers: R-01.3.1b
 @test "main aborts when apt still fails after the switch" {
     # A 404 on a wrong suite, or a network outage, must not be reported as a
     # successful repository setup: every later fragment would then die on its
@@ -236,6 +250,7 @@ EOF
     [[ "$output" == *"apt-get update still fails"* ]]
 }
 
+# Covers: R-01.3.1b
 @test "main refuses to guess when suites disagree" {
     cat > "$APT_DIR/a.list" <<'EOF'
 deb http://enterprise.proxmox.com/debian/pve trixie pve-enterprise

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # devctl — desktop-side dev VM control wrapper
-# Fleet control (list/start/stop/add/log) delegates to vmctl@pvehost, which is a
+# Fleet control (list/start/stop/create/log) delegates to vmctl@pvehost, which is a
 # restricted forced-command credential with no shell access.
 # `devctl ssh` opens a real shell inside a guest using the desktop's own
 # guest-identity key (~/.ssh/nested-dev-id), not the admin key.
@@ -40,7 +40,7 @@ usage() {
     echo "  start <name|vmid>             Start a dev VM" >&2
     echo "  stop <name|vmid>              Graceful stop" >&2
     echo "  kill <name|vmid>              Force stop" >&2
-    echo "  add <project-name>            Create new dev VM from template" >&2
+    echo "  create <project-name>       Create new dev VM from template" >&2
     echo "  log <name|vmid>               Tail first-boot log" >&2
     echo "" >&2
     echo "Shell access (full privileges, via guest identity key):" >&2
@@ -98,9 +98,14 @@ case "$1" in
         [ -n "$VMID" ] || { echo "Unknown VM: $2" >&2; exit 1; }
         ssh $SSH_OPTS vmctl@${PVEHOST} stop "$VMID"
         ;;
+    create)
+        [ $# -ge 2 ] || { echo "Usage: devctl create <project-name>" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} create "$2"
+        ;;
     add)
-        [ $# -ge 2 ] || { echo "Usage: devctl add <project-name>" >&2; exit 1; }
-        ssh $SSH_OPTS vmctl@${PVEHOST} add "$2"
+        echo "NOTICE: 'devctl add' was renamed to 'devctl create' — forwarding" >&2
+        [ $# -ge 2 ] || { echo "Usage: devctl create <project-name>" >&2; exit 1; }
+        ssh $SSH_OPTS vmctl@${PVEHOST} create "$2"
         ;;
     log)
         [ $# -ge 2 ] || { echo "Usage: devctl log <name|vmid>" >&2; exit 1; }

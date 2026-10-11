@@ -18,13 +18,13 @@ autoinstall:
     install-server: true
     allow-pw: false
     # Password auth is disabled above, so key auth is the only way in.
-    # Injected by frag/30: the build machine's operator key, plus the
-    # install-time guest identity key whose private half lives on the desktop.
+    # Injected by frag/30: the desktop's guest-identity key only. External
+    # access is proxied through the desktop; the Filbert operator key is NOT
+    # trusted here (host + desktop trust both, other guests trust desktop only).
     # Dash form: Subiquity's autoinstall schema calls this key
     # `authorized-keys`. The cloud-init underscore form is silently dropped —
     # observed live as an empty list with no error.
     authorized-keys:
-      - "__ADMIN_PUBKEY__"
       - "__GUEST_ID_PUBKEY__"
   packages:
     # Install-time only: everything here must resolve against the installer's

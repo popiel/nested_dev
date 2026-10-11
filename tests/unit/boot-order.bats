@@ -50,6 +50,7 @@ run_tool() {
     run env EFIBOOTMGR_STATE="$WORK/state" EFIVARS="$WORK/efi" bash "$SCRIPT" "$@"
 }
 
+# Covers: R-01.1.1, A-01.1
 @test "the USB entry moves first, everything else keeps its order" {
     write_entries "0000,0002,0001" <<'EOF'
 Boot0000* proxmox	HD(1,GPT,...)/File(\EFI\proxmox\grubx64.efi)
@@ -63,6 +64,7 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.1.1, A-01.1
 @test "an already-first USB entry changes nothing" {
     write_entries "0001,0000" <<'EOF'
 Boot0000* proxmox	HD(1,GPT,...)/File(\EFI\proxmox\grubx64.efi)
@@ -77,6 +79,7 @@ EOF
     }
 }
 
+# Covers: R-01.1.1, A-01.1
 @test "no match aborts without touching the boot order" {
     write_entries "0000" <<'EOF'
 Boot0000* proxmox	HD(1,GPT,...)/File(\EFI\proxmox\grubx64.efi)
@@ -87,6 +90,7 @@ EOF
     [ ! -e "$WORK/state/journal" ]
 }
 
+# Covers: R-01.1.1, A-01.1
 @test "an ambiguous pattern aborts without touching the boot order" {
     write_entries "0000,0001,0002" <<'EOF'
 Boot0000* proxmox	HD(1,GPT,...)/File(\EFI\proxmox\grubx64.efi)
@@ -99,6 +103,7 @@ EOF
     [ ! -e "$WORK/state/journal" ]
 }
 
+# Covers: R-01.1.1, A-01.1
 @test "a custom pattern selects a non-USB entry" {
     write_entries "0000,0002" <<'EOF'
 Boot0000* proxmox	HD(1,GPT,...)/File(\EFI\proxmox\grubx64.efi)
@@ -110,6 +115,7 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.1.1, A-01.1
 @test "legacy boot without EFI variables fails clearly" {
     rm -rf "$WORK/efi"
     write_entries "0000" <<'EOF'

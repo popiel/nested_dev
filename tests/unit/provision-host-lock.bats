@@ -61,6 +61,7 @@ rm -f "\$MARKER" "\$MARKER.2"
 EOF
 }
 
+# Covers: R-01.5.3, A-01.17
 @test "two concurrent runs do not overlap" {
     write_overlap_detecting_fragment
     create_mock systemctl 'exit 0'
@@ -88,6 +89,7 @@ EOF
     }
 }
 
+# Covers: R-01.5.3, A-01.17
 @test "the second run waits rather than failing or claiming success early" {
     write_overlap_detecting_fragment
     create_mock systemctl 'exit 0'
@@ -113,6 +115,7 @@ EOF
     }
 }
 
+# Covers: R-01.5.3, A-01.17
 @test "a run after a completed run is a no-op" {
     create_mock systemctl 'exit 0'
     # No fragment is installed that records anything, so this exercises the
@@ -127,6 +130,7 @@ EOF
     [[ "$output" == *"already completed provisioning"* ]]
 }
 
+# Covers: R-01.5.3, A-01.17
 @test "a failed run leaves no completion marker, so a retry proceeds" {
     # The marker is what makes a second run a no-op. Writing it on the failure
     # path would make the first failure permanent: every later attempt would
@@ -153,6 +157,7 @@ EOF
     [ -f "${WORK}/var/lib/pve-firstboot/complete" ]
 }
 
+# Covers: R-01.5.3
 @test "a daemon spawned by a fragment cannot hold the lock after the run" {
     # frag/28 starts dhclient daemons mid-run. Under the old fd-held lock each
     # one inherited a copy of the lock fd, and every later run hung on

@@ -26,6 +26,7 @@ __PERSONALIZATION_UID__
 __PERSONALIZATION_USERNAME__
 __VMCTL_PRIV_B64__"
 
+# Covers: R-06.2.1, R-06.2.4, R-09.2.7
 @test "guest templates draw only on the substituted placeholder vocabulary" {
     # Subset, not equality: the substitution covers two private-half
     # placeholders the live templates currently do not use, and using one must
@@ -50,6 +51,7 @@ __VMCTL_PRIV_B64__"
     done
 }
 
+# Covers: R-05.5.1, R-05.5.2, I-06.3, A-05.12
 @test "every guest seed locks root and does nothing else to it" {
     # subiquity already leaves root locked, but nothing said so. Relying on that
     # default means a future identity block change could add a root credential
@@ -72,17 +74,24 @@ __VMCTL_PRIV_B64__"
     done
 }
 
-@test "every guest user-data declares authorized-keys with both keys" {
-    # allow-pw: false means key auth is not optional — without it a guest
-    # has no working SSH authentication method at all. Dash form: Subiquity's
-    # autoinstall schema calls this key `authorized-keys`; the cloud-init
-    # underscore form was silently dropped fleet-wide, observed live as an
-    # empty list with no error.
-    local label file
-    for label in desktop llm dev; do
+# Covers: R-05.2.4, R-06.3.1, R-06.3.2
+@test "guest authorized-keys follow the two-key trust model" {
+    # Host + desktop trust both keys (Filbert operator + desktop guest-identity);
+    # every other guest trusts the desktop key only. allow-pw: false means key
+    # auth is not optional — without it a guest has no working SSH method.
+    # Dash form: Subiquity's autoinstall schema calls this key
+    # `authorized-keys`; the underscore form was silently dropped fleet-wide.
+    local file
+    file="${PROJECT_ROOT}/desktop/user-data/user-data"
+    assert_file_contains "$file" 'authorized-keys:'
+    assert_file_contains "$file" '- "__ADMIN_PUBKEY__"'
+    assert_file_contains "$file" '- "__GUEST_ID_PUBKEY__"'
+    assert_file_contains "$file" 'allow-pw: false'
+    assert_file_not_contains "$file" 'ssh_authorized_keys:'
+    for label in llm dev; do
         file="${PROJECT_ROOT}/${label}/user-data/user-data"
         assert_file_contains "$file" 'authorized-keys:'
-        assert_file_contains "$file" '- "__ADMIN_PUBKEY__"'
+        assert_file_not_contains "$file" '- "__ADMIN_PUBKEY__"'
         assert_file_contains "$file" '- "__GUEST_ID_PUBKEY__"'
         assert_file_contains "$file" 'allow-pw: false'
         assert_file_not_contains "$file" 'ssh_authorized_keys:'
@@ -111,16 +120,19 @@ assert_key_write_creates_ssh_dir_first() {
     esac
 }
 
+# Covers: R-06.3.3, R-09.4
 @test "desktop user-data creates ~/.ssh before writing the vmctl key" {
     assert_key_write_creates_ssh_dir_first \
         "${PROJECT_ROOT}/desktop/user-data/user-data" "pvehost_vmctl"
 }
 
+# Covers: R-06.3.3, R-09.4
 @test "desktop user-data creates ~/.ssh before writing the guest identity key" {
     assert_key_write_creates_ssh_dir_first \
         "${PROJECT_ROOT}/desktop/user-data/user-data" "nested-dev-id"
 }
 
+# Covers: R-06.3.4, R-09.4
 @test "desktop user-data no longer suppresses key-write errors" {
     # 2>/dev/null on the redirect is what let a failed key write go unnoticed.
     assert_file_not_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
@@ -129,6 +141,7 @@ assert_key_write_creates_ssh_dir_first() {
         'nested-dev-id 2>/dev/null'
 }
 
+# Covers: R-05.3.4, R-02.6.3
 @test "desktop user-data chmods the key files to 600" {
     assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
         'chmod 600 /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl'
@@ -136,6 +149,7 @@ assert_key_write_creates_ssh_dir_first() {
         'chmod 600 /home/__PERSONALIZATION_USERNAME__/.ssh/nested-dev-id'
 }
 
+# Covers: R-02.2.4
 @test "desktop user-data pins the lightdm default session to i3" {
     # First-ever login defaulted to Ubuntu on Wayland, which LightDM cannot
     # host: displayless session, dead :0, text console, no VNC framebuffer.
@@ -143,6 +157,7 @@ assert_key_write_creates_ssh_dir_first() {
         'user-session=i3'
 }
 
+# Covers: R-02.2.4
 @test "desktop user-data diverts the Wayland session out of the chooser" {
     # user-session and sessions-directory never reach the gtk-greeter's own
     # listing: Ubuntu stayed selectable with both set, until its .desktop
@@ -154,6 +169,7 @@ assert_key_write_creates_ssh_dir_first() {
         'wayland-sessions/ubuntu.desktop'
 }
 
+# Covers: R-02.6.1, R-09.4
 @test "the desktop seed fetches devctl alongside the first-boot script" {
     # Firstboot installs devctl from beside itself and only warned when the
     # source was absent — so the seed's failure to fetch it shipped a desktop
@@ -163,6 +179,7 @@ assert_key_write_creates_ssh_dir_first() {
         'desktop/devctl -O devctl'
 }
 
+# Covers: R-04.7.2, R-09.4
 @test "the dev seed fetches both dev/tools scripts into the tools directory" {
     assert_file_contains "${PROJECT_ROOT}/dev/user-data/user-data" \
         'dev/tools/nested -O nested'
@@ -172,6 +189,7 @@ assert_key_write_creates_ssh_dir_first() {
         'mkdir -p /opt/nested-dev/tools'
 }
 
+# Covers: R-04.6.4, R-00.8.2
 @test "the tools are fetched at the same reference as the first-boot script" {
     # One reference for the whole guest. Two references means the script that
     # installs the wrappers and the wrappers themselves can come from different
@@ -189,6 +207,7 @@ assert_key_write_creates_ssh_dir_first() {
     }
 }
 
+# Covers: R-04.6.4, R-00.8.2
 @test "the guest pins its own PERSONALIZATION_REF to the reference it was built from" {
     # personalization.sh still carries the branch name. A guest that fetched
     # its Dockerfiles and tools with ${PERSONALIZATION_REF:-main} would resolve
@@ -198,6 +217,7 @@ assert_key_write_creates_ssh_dir_first() {
         's/^PERSONALIZATION_REF=.*/PERSONALIZATION_REF=__GITHUB_REF__/'
 }
 
+# Covers: R-04.9.3
 @test "install-time package lists carry no build tools nothing at install time consumes" {
     # fakeroot sat in the dev seed's packages list and failed curtin
     # system-install twice: install-time requests resolve against the
@@ -219,6 +239,7 @@ assert_key_write_creates_ssh_dir_first() {
         'fakeroot'
 }
 
+# Covers: R-03.2.1
 @test "llm first-boot evicts nouveau before the NVIDIA driver" {
     # The proprietary driver refuses to bind while nouveau holds the card
     # (NVRM: already bound), so without this the bake completes driver-blind
@@ -227,6 +248,7 @@ assert_key_write_creates_ssh_dir_first() {
         'blacklist nouveau'
 }
 
+# Covers: R-03.2.3, R-03.2.5
 @test "llm network fetches retry instead of dying on blips" {
     # Two bare curl|gpg pipes under set -euo pipefail died the whole bake on
     # one transient CDN answer (gpg exit 2 on an error page, curl SIGPIPEd).
@@ -235,6 +257,7 @@ assert_key_write_creates_ssh_dir_first() {
     [ "$output" = "2" ]
 }
 
+# Covers: R-03.2.3, R-03.2.5
 @test "gpg dearmor never needs a terminal" {
     # gpg opens /dev/tty for potential prompts; under systemd (or docker
     # build) there is none, so every run dies deterministically — not
@@ -246,6 +269,7 @@ assert_key_write_creates_ssh_dir_first() {
         'gpg --batch --yes --dearmor'
 }
 
+# Covers: R-01.11.3
 @test "all seeds power off at end of install" {
     # With ide2-first boot order a reboot re-enters the installer and
     # reinstalls over the top forever; a parked stopped VM is the completion
@@ -259,6 +283,7 @@ assert_key_write_creates_ssh_dir_first() {
     done
 }
 
+# Covers: R-01.11.3
 @test "late-commands never invoke systemctl in-target" {
     # in-target has no bus; enable/set-default are symlink creation anyway
     # (sibling pattern), and one such call failed an install opaquely once.

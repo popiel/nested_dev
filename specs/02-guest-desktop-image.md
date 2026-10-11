@@ -54,9 +54,10 @@ separating browsing from development.
   configuration, and the seed sets them **before** any ownership operation on
   the account's files. A later `chown` against the pre-change UID leaves
   every file owned by a number that no longer resolves to a name.
-* **R-02.1.4** lightdm is enabled as the display manager and the graphical
-  target is the default. The iGPU's board outputs are the desktop's physical
-  console; without lightdm there is no session on them.
+* **R-02.1.4** The desktop reaches a graphical login on the physical console
+  by default. The iGPU's board outputs are the desktop's physical console;
+  without a display manager there is no session on them.
+  Current mechanism: lightdm enabled with the graphical target as default.
 * **R-02.1.5** SSH password authentication is disabled, and the seed trusts
   the operator key and the guest-identity key (Spec 06 §R-06.3).
 * **R-02.1.6** The guest's resolver is the host's dnsmasq, not the LAN's. VM
@@ -67,64 +68,52 @@ separating browsing from development.
 
 ### R-02.2 Session
 
-* **R-02.2.1** An i3 session starts on the physical console through
-  lightdm, and the remote path shows the SAME session (mirrored/cloned
+* **R-02.2.1** A session starts on the physical console, and the remote path shows the SAME session (mirrored/cloned
   pixels), not an extended desktop and not a second session. The physical
   monitor is not visible from where the operator works, so a remote view
-  showing anything else is operationally equivalent to no remote view. The
-  remote path scrapes the physical display with x11vnc; verified live
-  pixel-for-pixel against the iGPU output, with working input. RDP is
-  deliberately absent — xrdp spawns separate sessions per login by
-  architecture and can never satisfy this requirement, so no RDP stack is
-  installed, no RDP port is forwarded, and the guest firewall admits none.
+  showing anything else is operationally equivalent to no remote view.
+  Separate-sessions-per-login remote stacks can never satisfy this
+  requirement, so none is installed, forwarded, or admitted by the guest
+  firewall. Current mechanism: i3 via lightdm mirrored with x11vnc,
+  verified live pixel-for-pixel with working input; no RDP/xrdp.
 * **R-02.2.2** The window manager configuration is written on first boot with a
   working default binding set: a terminal launcher, a run-or-launch prompt,
   a status bar, and standard focus, move and resize bindings. A desktop that
   requires the operator to know the defaults is a desktop that gets
   reconfigured.
-* **R-02.2.3** The compositor is started from the window manager session, not
-  as a separate service.
-* **R-02.2.4** The display manager's default session is i3, set at install
-  time — never GNOME, never Wayland. LightDM cannot host Wayland sessions:
-  a login into one opens displayless with no `DISPLAY`, the `:0` X server
-  exits, the physical console drops to text, and the VNC mirror has no
-  framebuffer to scrape (observed live: first-ever login selected Ubuntu on
-  Wayland and produced exactly this). Belt and suspenders: the default is
-  pinned *and* the Wayland session file is diverted out of visibility, since
-  the greeter enumerates sessions on its own and neither `user-session` nor
-  `sessions-directory` reaches its list (observed live: Ubuntu stayed
-  choosable with both set).
-* **R-02.2.5** The console stack stays X11 (lightdm, Xorg, x11vnc) until a
-  further incident forces re-evaluation. A Wayland move (Sway plus
-  wayvnc/w0vncserver, with dmenu/urxvt/picom replaced by Wayland-native
-  equivalents) was evaluated and deferred: it re-opens session, mirror,
-  input, auth, and shutdown validation from zero against a months-old
-  server, while the X11 stack is validated end to end. Revisit on a second
-  x11vnc incident of the shutdown-hang class, or on a concrete need the X11
-  stack cannot meet (per-output capture, encrypted VNC).
-* **R-02.2.6** Key repeat is server-owned and operator-toggled, not
-  automated. x11vnc re-applies autorepeat-off per client connection, so the
-  operator re-enables it with `xset r on` as needed; no hook does this, by
-  decision. Repeat must live in exactly one place: the viewer (TightVNC)
-  contributes no client-side repeat, which is what makes server ownership
-  safe — a repeating viewer would double every character. BackSpace travels
-  the identical path (verified live via repeat mask plus timestamped hold:
-  never special, despite appearances). The evdev keyboard object carries
-  `repeat=off` for the same single-owner reason: host-kernel repeats would
-  arrive as extra presses on top of the guest X server's autorepeat.
-* **R-02.2.7** The physical rack keyboard and mouse are shared with the
-  desktop by evdev passthrough (`input-linux` objects on stable by-id paths,
-  plus virtio-keyboard and virtio-mouse — relative, not a tablet: REL events
-  route to relative devices only, and on a tablet motion drops while clicks
-  survive), toggled by the operator with
-  ctrl-ctrl (both Ctrls together, not a double-tap). The by-id paths are detected at provision, never hardcoded.
-  While toggled to the guest the host console is keyboardless (accepted:
-  host display is already gone and SSH is unaffected); toggling back keeps
-  host repair usable, including on the dGPU monitor. No GPU changes are part
-  of this: the iGPU stays with the desktop, the dGPUs with 101. Static USB
-  attachment and X-state-conditional routing are rejected by decision — the
-  former strands host repair, the latter flaps on every service restart and
-  inverts for the VNC-gap case it would serve.
+* **R-02.2.3** The compositor runs inside the window manager session, so it
+  shares the session lifecycle instead of racing it as an independent unit.
+  Current mechanism: started from the WM session, not as a separate service.
+* **R-02.2.4** Logging in always lands in a working console session — never
+  in a displayless session that kills the physical console and starves the
+  VNC mirror of a framebuffer. Belt and suspenders: the default is pinned
+  *and* incompatible session files are hidden from the greeter, since the
+  greeter enumerates sessions on its own (observed live).
+  Current mechanism: default session i3 set at install; Wayland session file
+  diverted (LightDM cannot host Wayland).
+* **R-02.2.5** The console stack remains the validated one until an incident
+  forces re-evaluation with full session/mirror/input/auth/shutdown
+  re-validation. Revisit on a second shutdown-hang-class mirror incident, or
+  on a concrete need the current stack cannot meet (per-output capture,
+  encrypted VNC). Current mechanism: X11 stack (lightdm, Xorg, x11vnc);
+  Wayland move (Sway + wayvnc/w0vncserver + native replacements for
+  dmenu/urxvt/picom) evaluated and deferred.
+* **R-02.2.6** Every keystroke (including held keys and BackSpace) is
+  delivered exactly once, with repeat owned in exactly one place and toggled
+  by the operator, never automated. A second repeating layer doubles every
+  character; host-kernel repeats on top of guest-side repeats arrive as extra
+  presses. Current mechanism: server-owned repeat re-enabled with `xset r on`
+  as needed (x11vnc reapplies off per connection), non-repeating viewer,
+  evdev `repeat=off`.
+* **R-02.2.7** The physical rack keyboard and mouse are usable in the guest
+  and returnable to the host by an operator toggle, without stranding host
+  repair and without GPU changes (iGPU stays with the desktop, dGPUs with
+  101). While toggled to the guest the host console is keyboardless
+  (accepted: host display is already gone and SSH is unaffected).
+  Current mechanism: evdev passthrough (`input-linux` on stable by-id paths
+  detected at provision, virtio-keyboard + relative virtio-mouse),
+  ctrl-ctrl (both Ctrls together) toggle; static USB attachment and
+  X-state-conditional routing rejected by decision.
 
 ### R-02.3 GPU passthrough is verified, and a software-rendered desktop is
 reported
@@ -145,37 +134,32 @@ reported
 
 ### R-02.4 Browsers, audio and memory
 
-* **R-02.4.1** Chrome is installed on first boot as a snap, not in the seed's
-  package list. A snap and the archive's own browser packages conflict during
-  an unattended install, and the failure mode is an install that does not
-  complete.
-* **R-02.4.2** Chrome is configured to disable GPU acceleration. The
-  guest's GPU is passed through and used by the session; letting a sandboxed
-  browser also drive it produces rendering artifacts in both.
-* **R-02.4.3** Audio runs as a per-account service, with lingering enabled for
-  the account so the service survives logout. Without lingering, audio stops
-  when the session ends and does not return.
-* **R-02.4.4** Print, mDNS discovery and Bluetooth services are disabled and
-  the VM's memory swappiness is lowered. The desktop is 8 GB of a 32 GB host
-  shared with a GPU VM; a print spooler and a Bluetooth stack are memory the
-  desktop does not need.
-* **R-02.4.5** Media playback on the desktop has working sound. The integrated
-  HD audio controller (00:1f.3) was the candidate, and it is disqualified:
-  measured 2026-10-01 it shares IOMMU group 10 with the ISA bridge (00:1f.0),
-  the memory controller (00:1f.2) and SMBus (00:1f.4), so passing it through
-  would hand host-critical platform devices to the guest — the same rule
-  that excluded the dGPUs (R-01.7), applied before any code was written.
-  Sound therefore comes without audio passthrough: a USB audio device passed
-  through by ID — which needs no IOMMU group — for the physical console.
-  The VNC mirror carries no audio.
+* **R-02.4.1** Both browsers are installable and the desktop install always
+  completes. Current mechanism: Chrome as a first-boot snap, not in the
+  seed package list (snap + archive browser packages conflict mid-install).
+* **R-02.4.2** Browser and session rendering do not corrupt each other on the
+  passed-through GPU. Current mechanism: Chrome configured with GPU
+  acceleration disabled.
+* **R-02.4.3** Audio keeps working across logout and login. Current
+  mechanism: per-account audio service with lingering enabled.
+* **R-02.4.4** Unneeded device services stay off and the desktop stays within
+  its 8 GB share of the 32 GB host. Current mechanism: print, mDNS discovery
+  and Bluetooth disabled; swappiness lowered to 10.
+* **R-02.4.5** Media playback on the desktop has working sound without
+  handing host-critical platform devices to the guest. The integrated HD
+  audio candidate shares its IOMMU group with the ISA bridge, memory
+  controller and SMBus (measured 2026-10-01), so it is disqualified under
+  R-01.7. Current mechanism: USB audio device passed through by ID for the
+  physical console; VNC mirror carries no audio.
 
 ### R-02.5 X11 forwarding from dev VMs
 
 * **R-02.5.1** The desktop can run an X application from a dev VM, forwarding
   the display over SSH.
-* **R-02.5.2** X11 forwarding is enabled in the SSH server, and the X
-  authentication tool is present. Forwarding without the authentication tool
-  fails at the far end with a refusal the operator reads as a network problem.
+* **R-02.5.2** Forwarded X applications authenticate and display on the
+  desktop instead of failing with a far-end refusal that reads as a network
+  problem. Current mechanism: X11 forwarding enabled in the SSH server with
+  the X authentication tool present.
 * **R-02.5.3** The desktop's SSH configuration resolves fleet VMs by name, so
   the operator does not track addresses.
 
@@ -192,13 +176,15 @@ reported
   §R-06.3.4), or if the `devctl` source is absent from beside the first-boot
   script. A desktop without fleet control is not a completed desktop, and
   the previous warn-and-continue shipped exactly that, green.
-* **R-02.6.4** `devctl` takes the guest account name from the environment
-  rather than embedding it, because it is not rendered through the
-  personalization configuration and a hardcoded name would be a second
-  identity literal (Spec 05 §R-05.1.1).
-* **R-02.6.5** `devctl` refuses to run without a shell environment, rather than
-  falling back to an empty account name and producing a confusing SSH failure.
-* **R-02.6.6** The local binary directory is on the account's `PATH`.
+* **R-02.6.4** `devctl` resolves the guest account without a second hardcoded
+  identity literal (Spec 05 §R-05.1.1). Current mechanism: account name from
+  the environment.
+* **R-02.6.5** `devctl` fails fast with a named cause when its account context
+  is missing, rather than producing a confusing downstream SSH failure.
+  Current mechanism: refuses to run without a shell environment instead of
+  falling back to an empty account name.
+* **R-02.6.6** The fleet-control command is invocable without a path prefix.
+  Current mechanism: local binary directory on the account's `PATH`.
 
 ### R-02.7 Guest firewall
 
@@ -207,7 +193,7 @@ reported
 * **R-02.7.2** Outgoing traffic is unrestricted by the guest firewall. The
   host's FORWARD chain is the authority for the desktop's egress
   (Spec 00 §R-00.2.6); the guest's own rules must not imply that they are.
-* **R-02.7.3** Guest `root` is locked.
+* **R-02.7.3** Guest `root` is locked per Spec 05 §R-05.5.
 
 ## 4. Invariants
 

@@ -81,57 +81,54 @@ and the hardware stays in a VM with no untrusted code on it.
 
 ### R-04.3 Container runtime, and what the account may do with it
 
-* **R-04.3.1** The container runtime is installed at first boot from the
-  vendor's own repository, after any conflicting distribution packages are
-  removed.
-* **R-04.3.2** Container log rotation is bounded and the storage driver is
-  explicit. An unbounded JSON log on a VM that runs long-lived build containers
-  eventually fills a 40 GB disk with logs.
-* **R-04.3.3** The runtime restarts a crashed container's processes rather than
-  leaving the VM in a half-dead state. This is the one place the fleet
-  deliberately trades strict isolation for availability: a dev VM that must be
-  repaired by hand after an OOM kill is a dev VM that gets left broken.
-* **R-04.3.4** The account is a member of the container-runtime group, so the
-  operator can run containers without elevation. The consequence — that
+* **R-04.3.1** The container runtime is installed cleanly at first boot.
+  Current mechanism: vendor repository after removing conflicting
+  distribution packages.
+* **R-04.3.2** Long-lived build containers cannot fill the 40 GB disk with
+  logs. Current mechanism: bounded log rotation and explicit storage driver.
+* **R-04.3.3** A crashed container workload recovers without leaving the VM
+  half-dead by hand. This is the one place the fleet deliberately trades
+  strict isolation for availability. Current mechanism: runtime restart
+  policy for crashed container processes.
+* **R-04.3.4** The operator runs containers without elevation. The consequence — that
   membership is effectively root on that guest — is accepted and stated: this
   is the isolation boundary for untrusted work, not a hardened multi-tenant
-  host.
+  host. Current mechanism: account in the container-runtime group.
 * **R-04.3.5** A non-responsive runtime after install is reported as a warning
   and does not abort provisioning. The image definitions and wrappers are still
   worth installing, and the next boot can retry.
 
 ### R-04.4 The workspace is the only mutable state
 
-* **R-04.4.1** `/work` exists on every dev VM, is owned by the account, and is
-  the bind-mount target for every tool container. A project checkout is made
-  there.
+* **R-04.4.1** Every dev VM has a workspace owned by the account that every
+  tool container shares. Current mechanism: `/work` as the bind-mount target.
 * **R-04.4.2** No project file is ever copied into a tool image. An image that
   carries a checkout is an image that is stale the moment the project changes.
-* **R-04.4.3** The current working directory is bind-mounted as the working
-  directory inside the container, so a tool sees the same paths it would
-  outside and its output lands where the operator expects.
+* **R-04.4.3** A tool sees the same paths inside the container as outside,
+  and its output lands where the operator expects. Current mechanism: current
+  working directory bind-mounted as the container working directory.
 
 ### R-04.5 Build caches live outside the containers
 
-* **R-04.5.1** The dependency-resolution caches for the JVM ecosystem and the
-  tool configuration are bind-mounted from the account's home into the
-  containers that use them, and are created and owned by the account at first
-  boot.
+* **R-04.5.1** Dependency caches and tool configuration survive container
+  exit and are reused incrementally. Current mechanism: caches bind-mounted
+  from the account's home into the using containers, created and owned by the
+  account at first boot.
 * **R-04.5.2** A cache that is not bind-mounted is lost on every container exit,
   so the second run of any build re-downloads everything. The first run is
   slow by design; every later run is not.
-* **R-04.5.3** The tool configuration is mounted **read-only** into the tool
-  container. That container runs the agent a project's build can influence;
-  letting it rewrite the operator's configuration would let a project change
-  how the next run behaves.
+* **R-04.5.3** A project-influenced agent container cannot rewrite the
+  operator's configuration and change how the next run behaves. Current
+  mechanism: tool configuration mounted **read-only**.
 
 ### R-04.6 Tool wrappers build their images on first use
 
 * **R-04.6.1** One wrapper exists per tool: Java, Scala, sbt, opencode, and the
   repository build tool.
-* **R-04.6.2** Each wrapper builds its image on first invocation, then runs the
-  tool in an ephemeral container over the bind-mounted workspace. Tool images
-  are therefore absent from a fresh dev VM by design.
+* **R-04.6.2** Each wrapper runs its tool in a fresh container over the
+  workspace, building its image on first invocation. Tool images are
+  therefore absent from a fresh dev VM by design. Current mechanism: one
+  wrapper script per tool; ephemeral containers.
 * **R-04.6.3** Because the images are built on demand, a dev VM's first
   invocation of each tool is slow. This is traded for a template that stays
   small and a base-image change that is picked up without re-cloning every dev
@@ -144,12 +141,11 @@ and the hardware stays in a VM with no untrusted code on it.
 * **R-04.6.5** The repository build tool's wrapper requires a checkout at a
   known path inside the workspace, and says so when it is absent, naming the
   command that creates it. It does not clone on the operator's behalf.
-* **R-04.6.6** A tool's container runs under the account's identity, and the
-  image is built with that identity, so files produced inside the container are
-  owned by the operator rather than by a numeric uid the operator cannot
-  interpret.
-* **R-04.6.7** The wrappers are on the account's `PATH` for interactive shells.
-  A wrapper installed but not on `PATH` is a wrapper the operator does not have.
+* **R-04.6.6** Files produced inside a tool container are owned by the
+  operator, not by an uninterpretable numeric uid. Current mechanism: container
+  runs under the account identity and the image is built with it.
+* **R-04.6.7** Every tool wrapper is invocable by name from an interactive
+  shell. Current mechanism: wrappers on the account's `PATH`.
 
 ### R-04.7 First-boot provenance and completion
 
@@ -160,31 +156,33 @@ and the hardware stays in a VM with no untrusted code on it.
   repository tool scripts are all present in the guest, at the same reference.
   A first-boot script that silently cannot find a tool it is supposed to
   install produces a dev VM that looks provisioned and is not.
-* **R-04.7.3** Base images are pulled at first boot, in parallel, and the
-  resolved digest of each is recorded in the log. A failed pull is a warning:
-  the wrapper that needs that base builds its image and pulls at that point.
+* **R-04.7.3** Base images are ready before first tool use and their exact
+  content is recorded; a failed fetch degrades to pull-on-first-use with a
+  warning. Current mechanism: parallel pulls at first boot with resolved
+  digests in the log.
 * **R-04.7.4** The base image set is: a JDK 21 LTS image, a slim Node image, a
   slim Python image, and the tool agent's own image. All four come from their
   publishers' registries, none from this repository.
-* **R-04.7.5** Refreshing tool images against new base layers is an explicit
-  operator command that rebuilds every tool image and appends the resulting
-  digests to a manifest in the account's own storage. It is never automatic:
-  a silent rebuild changes what a project's build sees without the project
-  changing.
+* **R-04.7.5** Tool images change only when the operator asks, with the result
+  recorded. A silent rebuild would change what a project's build sees without
+  the project changing. Current mechanism: explicit rebuild command appending
+  digests to a manifest in the account's storage; never automatic.
 
 ### R-04.8 Guest firewall
+
+Dev-VM egress is uniform per Spec 01 §R-01.10 (FORWARD chain is the
+authority): DNS, HTTP and HTTPS only, for the whole 102–249 range.
 
 * **R-04.8.1** Incoming traffic is denied by default; SSH is the only accepted
   ingress. A dev VM is not a service.
 * **R-04.8.2** Outgoing traffic is denied by default, with DNS, HTTP and HTTPS
-  accepted. A dev VM that pulls images and packages needs those three and
-  nothing else.
+  accepted (see Spec 01 §R-01.10).
 * **R-04.8.3** The host's forwarding chain enforces the same policy
-  independently, and is the authority (Spec 00 §R-00.2.6). A guest firewall
+  independently, and is the authority. A guest firewall
   that permits more than the host forwards changes nothing; one that permits
   less than an operator expects produces a confusing failure, so both are
   stated.
-* **R-04.8.4** Guest `root` is locked.
+* **R-04.8.4** Guest `root` is locked per Spec 05 §R-05.5.
 
 ### R-04.9 Sizing
 

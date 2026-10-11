@@ -31,14 +31,14 @@ value appears literally.
   `PERSONALIZATION_FULLNAME`, `PERSONALIZATION_EMAIL`, `PERSONALIZATION_UID`,
   `PERSONALIZATION_GID`, `PERSONALIZATION_HOME`, `PERSONALIZATION_REPO`,
   `PERSONALIZATION_REF` and `PERSONALIZATION_TARGET_DISKS`.
-* **R-05.1.3** `PERSONALIZATION_HOME` is derived from `PERSONALIZATION_USERNAME`
-  rather than restated.
+* **R-05.1.3** The home directory follows from the username rather than being
+  a second independent value that can disagree with it. Current mechanism:
+  `PERSONALIZATION_HOME` derived from `PERSONALIZATION_USERNAME`.
 * **R-05.1.4** A script that consumes an unset required variable **fails with a
   message naming the variable** and pointing at `personalization.sh`. It does
-  not substitute a default. An unset `PERSONALIZATION_UID` that silently
-  defaulted would give guests an account whose identity no longer matches the
-  host's, and the mismatch surfaces only as a bind-mount permission error much
-  later.
+  not substitute a silent default that would surface much later as a
+  bind-mount permission error. Current mechanism: no defaults; explicit
+  per-variable failure.
 * **R-05.1.5** `PERSONALIZATION_TARGET_DISKS` is build-host-specific and is
   permitted to be empty. Every other variable is required.
 
@@ -50,10 +50,13 @@ value appears literally.
 * **R-05.2.2** The account is a member of `sudo` on the host.
 * **R-05.2.3** The UID is set explicitly rather than inherited from the
   distro default, so that a container's default UID cannot collide with it.
-* **R-05.2.4** Guests accept the operator's public key
-  (`keys/host_os_ed25519.pub`) as a login credential and disable password
-  authentication for SSH. The account's password hash is still set, because
-  console and RDP access need it; it is simply not accepted over SSH.
+* **R-05.2.4** The host and the desktop trust two public keys: the Filbert
+  operator key (`keys/host_os_ed25519.pub`) and the desktop guest-identity key
+  generated on the host at install time. All other guests trust only the
+  desktop key: external access to them is proxied through the desktop, and the
+  host reaches them via `qm guest exec`. SSH password authentication is
+  disabled everywhere. The account's password hash is still set, because
+  console access needs it; it is simply not accepted over SSH.
 * **R-05.2.5** The account is added to the `docker` group wherever Docker is
   installed.
 
@@ -68,10 +71,11 @@ value appears literally.
   account, creation **aborts**. Creating a second identity for one operator
   leaves two accounts that both appear to work and neither of which owns the
   files the other created.
-* **R-05.3.4** The account's home directory is owned by the account, and
-  `~/.ssh` is mode 700 with `authorized_keys` mode 600.
-* **R-05.3.5** The GECOS field carries the configured full name, not the
-  username, so `ls` and mail headers show the person's name.
+* **R-05.3.4** Only the account owns its home and credentials, with the
+  credentials unreadable by others. Current mechanism: home owned by the
+  account, `~/.ssh` mode 700, `authorized_keys` mode 600.
+* **R-05.3.5** Human-facing identity shows the person's name, not the login.
+  Current mechanism: GECOS field carries the configured full name.
 * **R-05.3.6** Account creation completes **before** the provision tree is
   fetched from the network. A failed or unreachable fetch must still leave a
   usable operator login, because the alternative is a host with no account but
@@ -139,19 +143,25 @@ Two distinct credentials exist and must never be conflated.
 * **R-05.8.1** `PERSONALIZATION_REPO` and `PERSONALIZATION_REF` are defined in
   `provision/personalization.sh`. No script carries a literal repository or
   ref.
-* **R-05.8.2** `PERSONALIZATION_REF` may be a branch name, a tag or a full
-  40-character commit SHA. Branch names and tags resolve automatically in
-  fetch URLs.
-* **R-05.8.3** Resolution of a ref to a commit SHA is **defined once** in
-  `provision/personalization.sh`. Two definitions of the same lookup can
-  disagree, and the two consumers would then fetch different trees while
-  reporting the same ref in their manifests.
-* **R-05.8.4** Resolving a ref **never fails**: it returns successfully with an
-  empty string when the ref is unresolvable, `git` is absent, or the network
-  is down. Callers run under `set -euo pipefail`, where a non-zero return
-  aborts a provisioning run in progress. Whether an unresolved ref is fatal is
-  the caller's decision, not the resolver's.
-* **R-05.8.5** A full 40-hex input is passed through without a `git` call.
+* **R-05.8.2** `PERSONALIZATION_REF` may be given as a branch name, a tag or a
+  full 40-character commit SHA at build time. It is resolved to a SHA at build
+  time and recorded as such (build `MANIFEST` plus `/etc/nested-dev/ref-sha`
+  on the host). A rebuild defaults to the recorded SHA unless a new
+  branch/tag/SHA is given to the refresh script.
+* **R-05.8.2a** Each guest may pin a separate resolved SHA
+  (`/etc/nested-dev/ref-sha.d/<vmid>`), separately overridable when refreshing
+  individual guests (`refresh-guests.sh --guest <vmid>=<ref>`).
+* **R-05.8.3** Reference resolution has one definition shared by all
+  consumers, so two consumers cannot resolve the same ref to different trees
+  while reporting the same ref. Current mechanism: `resolve_ref_to_sha`
+  defined once in `provision/personalization.sh`.
+* **R-05.8.4** Resolving a ref **never aborts the caller**: it yields an empty
+  result when the ref is unresolvable, `git` is absent, or the network is
+  down, and the caller decides whether that is fatal. Current mechanism:
+  successful return with an empty string, safe under `set -euo pipefail`.
+* **R-05.8.5** An already-pinned SHA resolves without any network or tool
+  dependency. Current mechanism: full 40-hex input passed through with no
+  `git` call.
 * **R-05.8.6** When a ref names both a branch and a tag, the branch wins.
 * **R-05.8.7** The resolved commit SHA is recorded in the build manifest, so a
   build is traceable to a specific tree even when the ref was a moving branch.
@@ -162,9 +172,10 @@ Two distinct credentials exist and must never be conflated.
 ### R-05.9 Public keys are the exception to the secrecy rules
 
 * **R-05.9.1** `keys/host_os_ed25519.pub` is committed. It is a public key.
-* **R-05.9.2** Guests and the host are provisioned from that file, not from
-  the host's `authorized_keys`. Reading the host's file would silently
-  propagate a key an operator added by hand to every VM in the fleet.
+* **R-05.9.2** Hand-added host keys never silently propagate to the fleet.
+  Guests and the host are provisioned from the committed operator key file,
+  not from the host's live key store. Current mechanism: read from
+  `keys/host_os_ed25519.pub`, never from `authorized_keys`.
 * **R-05.9.3** Keypairs whose private halves must never exist in the
   repository are generated on the host at install time (Spec 07).
 

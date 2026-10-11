@@ -52,6 +52,12 @@ set -- $CMD  # re-split into positional
 
 VERB="${1:-}"
 shift 2>/dev/null || true
+# Deprecated alias: `add` was renamed to `create`.
+if [ "$VERB" = "add" ]; then
+    echo "NOTICE: 'add' was renamed to 'create' — forwarding" >&2
+    log "DEPRECATED-ADD $* (forwarded to create)"
+    VERB="create"
+fi
 
 case "$VERB" in
     list)
@@ -131,8 +137,8 @@ case "$VERB" in
         echo "VM $VMID stopped (forced)"
         ;;
 
-    add)
-        [ -n "${1:-}" ] || die "usage: add <project-name>"
+    create)
+        [ -n "${1:-}" ] || die "usage: create <project-name>"
         PROJECT="$1"
         [[ "$PROJECT" =~ ^[a-z0-9][a-z0-9_-]{0,30}$ ]] || die "Project name must be lowercase alphanumeric/underscore/hyphen, max 32 chars"
 
@@ -202,7 +208,7 @@ DNS_EOF
         echo "  start <vmid>            — start a dev VM" >&2
         echo "  shutdown <vmid>         — graceful stop" >&2
         echo "  stop <vmid>             — force stop" >&2
-        echo "  add <project-name>      — create new dev VM from template" >&2
+        echo "  create <project-name>   — create new dev VM from template" >&2
         echo "  log <vmid>              — tail first-boot log" >&2
         exit 1
         ;;

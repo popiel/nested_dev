@@ -22,7 +22,7 @@ acceptance tables in each spec.
 |---|---|
 | Framework | `bats` |
 | Entry point | One script runs everything; a fast mode runs the static layer only |
-| Windows entry point | A wrapper runs the same suite inside WSL, because MSYS process emulation makes it roughly two orders of magnitude slower |
+| Windows entry point | The same suite runs fast on Windows as on Linux (same flags/files, native-Linux speed) |
 | Layers | Static (lint, config, invariants) and unit (functions and files) |
 | Style | Assertions read the repository's own files; a pure function is invoked and checked |
 | Speed | No test may require a hypervisor, a network, or a real guest |
@@ -52,9 +52,9 @@ acceptance tables in each spec.
 * **R-09.1.6** The entry point accepts named test files and runs only those. A
   developer fixing one area must be able to run that area without paying for
   the rest of the suite.
-* **R-09.1.7** The entry point prints a machine-readable result block of
-  `key=value` pairs, so that a wrapper can report the outcome without parsing
-  human-readable prose.
+* **R-09.1.7** The entry point prints a machine-readable result block, so a
+  wrapper can report the outcome without parsing prose. Current mechanism:
+  stable `key=value` pairs.
 * **R-09.1.8** The block reports passes, failures and skips as three distinct
   counts, and the three sum to the number of tests that ran. A skip is a test
   that did not run, and reporting it as a pass claims coverage the run never
@@ -71,21 +71,21 @@ acceptance tables in each spec.
 
 ### R-09.1a On Windows the suite runs inside WSL
 
-* **R-09.1a.1** A Windows host runs the suite through a wrapper that executes it
-  in WSL, passing the same flags and the same named files. Running the suite
-  directly under a POSIX-emulation shell is not supported, because process
-  creation there costs enough to make the suite unusable.
-* **R-09.1a.2** The wrapper installs its own prerequisites without `sudo`, into
-  the invoking user's home directory, and the wrapper detects when they are
-  absent and says how to install them.
+* **R-09.1a.1** A Windows host runs the suite with the same flags and files
+  at native-Linux speed; running directly under a POSIX-emulation shell is
+  not supported. Current mechanism: WSL wrapper (process creation under
+  emulation costs roughly two orders of magnitude more).
+* **R-09.1a.2** The wrapper's prerequisites install without privilege into
+  the invoking user's space, and absence tells the operator how to install.
+  Current mechanism: user home directory, no `sudo`.
 * **R-09.1a.3** The wrapper refuses to run when the required tools resolve to
   binaries on the Windows filesystem. Those tools would appear to work while
   reintroducing exactly the cost the wrapper exists to avoid.
 * **R-09.1a.4** The wrapper propagates the suite's exit status, and reports the
   pass, fail and skip counts and where the timing records were written.
-* **R-09.1a.5** Paths are converted to WSL form with forward slashes, because
-  the Windows command line consumes backslashes as escapes before the Linux
-  command ever sees them.
+* **R-09.1a.5** Host paths reach the Linux side intact. Current mechanism:
+  WSL-form forward-slash conversion (the Windows command line consumes
+  backslashes as escapes).
 
 ### R-09.1b The suite list is asserted, not trusted
 
@@ -106,13 +106,13 @@ acceptance tables in each spec.
 
 ### R-09.2 The static layer asserts properties of the repository
 
-* **R-09.2.1** **Lint.** Every shell script passes `shellcheck`, including the
-  extension-less ones, and the extension-less ones are covered explicitly
-  because a glob that only matches `*.sh` silently skips the most security
-  relevant files in the repository: the control program, the control wrapper,
-  and the two tool wrappers.
+* **R-09.2.1** **Lint.** Every shell script passes its checker, including the
+  files a suffix-only glob would silently skip. Current mechanism:
+  `shellcheck` over `*.sh` plus explicit extension-less coverage (control
+  program, control wrapper, tool wrappers).
 * **R-09.2.2** **Source guards.** Any script that is both executed and sourced
-  carries a guard, so sourcing it for its functions does not run its body.
+  is safe to source for its functions alone. Current mechanism: guard
+  preventing body execution on source.
 * **R-09.2.3** **Config validity.** Every guest seed parses as YAML. The
   rendered answer file parses as TOML. The name-service and firewall reference
   files are handed to their own tools, and those checks are skipped — visibly —
@@ -210,8 +210,8 @@ acceptance tables in each spec.
 
 ### R-09.7 Every run measures itself
 
-* **R-09.7.1** Every suite is invoked in a mode that reports how long each test
-  took, and every run leaves a per-test record on disk.
+* **R-09.7.1** Every run leaves a per-test duration record. Current
+  mechanism: each suite invoked in per-test-timing mode.
 * **R-09.7.2** The record identifies each test by suite and name, not by its
   position, so a test can be compared across runs even when tests are inserted
   above it.
@@ -236,10 +236,9 @@ acceptance tables in each spec.
   per-machine measurement, not source.
 * **R-09.7.10** Recording timing never changes the suite's result. A failure in
   the timing tooling is reported as a warning and the suites still run.
-* **R-09.7.11** A skipped test's elapsed time is measured and included in the
-  suite's total. The skip reason is written after the measurement, so a summary
-  that matches the measurement only at end-of-line silently drops every skipped
-  test's time and reports a suite as faster than the sum of its own tests.
+* **R-09.7.11** Skipped tests never make a suite look faster than the sum of
+  its own tests. Current mechanism: skip time measured and included in the
+  suite total, reason written after the measurement.
 
 ## 4. Coverage map
 

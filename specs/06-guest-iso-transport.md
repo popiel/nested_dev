@@ -24,9 +24,10 @@ media (Spec 01), dev VM cloning after creation (Spec 07).
 * **R-06.1.1** Every guest installs unattended from the **official** Ubuntu
   ISO, downloaded by the host from the Ubuntu release server. No guest ISO is
   built or customised in this repository.
-* **R-06.1.2** The host assembles a NoCloud seed per guest — the rendered
-  user-data plus a meta-data marker — and attaches it as a cdrom alongside the
-  official ISO.
+* **R-06.1.2** The host assembles a per-guest install seed and attaches it
+  with the official ISO, so each guest self-installs without manual boot
+  configuration. Current mechanism: NoCloud user-data + meta-data marker as
+  a cdrom.
 * **R-06.1.3** The installer detects the seed automatically. No per-guest
   kernel arguments or serial console interaction are required to point the
   installer at it.
@@ -43,13 +44,14 @@ media (Spec 01), dev VM cloning after creation (Spec 07).
 * **R-06.2.1** The committed seed templates carry placeholder tokens only. The
   host substitutes them immediately before creating each VM, from values that
   exist only on the host.
-* **R-06.2.2** Substitution covers: the login password hash, the operator
-  public key, the guest-identity public key, the username, full name, UID and
-  GID, and the release reference.
-* **R-06.2.3** The desktop seed additionally receives two private key
-  placeholders, base64-encoded. **No other guest receives a private key
-  half.** A dev VM is a place where untrusted code runs; a fleet-control
-  private key on one is a fleet-control compromise.
+* **R-06.2.2** Substitution covers everything a guest needs to be reachable
+  and reproducible: login password hash, trusted public keys, username, full
+  name, UID/GID, and release reference. Current mechanism: operator key +
+  guest-identity key + identity fields + ref.
+* **R-06.2.3** Only the desktop receives fleet-control private halves. A dev
+  VM is a place where untrusted code runs; a fleet-control private key on one
+  is a fleet-control compromise. Current mechanism: two base64-encoded
+  private-key placeholders in the desktop seed only.
 * **R-06.2.4** The host **fails** if any placeholder token survives
   substitution, and reports which. A surviving token ships a guest with no
   login hash, no operator key, or a username that is literally
@@ -57,22 +59,23 @@ media (Spec 01), dev VM cloning after creation (Spec 07).
   install that nobody can log in to.
 * **R-06.2.5** Substitution aborts if any required identity variable is unset,
   naming the variable (Spec 05 §R-05.1.4).
-* **R-06.2.6** Values substituted into a seed are escaped so that a yescrypt
-  hash, an email address or a key survives intact.
+* **R-06.2.6** Substituted values arrive byte-intact, including values whose
+  characters are special to the substitution engine. Current mechanism:
+  escaping so yescrypt hashes, emails and keys survive.
 
 ### R-06.3 Guest identity comes from two keys, both installed from the seed
 
-* **R-06.3.1** Every guest trusts two public keys: the operator's, from
-  `keys/host_os_ed25519.pub`, and the guest-identity public key generated on
-  the host at install time.
+* **R-06.3.1** The desktop trusts two public keys: the Filbert operator key,
+  from `keys/host_os_ed25519.pub`, and the guest-identity public key generated
+  on the host at install time. Every other guest trusts only the guest-identity
+  key.
 * **R-06.3.2** Because password authentication is disabled for SSH, a guest
   that lacks a trusted key has **no working SSH authentication method at
   all**. A seed that fails to inject a key produces a guest that is reachable
   only by console.
-* **R-06.3.3** The seed writes the desktop's private keys after creating the
-  destination directory, because a redirect into a directory that does not yet
-  exist fails. This write runs in a different boot stage from the one that
-  creates the user's SSH configuration, so the order cannot be assumed.
+* **R-06.3.3** The desktop's private keys land in place regardless of boot-stage
+  ordering between SSH setup and key delivery. Current mechanism: seed writes
+  keys only after creating the destination directory.
 * **R-06.3.4** The desktop **hard-fails** first boot if either seeded private
   key is missing or is not a valid private key. `devctl` is unusable without
   them, and a wrapper that fails later, on first use, gives the operator no
@@ -82,11 +85,8 @@ media (Spec 01), dev VM cloning after creation (Spec 07).
 
 ### R-06.4 Guest `root` is locked by every seed
 
-* **R-06.4.1** Every seed explicitly locks `root`, rather than relying on the
-  installer's default.
-* **R-06.4.2** No seed performs any other operation on guest `root`. An
-  unlock somewhere in a `late-commands` block is invisible in the install log
-  and yields a root shell on a VM whose purpose is to contain untrusted work.
+See Spec 05 §R-05.5 (canonical): every seed explicitly locks `root` and
+performs no other root-credential operation.
 
 ### R-06.5 Guest creation is idempotent
 
@@ -98,16 +98,16 @@ media (Spec 01), dev VM cloning after creation (Spec 07).
 
 ### R-06.6 Staged private keys are destroyed once used
 
-* **R-06.6.1** The host stages the private key halves in a root-only location
-  for the duration of seed assembly, and **destroys the staged copies** once
-  every seed is built — and only after the loop, never inside it, so a
-  failure part-way does not leave later guests unseeded.
-* **R-06.6.2** The canonical keypairs under the host's root-only key directory
-  are **retained**, so a re-provision is idempotent. Destroying them would make
-  the second run generate different keys, leaving keys already trusted by a
-  guest that no longer match the ones it will present.
-* **R-06.6.3** Failure to destroy a staged key is fatal. A cleanup step that
+* **R-06.6.1** Staged private halves exist only for the duration of seed
+  assembly and are removed afterwards; a mid-loop failure never leaves later
+  guests unseeded. Current mechanism: root-only staging, destroyed once after
+  the loop, never inside it.
+* **R-06.6.2** Re-provisioning reuses the same credentials guests already
+  trust. Current mechanism: canonical keypairs under the host's root-only key
+  directory retained.
+* **R-06.6.3** A failed key cleanup fails the run loudly. A cleanup step that
   fails silently leaves a fleet-control private key on disk indefinitely.
+  Current mechanism: shred-or-remove with fatal error on failure.
 
 ### R-06.7 Provenance of every input
 

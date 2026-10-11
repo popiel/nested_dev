@@ -54,12 +54,14 @@ teardown() {
     cleanup_mocks
 }
 
+# Covers: R-01.9.10
 @test "--print-ip prints the detected LAN address" {
     run bash "$SCRIPT" --print-ip
     [ "$status" -eq 0 ]
     [ "$output" = "192.168.14.52" ]
 }
 
+# Covers: R-01.9.10
 @test "--print-ip dies with no address to print" {
     MOCK_ADDR=""
     export MOCK_ADDR
@@ -67,6 +69,7 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
+# Covers: R-01.9.10
 @test "update mode rewrites a stale node line and preserves the rest" {
     run bash "$SCRIPT"
     [ "$status" -eq 0 ]
@@ -78,6 +81,7 @@ teardown() {
     [ "$output" = "0" ]
 }
 
+# Covers: R-01.9.10
 @test "update mode is a no-op when the entry is already correct" {
     run bash "$SCRIPT"
     [ "$status" -eq 0 ]
@@ -89,6 +93,7 @@ teardown() {
     [ "$before" = "$after" ]
 }
 
+# Covers: R-01.9.10
 @test "update mode tracks a changed lease" {
     run bash "$SCRIPT"
     [ "$status" -eq 0 ]
@@ -100,6 +105,7 @@ teardown() {
         "192.168.14.77 lychee-host.wolfskeep.com lychee-host"
 }
 
+# Covers: R-01.9.10
 @test "update mode warns instead of dying with no lease yet" {
     MOCK_ADDR=""
     export MOCK_ADDR
@@ -108,6 +114,7 @@ teardown() {
     assert_file_contains "${WORK}/etc/hosts" "192.168.14.99"
 }
 
+# Covers: R-01.9.10
 @test "update mode adds a missing node line" {
     grep -v "lychee-host.wolfskeep" "${WORK}/etc/hosts" \
         > "${WORK}/etc/hosts.tmp"

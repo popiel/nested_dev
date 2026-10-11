@@ -49,18 +49,21 @@ host_without_storage() {
     install_mock pvesm "mock-pvesm-storage-missing.sh"
 }
 
+# Covers: R-01.11.10, A-01.9
 @test "preflight passes on a host that has the bridge and storage" {
     host_with_prereqs
     run preflight_guest_prerequisites "vmbr0" "local-lvm"
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.11.10, R-01.11.11
 @test "preflight fails when the bridge does not exist" {
     host_without_bridge
     run preflight_guest_prerequisites "vmbr0" "local-lvm"
     [ "$status" -ne 0 ]
 }
 
+# Covers: R-01.11.10
 @test "the missing bridge is named, not just reported as a failure" {
     # An operator who only sees "ERROR: line 149" has nothing to act on. The
     # bridge name and the fact that qm create will reject the guests is the
@@ -70,6 +73,7 @@ host_without_storage() {
     [[ "$output" == *"vmbr0"* ]]
 }
 
+# Covers: R-01.11.10, R-01.11.11
 @test "preflight fails when the storage does not exist" {
     host_without_storage
     run preflight_guest_prerequisites "vmbr0" "local-lvm"
@@ -77,6 +81,7 @@ host_without_storage() {
     [[ "$output" == *"local-lvm"* ]]
 }
 
+# Covers: R-01.11.10
 @test "preflight reports every missing prerequisite, not just the first" {
     # Reporting them one at a time costs a full run each time.
     host_without_bridge
@@ -86,6 +91,7 @@ host_without_storage() {
     [[ "$output" == *"local-lvm"* ]]
 }
 
+# Covers: R-01.11.12
 @test "core allocations are capped at the node's per-VM maximum" {
     # PVE 9 refuses a VM whose vCPU count exceeds the node's per-VM maximum,
     # which tracks the host's visible cores: 6 cores on a 4-core host fails
@@ -97,6 +103,7 @@ host_without_storage() {
     [ "$(printf '%s\n' "$output" | tail -1)" = "4" ]
 }
 
+# Covers: R-01.11.12
 @test "core allocations within the maximum pass through unchanged" {
     CPU_CORES=8
     run cap_vm_cores 6
@@ -122,6 +129,7 @@ mock_sfdisk() {
     chmod +x "${FIXTURES_DIR}/mock-bin/sfdisk"
 }
 
+# Covers: R-01.11.3
 @test "os_esp finds the bootloader signature on a partitioned disk" {
     touch "${BATS_TMPDIR}/disk-101"
     VM_DISK_DEVS="${BATS_TMPDIR}/disk-101" export VM_DISK_DEVS
@@ -131,6 +139,7 @@ mock_sfdisk() {
     unset VM_DISK_DEVS
 }
 
+# Covers: R-01.11.3
 @test "os_esp fails cleanly with no ESP anywhere" {
     touch "${BATS_TMPDIR}/disk-102"
     VM_DISK_DEVS="${BATS_TMPDIR}/disk-102" export VM_DISK_DEVS
@@ -140,6 +149,7 @@ mock_sfdisk() {
     unset VM_DISK_DEVS
 }
 
+# Covers: R-01.11.3
 @test "os_esp fails cleanly with no candidate devices at all" {
     VM_DISK_DEVS="${BATS_TMPDIR}/does-not-exist" export VM_DISK_DEVS
     mock_sfdisk 'start=        2048, size=     2201600, type=C12A4738-F02B-4B93-8FD5-043EF0E62C58, uuid=11111111-2222-3333-4444-555555555555'
@@ -174,6 +184,7 @@ serial_capture_fixture() {
     SERIAL_CAP_PID=""
 }
 
+# Covers: R-01.11.8
 @test "capture starts on first connect and stops cleanly" {
     serial_capture_fixture 0
     start_serial_capture 101 >"${SWORK}/start.out" 2>&1
@@ -189,6 +200,7 @@ serial_capture_fixture() {
     unset PVE_ROOT MOCK_JOURNAL MOCK_COUNT SERIAL_RETRY_MAX SERIAL_RETRY_INTERVAL
 }
 
+# Covers: R-01.11.8
 @test "capture retries a missing socket then connects" {
     serial_capture_fixture 2
     start_serial_capture 101 >"${SWORK}/start.out" 2>&1
@@ -200,6 +212,7 @@ serial_capture_fixture() {
     unset PVE_ROOT MOCK_JOURNAL MOCK_COUNT SERIAL_RETRY_MAX SERIAL_RETRY_INTERVAL
 }
 
+# Covers: R-01.11.8
 @test "capture gives up loudly after the cap, never fatally" {
     serial_capture_fixture 99
     export SERIAL_RETRY_MAX=2
@@ -213,6 +226,7 @@ serial_capture_fixture() {
     unset PVE_ROOT MOCK_JOURNAL MOCK_COUNT SERIAL_RETRY_MAX SERIAL_RETRY_INTERVAL
 }
 
+# Covers: R-01.11.8
 @test "capture without socat warns once and proceeds" {
     SWORK="$(mktemp -d)"
     export PVE_ROOT="$SWORK"
@@ -225,6 +239,7 @@ serial_capture_fixture() {
     unset PVE_ROOT
 }
 
+# Covers: R-01.6.8
 @test "passthrough device strings disable option ROMs" {
     # OVMF executes PCI option ROMs at boot; consumer GOP takes the physical
     # heads and never returns (guest vCPU pegged, zero disk I/O, blank
@@ -234,6 +249,7 @@ serial_capture_fixture() {
     [ "$output" = "host=0000:01:00.0,pcie=1,rombar=0" ]
 }
 
+# Covers: R-01.11.3
 @test "os_esp accepts curtin's EFI GUID alias too" {
     # fdisk aliases both to "EFI System"; curtin writes C12A7328, not the
     # textbook C12A4738 — and OVMF boots it, proven by a booted test-clone.
@@ -250,6 +266,7 @@ serial_capture_fixture() {
 
 # --- Rack input detection (R-02.2.7): fixture by-id trees, never the host's.
 
+# Covers: R-02.2.7
 @test "rack keyboard detection prefers the main interface" {
     # A USB keyboard exposes its typing interface and a media-keys interface;
     # evdev must take the former (observed live: Microsoft 600 main + if01).
@@ -263,6 +280,7 @@ serial_capture_fixture() {
     rm -rf "$d"
 }
 
+# Covers: R-02.2.7
 @test "rack keyboard detection falls back to a secondary interface" {
     # Media-keys-only hardware still types; a fallback beats VNC-only.
     local d
@@ -274,6 +292,7 @@ serial_capture_fixture() {
     rm -rf "$d"
 }
 
+# Covers: R-02.2.7
 @test "rack mouse detection takes the evdev node, not the joint" {
     # The legacy -mouse joint is a mousedev aggregate, not an evdev source
     # input-linux can consume.
@@ -287,6 +306,7 @@ serial_capture_fixture() {
     rm -rf "$d"
 }
 
+# Covers: R-02.2.7
 @test "rack input detection degrades on headless hosts" {
     # No by-id tree (absent dir) or no input links (empty dir) keeps VNC-only
     # input and never fails provisioning.

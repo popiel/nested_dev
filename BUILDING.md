@@ -79,7 +79,7 @@ No other files need editing — all build scripts and first-boot scripts
 source this shared config.
 
 The first dev VM (`dev-nested` for working on this repo) is created via
-`devctl add nested` from the desktop after provisioning completes
+`devctl create nested` from the desktop after provisioning completes
 ([Spec 08](specs/08-nested-dev-repo-vm.md)).
 
 ### 3. Generate password hashes
@@ -343,7 +343,7 @@ output/
 | Guest VMs not created | Check `/var/log/pve-firstboot.log`; ensure host has internet for GitHub fetches |
 | Desktop/LLM created but not running | Run `qm start <vmid>` manually; check serial console via `qm terminal <vmid>` |
 | Dev template not converted to template | Check provisioning gate in `/var/log/pve-firstboot.log`; manually: `qm guest exec 102 -- cloud-init clean` + `qm shutdown 102` + `qm template 102` |
-| Dev template exists but can't start | Expected — it's a PVE template. Use `devctl add <project>` to clone it |
+| Dev template exists but can't start | Expected — it's a PVE template. Use `devctl create <project>` to clone it |
 | Dev VM not created by devctl | Check `/var/log/nested-dev-vmctl.log` on host; verify `devctl list` shows template 102 |
 | Guest first-boot stuck | Check `/var/log/desktop-firstboot.log` (or llm/dev variant); ensure host MASQUERADE is working |
 | PVE validation error on answer file | Ensure `keys/root-password-hash` exists; the answer requires exactly one of `root-password` or `root-password-hashed` |

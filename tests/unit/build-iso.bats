@@ -16,34 +16,41 @@ teardown() {
     return 0
 }
 
+# Covers: R-00.1.1
 @test "ubuntu-release.conf sets UBUNTU_VERSION" {
     [ "$UBUNTU_VERSION" = "26.04" ]
 }
 
+# Covers: R-00.1.1
 @test "ubuntu-release.conf sets UBUNTU_BASE_URL" {
     [ "$UBUNTU_BASE_URL" = "https://releases.ubuntu.com/26.04" ]
 }
 
+# Covers: R-01.12.4, R-05.6.2
 @test "sed_escape escapes backslash" {
     run sed_escape 'foo\bar'
     [ "$output" = 'foo\\bar' ]
 }
 
+# Covers: R-01.12.4, R-05.6.2
 @test "sed_escape escapes dollar signs" {
     run sed_escape 'abc$123'
     [ "$output" = 'abc\$123' ]
 }
 
+# Covers: R-01.12.4, R-05.6.2
 @test "sed_escape escapes pipe characters" {
     run sed_escape 'foo|bar'
     [ "$output" = 'foo\|bar' ]
 }
 
+# Covers: R-01.12.4, R-05.6.2
 @test "sed_escape escapes ampersand" {
     run sed_escape 'foo&bar'
     [ "$output" = 'foo\&bar' ]
 }
 
+# Covers: R-01.12.4, R-05.6.2, A-01.18
 @test "sed_escape handles yescrypt hash" {
     local hash='$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW.gJAqoB0k7emCAu.0N4o.bCemMC'
     run sed_escape "$hash"
@@ -51,6 +58,7 @@ teardown() {
     assert_contains "$output" '\$6Y5z'
 }
 
+# Covers: R-01.4.1
 @test "build-iso no longer auto-detects a target disk from the build machine" {
     # The ISO is built on one machine and installed on another. A /dev probe
     # here only ever sees the *builder's* disks, and that name then gets baked
@@ -60,12 +68,14 @@ teardown() {
     assert_not_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" '/sys/block'
 }
 
+# Covers: R-01.4.1, R-05.1.2
 @test "target disk preference comes from personalization, not a hardcoded default" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" 'validate_target_disks()'
     assert_file_contains "${PROJECT_ROOT}/provision/personalization.sh" 'PERSONALIZATION_TARGET_DISKS='
     assert_file_contains "${PROJECT_ROOT}/provision/host/answer-host.toml" 'disk-list = [__TARGET_DISKS__]'
 }
 
+# Covers: R-09.3.6
 @test "no function in build-iso.sh is defined but never called" {
     # Replaces three "function exists" greps. Existence proves nothing; this
     # catches the failure those tests missed in both directions — a call to a
@@ -92,12 +102,14 @@ teardown() {
 # MSYS rewrites POSIX-looking args passed to native binaries like docker.exe,
 # which silently breaks every bind mount. These lock in the opt-out.
 
+# Covers: R-08.7.6
 @test "is_msys is false on a normal Linux shell" {
     unset MSYSTEM
     run is_msys
     [ "$status" -ne 0 ]
 }
 
+# Covers: R-08.7.6
 @test "is_msys is true when MSYSTEM is set and cygpath exists" {
     setup_mock_path
     create_mock "cygpath" 'true'
@@ -106,6 +118,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-08.7.6
 @test "is_msys is false when MSYSTEM is set but cygpath is missing" {
     # Empty PATH guarantees `command -v cygpath` fails on any platform,
     # including hosts that genuinely have cygpath (Git Bash).
@@ -117,12 +130,14 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
+# Covers: R-08.7.6
 @test "host_path passes the path through unchanged off MSYS" {
     unset MSYSTEM
     run host_path "/c/Users/someone/output/iso"
     [ "$output" = "/c/Users/someone/output/iso" ]
 }
 
+# Covers: R-08.7.6
 @test "host_path converts via cygpath -m on MSYS" {
     setup_mock_path
     cat > "${FIXTURES_DIR}/mock-bin/cygpath" <<'SCRIPT'
@@ -137,6 +152,7 @@ SCRIPT
     [ "$output" = "C:/converted/iso" ]
 }
 
+# Covers: R-08.7.6
 @test "docker bind mounts are built from host_path, not raw MSYS paths" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '-v "$(host_path "$ISO_DIR"):/iso:ro"'
@@ -146,6 +162,7 @@ SCRIPT
         '-v "$(host_path "$OUTPUT_DIR"):/output"'
 }
 
+# Covers: R-08.7.6
 @test "no bare 'docker run' remains — all calls go through docker_noconv" {
     run grep -nE '^[[:space:]]*docker (run|build|image)' \
         "${PROJECT_ROOT}/provision/host/build-iso.sh"
@@ -156,6 +173,7 @@ SCRIPT
 # The container assistant can exit 0 after printing its own errors, so the
 # presence of the ISO is the only trustworthy success signal.
 
+# Covers: R-00.8.3, R-09.3.1
 @test "sha256_of returns the digest of a real file" {
     local f="${BATS_TMPDIR}/hashme"
     printf 'nested_dev\n' > "$f"
@@ -164,12 +182,14 @@ SCRIPT
     [ "$output" = "$(sha256sum "$f" | awk '{print $1}')" ]
 }
 
+# Covers: R-00.8.3
 @test "sha256_of fails on a missing file" {
     run sha256_of "${BATS_TMPDIR}/definitely-absent.iso"
     [ "$status" -ne 0 ]
     assert_contains "$output" "not found"
 }
 
+# Covers: R-00.8.3
 @test "sha256_of fails on an empty file" {
     local f="${BATS_TMPDIR}/empty.iso"
     : > "$f"
@@ -178,6 +198,7 @@ SCRIPT
     assert_contains "$output" "empty"
 }
 
+# Covers: R-00.8.3, R-01.9.8, A-01.16
 @test "write_manifest records the resolved REF SHA" {
     local m="${BATS_TMPDIR}/MANIFEST"
     : > "$m"
@@ -192,6 +213,7 @@ SCRIPT
     assert_not_contains "$output" "unknown"
 }
 
+# Covers: R-01.2.1, A-01.4
 @test "spec 01 forbids the late-commands section PVE does not support" {
     # The spec previously prescribed a section the PVE autoinstall schema does
     # not accept, which is how an invalid answer file survived review.
@@ -217,6 +239,7 @@ SCRIPT
     assert_file_contains "$spec" 'A-01.4'
 }
 
+# Covers: R-00.8.3, R-08.7.4
 @test "write_manifest heredoc performs no artifact-dependent substitution" {
     # Every build fact must arrive pre-computed as an argument. If the heredoc
     # called sha256sum/basename itself, a failed build could still write a
@@ -229,6 +252,7 @@ SCRIPT
     assert_not_contains "$output" 'sha256_of'
 }
 
+# Covers: R-08.7.3, A-08.10
 @test "build verifies the ISO before reporting success" {
     local src
     src=$(cat "${PROJECT_ROOT}/provision/host/build-iso.sh")
@@ -241,11 +265,13 @@ SCRIPT
     [ "$check_line" -lt "$manifest_line" ]
 }
 
+# Covers: R-00.8.3
 @test "build-iso.sh no longer hashes AUTO_ISO inline" {
     assert_file_not_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         'sha256sum "\$AUTO_ISO"'
 }
 
+# Covers: R-05.8.7, R-00.8.3
 @test "build-iso.sh no longer falls back to an unset REF_SHA" {
     # The old manifest printed ${REF_SHA:-unknown} while REF_SHA was never
     # assigned, so every build recorded "unknown" and looked unpinned.
@@ -255,6 +281,7 @@ SCRIPT
         'resolve_ref_to_sha'
 }
 
+# Covers: R-05.8.3, I-05.5
 @test "resolve_ref_to_sha is available from personalization.sh" {
     source "${PROJECT_ROOT}/provision/personalization.sh"
     declare -F resolve_ref_to_sha >/dev/null
@@ -264,21 +291,25 @@ SCRIPT
 # proxmox-auto-install-assistant exits 0 even on a hard parse error, so its
 # output has to be inspected.
 
+# Covers: R-01.12.6, R-09.3.3
 @test "assistant_reports_error detects a leading Error: line" {
     run assistant_reports_error 'Error parsing answer file: TOML parse error'
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.12.6, R-09.3.3
 @test "assistant_reports_error detects the summary error line" {
     run assistant_reports_error 'Error: Found issues in the answer file.'
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.12.6
 @test "assistant_reports_error is quiet on success output" {
     run assistant_reports_error 'Checking provided answer file...'
     [ "$status" -ne 0 ]
 }
 
+# Covers: R-01.12.6, R-08.7.3, R-09.3.3, A-08.10
 @test "run_assistant_checked dies when the command reports an error but exits 0" {
     # The exact failure mode: exit status 0, message on stdout.
     run run_assistant_checked "schema check" bash -c 'echo "Error: boom"; exit 0'
@@ -286,18 +317,21 @@ SCRIPT
     assert_contains "$output" "schema check"
 }
 
+# Covers: R-01.12.6, A-08.10
 @test "run_assistant_checked dies on a non-zero status" {
     run run_assistant_checked "schema check" bash -c 'exit 3'
     [ "$status" -ne 0 ]
     assert_contains "$output" "exit 3"
 }
 
+# Covers: R-01.12.6
 @test "run_assistant_checked passes through clean output" {
     run run_assistant_checked "schema check" bash -c 'echo "all good"'
     [ "$status" -eq 0 ]
     assert_contains "$output" "all good"
 }
 
+# Covers: R-01.12.6
 @test "run_assistant_checked is not used for prepare-iso" {
     # prepare-iso legitimately prints progress that may contain the word
     # "error"; its success signal is the ISO itself, checked via sha256_of.
@@ -325,6 +359,7 @@ setup_personalization() {
     PERSONALIZATION_HOME="/home/testuser"
 }
 
+# Covers: R-01.12.2
 @test "render_template writes to the destination argument" {
     # Regression: the renderer once appended to $OUT instead of honouring the
     # destination it was handed, so every caller's output went missing. The
@@ -337,6 +372,7 @@ setup_personalization() {
     [ -f "$out" ]
 }
 
+# Covers: R-01.12.3, R-05.6.2, A-05.13
 @test "render_template substitutes every placeholder and leaves none behind" {
     # Runs over the answer file and the host bootstrap together. The bootstrap
     # was previously untested for leftovers: the old tests/unit/template.bats
@@ -362,6 +398,7 @@ setup_personalization() {
     done
 }
 
+# Covers: R-01.12.4, A-01.18
 @test "render_template escapes a yescrypt hash so sed survives it" {
     # An unescaped $y$j9T$... would expand to nothing and silently blank the
     # root password, producing an install with no working credentials.
@@ -374,6 +411,7 @@ setup_personalization() {
     assert_contains "$output" '$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW'
 }
 
+# Covers: R-05.1.4, A-05.4
 @test "render_template warns-by-placeholder when personalization is not sourced" {
     # The answer file carries only the email (plus the already-passed root
     # hash, key and ref); the rest of the identity rides the bootstrap, because
@@ -389,6 +427,7 @@ setup_personalization() {
     assert_not_contains "$output" '__PERSONALIZATION_USERNAME__'
 }
 
+# Covers: R-05.1.4, A-05.4
 @test "the bootstrap is where an unsourced identity shows up as a placeholder" {
     # The account name, UID, GID, home and shell have no answer-file field to
     # live in, so the bootstrap is the only template that can show a
@@ -416,6 +455,7 @@ setup_personalization() {
 # positionals in render_template would compile, validate and install, and hand
 # out a host whose root password is the account's login password (or worse).
 
+# Covers: R-05.4.3, R-08.4.2, I-05.2, A-05.8
 @test "the answer file receives the root hash and the bootstrap the login hash" {
     local answer="${BATS_TMPDIR}/split-answer.toml"
     local boot="${BATS_TMPDIR}/split-firstboot.sh"
@@ -434,6 +474,7 @@ setup_personalization() {
     assert_not_contains "$output" '$y$j9T$ROOTONLY'
 }
 
+# Covers: R-01.12.4, A-01.18
 @test "render_template escapes the personalization hash too" {
     # Same trap as the root hash: an unescaped yescrypt string expands to
     # nothing, which would leave the host account without a working password.
@@ -446,6 +487,7 @@ setup_personalization() {
     assert_contains "$output" '$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW'
 }
 
+# Covers: R-05.1.2, R-05.2.1
 @test "render_template substitutes the personalization identity" {
     # The bootstrap creates the host account from these, and the first-boot
     # hook runs before provision/personalization.sh exists on the host.
@@ -460,6 +502,7 @@ setup_personalization() {
     assert_contains "$output" '/home/testuser'
 }
 
+# Covers: R-05.2.4, R-01.3.1c
 @test "render_template injects the operator key for the account's authorized_keys" {
     local boot="${BATS_TMPDIR}/pubkey.sh"
     setup_personalization
@@ -476,6 +519,7 @@ setup_personalization() {
 # list is a preference order AND a safety boundary: anything omitted can never
 # be selected or wiped. These lock both properties down.
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks normalizes a list of quoted device names" {
     # Also the fail-safe guard: the build must not widen the list to a fallback,
     # so the output must be exactly the one entry that was asked for and no
@@ -488,18 +532,21 @@ setup_personalization() {
     [ "$tokens" -eq 1 ]
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks tolerates hand-edited whitespace" {
     run validate_target_disks ' "nvme0n1" '
     [ "$status" -eq 0 ]
     [ "$output" = '"nvme0n1"' ]
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks is idempotent when already bracketed" {
     run validate_target_disks '["nvme0n1"]'
     [ "$status" -eq 0 ]
     [ "$output" = '"nvme0n1"' ]
 }
 
+# Covers: R-01.4.2, R-01.4.5, A-01.5
 @test "validate_target_disks rejects more than one disk for ext4" {
     # PVE's schema allows exactly one disk for ext4/xfs; validate-answer fails
     # with "make sure to define only one disk for ext4 and xfs". Catch it here
@@ -512,18 +559,21 @@ setup_personalization() {
     assert_contains "$output" "Pin the single install target"
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks rejects an unset preference" {
     run validate_target_disks ''
     [ "$status" -ne 0 ]
     assert_contains "$output" "PERSONALIZATION_TARGET_DISKS is unset"
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks rejects an empty list" {
     run validate_target_disks '[]'
     [ "$status" -ne 0 ]
     assert_contains "$output" "is empty"
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks rejects a /dev path" {
     # PVE resolves these against /dev itself; a path silently never matches.
     run validate_target_disks '"/dev/nvme0n1"'
@@ -531,6 +581,7 @@ setup_personalization() {
     assert_contains "$output" "bare device name"
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks rejects partition names" {
     # A partition is a silent mis-target rather than an obvious error.
     run validate_target_disks '"nvme0n1p1"'
@@ -541,18 +592,21 @@ setup_personalization() {
     assert_contains "$output" "looks like a partition"
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks rejects an unquoted entry" {
     run validate_target_disks 'nvme0n1'
     [ "$status" -ne 0 ]
     assert_contains "$output" "must be quoted"
 }
 
+# Covers: R-01.4.5, A-01.5
 @test "validate_target_disks rejects an empty entry" {
     run validate_target_disks '"nvme0n1", '
     [ "$status" -ne 0 ]
     assert_contains "$output" "empty entry"
 }
 
+# Covers: R-01.4.2, A-01.5
 @test "render_template emits disk-list as a verbatim TOML array" {
     local out="${BATS_TMPDIR}/disks.toml"
     setup_personalization
@@ -562,6 +616,7 @@ setup_personalization() {
     [ "$output" = 'disk-list = ["nvme0n1"]' ]
 }
 
+# Covers: R-01.2, A-01.4, A-01.5
 @test "answer-host.toml renders to valid TOML with a one-element disk-list" {
     # The template is only valid TOML once rendered, so assert the rendered form.
     local out="${BATS_TMPDIR}/disks-valid.toml"
@@ -572,6 +627,7 @@ setup_personalization() {
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.3, R-01.5.4
 @test "generate_first_boot_script renders the bootstrap and marks it executable" {
     local out="${BATS_TMPDIR}/first-boot.sh"
     rm -f "$out"
@@ -585,6 +641,7 @@ setup_personalization() {
     assert_contains "$output" 'main'
 }
 
+# Covers: R-01.2.1, A-01.4
 @test "answer-host.toml has no late-commands section" {
     # PVE's autoinstall schema has no such section; it was silently invalid and
     # only surfaced once the file was actually readable by the assistant.
@@ -592,6 +649,7 @@ setup_personalization() {
         'late-commands'
 }
 
+# Covers: R-01.2.6, A-01.4
 @test "answer-host.toml first-boot uses from-iso, not from-url" {
     # from-url would require the password hash to be reachable over the
     # network; the bootstrap is embedded in the ISO instead.
@@ -601,6 +659,7 @@ setup_personalization() {
         'from-url'
 }
 
+# Covers: R-01.12.5
 @test "prepare-iso is given a writable --tmp" {
     # The assistant otherwise stages in the source ISO's directory, which is
     # mounted read-only at /iso and fails with "Read-only file system".
@@ -610,6 +669,7 @@ setup_personalization() {
         '--tmp "$tmp_dir"'
 }
 
+# Covers: R-01.2.5, R-01.5.4
 @test "first-boot bootstrap is passed to prepare-iso in both carriers" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '--on-first-boot "$first_boot"'

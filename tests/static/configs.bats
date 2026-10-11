@@ -3,6 +3,7 @@
 
 load '../lib/helpers'
 
+# Covers: R-09.2.3, R-06.2.1
 @test "all guest user-data files parse as YAML" {
     require_command python3
     local ud
@@ -16,6 +17,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-09.2.3, R-01.2, A-01.4
 @test "rendered answer-host.toml parses as TOML" {
     require_command python3
     # The template itself is not valid TOML: the disk-list placeholder is an
@@ -32,12 +34,14 @@ load '../lib/helpers'
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.9.1, R-09.2.3, A-01.10
 @test "dnsmasq.conf passes dnsmasq --test" {
     require_command dnsmasq
     run dnsmasq --test -C "${PROJECT_ROOT}/provision/network/dnsmasq.conf"
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-01.9.1
 @test "dnsmasq listens where the host resolver points" {
     # frag/90 writes nameserver 127.0.0.1 into /etc/resolv.conf (pinned by the
     # e2e), so a dnsmasq bound to vmbr0 alone leaves every guest resolving
@@ -53,6 +57,7 @@ load '../lib/helpers'
     assert_contains "$heredoc" 'interface=lo'
 }
 
+# Covers: R-01.9.2
 @test "dhcp advertises the fleet search domain" {
     # Bare guest names are single-label, which resolvers never send to
     # unicast DNS — without option 119 only FQDNs resolve. Same two sources
@@ -66,6 +71,7 @@ load '../lib/helpers'
     assert_contains "$heredoc" 'dhcp-option=option:domain-search,wolfskeep.com'
 }
 
+# Covers: R-01.9.3
 @test "public upstreams are a fallback tier, not the policy" {
     # The lease-provided resolver is primary; the public servers exist only
     # for a broken LAN resolver (observed: TCP/53 answered, UDP/53
@@ -86,6 +92,7 @@ load '../lib/helpers'
     assert_contains "$heredoc" 'server=1.1.1.1'
 }
 
+# Covers: R-01.10.1, R-09.2.3
 @test "iptables-forwarding.conf passes iptables-restore --test" {
     require_command iptables-restore
     # Probe capability, not identity: --test may need kernel facilities this
@@ -104,6 +111,7 @@ load '../lib/helpers'
     [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
 }
 
+# Covers: R-01.10.2, R-01.10.4
 @test "every DNAT has a filter admission for its rewritten tuple" {
     # NAT rewrites before the filter runs, so a DNAT is only as good as the
     # rule admitting the REWRITTEN destination — never the original port.
@@ -127,6 +135,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-01.10.2
 @test "no DNAT targets the host itself" {
     # Host services are served by listening (sshd on 2222), never by
     # DNAT-to-self: the filter sees the rewritten port, so the admitting rule

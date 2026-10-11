@@ -65,6 +65,7 @@ EOF
     printf '%s\n' "${WORK}/new.tar.gz"
 }
 
+# Covers: R-00.8.2, R-05.8.2, R-01.5.5
 @test "a refresh swaps the tree, preserves keys, runs the provisioner, and re-completes" {
     local tarball
     tarball="$(make_tarball x 1 1)"
@@ -88,6 +89,7 @@ EOF
     [[ "$output" == *"complete"* ]] || { echo "no completion summary" >&2; return 1; }
 }
 
+# Covers: R-00.8.2, R-01.5.5
 @test "a failed fetch leaves the live tree untouched and still marked complete" {
     REFRESH_TARBALL_SRC="${WORK}/does-not-exist.tar.gz"
     export REFRESH_TARBALL_SRC
@@ -98,6 +100,7 @@ EOF
     [ ! -e "${LIVE}.old" ] || { echo ".old created with nothing to keep" >&2; return 1; }
 }
 
+# Covers: R-00.8.2, R-01.5.5
 @test "an archive without a provisioner is rejected before the swap" {
     local tarball
     tarball="$(make_tarball x 0 1)"
@@ -110,6 +113,7 @@ EOF
     [[ "$output" == *"provision-host.sh"* ]] || { echo "failure does not name the missing file" >&2; return 1; }
 }
 
+# Covers: R-00.8.2, R-05.9.2
 @test "an archive without the keys pubkey is rejected before the swap" {
     # frag/30 aborts on the missing pubkey after everything else already
     # succeeded, so the archive must prove it carries the key first.
@@ -123,6 +127,7 @@ EOF
     [ -f "${WORK}/var/lib/pve-firstboot/complete" ] || { echo "marker removed for a rejected archive" >&2; return 1; }
 }
 
+# Covers: R-01.5.3, R-01.5.5
 @test "a failing provisioner propagates its failure and leaves the run unlocked for retry" {
     local tree="${WORK}/faketree-xyz"
     rm -rf "$tree"
@@ -141,6 +146,7 @@ EOF
     }
 }
 
+# Covers: R-01.5.5, A-01.17
 @test "the real provisioner runs after unlock and re-writes the marker" {
     # The stub proves the plumbing; this proves the handoff to production
     # code. With the marker present and no unlock, the real provisioner would

@@ -88,42 +88,45 @@ Proxmox web UI, or a serial/IPMI console.
 
 * **R-00.2.1** The host takes a DHCP lease on the LAN. VMs sit on a private
   `vmbr0` and are **not** addressable from the LAN.
-* **R-00.2.2** The host provides DHCP and DNS for `vmbr0`, with a fixed lease
-  per VM. Fixed addresses are required because the firewall policy, the host
-  trust pin and the SSH config all reference a VM by address. The firewall
-  admits that service traffic (DHCP/DNS to the host on `vmbr0`) — a service
-  the firewall blocks is a service that does not exist, whatever the lease
-  file says.
+* **R-00.2.2** Every VM has a stable address and name that the firewall
+  policy, the host trust pin and the SSH config can reference, and the VM
+  services (address assignment, name resolution) are reachable from the VMs.
+  A service the host blocks is a service that does not exist, whatever the
+  lease file says.
+  Current mechanism: host-provided DHCP/DNS on `vmbr0` with a fixed lease
+  per VM.
 * **R-00.2.3** VM egress is NAT'd to the LAN. There is no bridged path from a
   VM onto the LAN segment.
 * **R-00.2.4** Host management from the LAN is limited to SSH (port 2222) and
   the web UI (port 8006). Host SSH from inside `vmbr0` is accepted from the
   desktop only.
-* **R-00.2.5** The host itself reaches only HTTP, HTTPS, DNS and NTP. A
+* **R-00.2.5** The host itself reaches only HTTP, HTTPS, DNS and NTP (plus
+  rate-limited ICMP echo for diagnostics; see Spec 01 §R-01.10 for the exact
+  ruleset). A
   hypervisor with unrestricted egress is a hypervisor that can be used as a
   pivot into the LAN it was meant to be shielded from. HTTP stays in the
   list (rather than HTTPS-only) because the Debian, Ubuntu and Proxmox
   archives are HTTP-only — without it the host cannot update or install
   anything past lockdown.
-* **R-00.2.6** Guest egress is governed by the FORWARD chain, per-guest:
+* **R-00.2.6** Guest egress is restricted per guest and enforced by the host:
 
   | Guest | Egress | Rationale |
   |---|---|---|
   | vm 100 desktop | unrestricted | Bastion; browses and fetches |
   | vm 101 llm | 53/80/443 | Installs the driver/CUDA/Docker stack and pulls images and models on first boot |
-  | vm 102 template | 53/80/443 while it provisions | Builds the toolchain its clones run (GitHub, Ubuntu archive, container images); never auto-starts after conversion |
-  | vm 103 `dev-nested` | 53/80/443 | The trusted builder: fetches from GitHub, the Ubuntu archive and the Proxmox ISO mirror |
-  | vm 104–249 dev | none | Toolchain is baked into template 102 and cloned already-provisioned, so a clone never needs the network |
+  | vm 102–249 dev (incl. template + every clone) | 53/80/443 | All dev VMs have equal access: builds fetch from GitHub, the Ubuntu archive, container registries and the Proxmox ISO mirror |
 
-* **R-00.2.7** Output-chain restrictions do not constrain guest traffic. A
+* **R-00.2.7** Host-originated traffic rules do not constrain guest traffic. A
   rule that governs host-originated packets leaves guest egress untouched, so
   a policy that reads "host OUTPUT is restrictive, therefore guests are
   contained" is wrong.
+  Current mechanism: FORWARD vs OUTPUT chains.
 
 ### R-00.3 Storage
 
-* **R-00.3.1** Guest disks live on `local-lvm` thin provisioning. The host root
-  filesystem is `ext4`.
+* **R-00.3.1** Guest disks are thin-provisioned and separate from the host
+  root filesystem. Current mechanism: `local-lvm` thin for guests, `ext4`
+  for the host root.
 * **R-00.3.2** The LLM VM's model volume is a separate disk mounted at
   `/data/models`, not a directory on the OS disk. Models are the largest
   dataset in the fleet and re-downloading them on a rebuild is unacceptable.
@@ -138,11 +141,10 @@ Proxmox web UI, or a serial/IPMI console.
 | 64 GB+ | 2 GB hard cap | 8 GB / 4 cores | 24 GB / 8 cores | 8 GB / 4 cores |
 
 * **R-00.4.1** The host is hard-capped so a guest cannot starve the hypervisor.
-* **R-00.4.2** Guests overcommit via ballooning, ZRAM and disk swap. Total
-  guest allocation exceeds physical RAM by design; the host cap is what keeps
-  that safe.
-* **R-00.4.3** The 16 GB small-host profile is a supported scale-down for the
-  LLM VM's memory figure, not a separate topology.
+* **R-00.4.2** Guests overcommit safely: total guest allocation may exceed
+  physical RAM by design, and the host cap is what keeps that safe.
+  The host always has 32 GB RAM (64 GB+ scales the LLM VM only).
+  Current mechanism: ballooning, ZRAM and disk swap.
 
 ### R-00.5 Guests install from official media; no prebuilt guest images
 
@@ -181,7 +183,9 @@ Proxmox web UI, or a serial/IPMI console.
 * **R-00.8.1** Every provisioning input is pinned to a single release
   reference, set once in `provision/personalization.sh` (Spec 05 §R-05.8).
 * **R-00.8.2** The host install media, the provisioner, and every guest's
-  first-boot fetch all use that same reference. A guest that fetches a
+  first-boot fetch all use that same reference, resolved to a SHA at build
+  time and recorded (Spec 05 §R-05.8). A rebuild defaults to the recorded SHA;
+  per-guest SHAs may diverge afterwards via the refresh scripts. A guest that fetches a
   different tree than the host that created it is not reproducible even though
   both report the same ref.
 * **R-00.8.3** The resolved commit SHA, plus the versions and checksums of
@@ -192,12 +196,13 @@ Proxmox web UI, or a serial/IPMI console.
 
 ### R-00.9 Credential handling
 
+Canonical rules live in Spec 05 §R-05.4 (two hashes, disjoint destinations)
+and §R-05.6 (injected, never committed).
+
 * **R-00.9.1** No real credential is committed. Seeds and templates carry
-  placeholder tokens that the build substitutes (Spec 05 §R-05.6).
+  placeholder tokens that the build substitutes.
 * **R-00.9.2** The install media is the only carrier of a password hash
   between the build workstation and the host. Hashes never transit a URL.
-* **R-00.9.3** The host `root` hash and the operator login hash are separate
-  files with disjoint destinations (Spec 05 §R-05.4).
 
 ## 5. Build order
 
@@ -206,7 +211,7 @@ Proxmox web UI, or a serial/IPMI console.
 3. Provision the host: first-boot provisioner creates vm 100, vm 101 and the
    dev template, converting the template once provisioned (Spec 07).
 4. Desktop first boot installs `devctl` and the control keys (Spec 02).
-5. `devctl add <project>` creates a dev VM; `devctl start` boots it (Spec 07).
+5. `devctl create <project>` creates a dev VM; `devctl start` boots it (Spec 07).
 6. Run acceptance tests against the same reference (Spec 09).
 
 Steps 3 and 4 must both complete before step 5: the desktop is the only

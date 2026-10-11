@@ -46,6 +46,7 @@ run_frag06() {
         /bin/bash "$FRAG06"
 }
 
+# Covers: R-01.3.1a, A-01.2
 @test "the sudo package is installed when absent" {
     run run_frag06
     [ "$status" -eq 0 ]
@@ -54,6 +55,7 @@ run_frag06() {
     [ -x "$MOCKBIN/sudo" ]
 }
 
+# Covers: R-01.3.1a
 @test "an already-installed sudo is left alone" {
     printf '#!/usr/bin/env bash\nexit 0\n' > "$MOCKBIN/sudo"
     chmod +x "$MOCKBIN/sudo"
@@ -66,6 +68,7 @@ run_frag06() {
     }
 }
 
+# Covers: R-01.3.1a
 @test "the sudo group is ensured even when the package was already present" {
     printf '#!/usr/bin/env bash\nexit 0\n' > "$MOCKBIN/sudo"
     chmod +x "$MOCKBIN/sudo"

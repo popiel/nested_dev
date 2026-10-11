@@ -30,11 +30,13 @@ parse() {
     }
 }
 
+# Covers: R-09.7
 @test "timing.sh is syntactically valid" {
     run bash -n "$TIMING"
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-09.7.1, R-09.7.2
 @test "parse records suite, number, status, ms, wall and name" {
     parse 1000 <<'EOF'
 1..1
@@ -45,6 +47,7 @@ EOF
     assert_contains "$output" "unit	1	ok	632	1000	a passing test"
 }
 
+# Covers: R-09.7.1
 @test "parse records a failing test" {
     parse 1000 <<'EOF'
 1..1
@@ -54,6 +57,7 @@ EOF
     assert_contains "$output" "unit	2	not ok	679	1000	a failing test"
 }
 
+# Covers: R-09.7.1, R-09.7.11
 @test "parse records a skipped test and keeps the timing" {
     parse 1000 <<'EOF'
 1..1
@@ -63,6 +67,7 @@ EOF
     assert_contains "$output" "unit	3	skip	941	1000	a skipped test"
 }
 
+# Covers: R-09.7.2
 @test "parse strips the skip reason from the recorded name" {
     parse 1000 <<'EOF'
 1..1
@@ -72,6 +77,7 @@ EOF
     [ "$output" = "something" ]
 }
 
+# Covers: R-09.7.2
 @test "parse keeps a test name that itself contains an in <n>ms substring" {
     parse 1000 <<'EOF'
 1..1
@@ -83,6 +89,7 @@ EOF
     [ "$output" = "628" ]
 }
 
+# Covers: R-09.7.8
 @test "parse tolerates a result line with no timing suffix" {
     parse 1000 <<'EOF'
 1..1
@@ -92,6 +99,7 @@ EOF
     assert_contains "$output" "unit	1	not ok		1000	bats-gather-tests"
 }
 
+# Covers: R-09.7.1
 @test "parse ignores the plan line and bats comment diagnostics" {
     parse 1000 <<'EOF'
 1..2
@@ -104,6 +112,7 @@ EOF
     [ "$output" = "fine" ]
 }
 
+# Covers: R-09.7.5
 @test "parse appends to an existing record rather than truncating" {
     parse 1000 <<'EOF'
 1..1
@@ -116,12 +125,14 @@ EOF
     [ "$(wc -l < "$TIMING_DIR/current.tsv")" -eq 2 ]
 }
 
+# Covers: R-09.7.1
 @test "parse rejects a missing TAP file" {
     run bash "$TIMING" parse "unit" "${BATS_TEST_TMPDIR}/does-not-exist.tap" 1000
     [ "$status" -ne 0 ]
     assert_contains "$output" "no such TAP file"
 }
 
+# Covers: R-09.7.5
 @test "finalize rotates current into last and starts a fresh current" {
     parse 1000 <<'EOF'
 1..1
@@ -135,6 +146,7 @@ EOF
     [ "$output" = "first" ]
 }
 
+# Covers: R-09.7.5
 @test "finalize records a run summary row" {
     parse 5000 <<'EOF'
 1..2
@@ -148,6 +160,7 @@ EOF
     assert_contains "$output" "	2	0	0	5000	300	"
 }
 
+# Covers: R-09.7.5, R-09.1.10
 @test "finalize records a non-zero exit code for a failed run" {
     parse 1000 <<'EOF'
 1..1
@@ -159,6 +172,7 @@ EOF
     assert_contains "$output" "	1	"
 }
 
+# Covers: R-09.7.3, A-09.11, A-09.12
 @test "report splits wall time from time inside test bodies" {
     parse 10000 <<'EOF'
 1..2
@@ -174,6 +188,7 @@ EOF
     assert_contains "$output" "97%"
 }
 
+# Covers: R-09.7.4, A-09.11
 @test "report breaks the harness overhead down per suite" {
     parse 4000 <<'EOF'
 1..1
@@ -185,6 +200,7 @@ EOF
     assert_contains "$output" "harness"
 }
 
+# Covers: R-09.7, A-09.11
 @test "slowest returns tests ordered by time descending" {
     parse 9000 <<'EOF'
 1..3
@@ -201,6 +217,7 @@ EOF
     [ "$(printf '%s\n' "$output" | cut -f6 | tr '\n' ' ')" = "slow middling quick " ]
 }
 
+# Covers: R-09.7
 @test "slowest respects the requested limit" {
     parse 9000 <<'EOF'
 1..3
@@ -214,6 +231,7 @@ EOF
     [ "$(printf '%s\n' "$output" | cut -f6 | tr '\n' ' ')" = "c b " ]
 }
 
+# Covers: R-09.7.8
 @test "slowest excludes tests that were never measured" {
     parse 4000 <<'EOF'
 1..2
@@ -226,6 +244,7 @@ EOF
     assert_not_contains "$output" "unmeasured"
 }
 
+# Covers: R-09.7, A-09.11
 @test "report prints the slowest table with the ms and the test name" {
     parse 9000 <<'EOF'
 1..2
@@ -241,6 +260,7 @@ EOF
     assert_not_contains "$output" "ok	unit"
 }
 
+# Covers: R-09.7.5, A-09.13
 @test "report flags a test that got slower than the previous run" {
     parse 1000 <<'EOF'
 1..1
@@ -257,6 +277,7 @@ EOF
     assert_contains "$output" "+4900%"
 }
 
+# Covers: R-09.7.6, A-09.13
 @test "report does not flag jitter on a test that is already fast" {
     # A 9ms -> 16ms change is +70%, but it is noise. Without an absolute floor
     # every run would flag a handful of sub-20ms tests and the regression list
@@ -275,6 +296,7 @@ EOF
     assert_contains "$output" "none"
 }
 
+# Covers: R-09.7.6, A-09.13
 @test "report still flags a large absolute slowdown on a fast test" {
     # 40ms -> 900ms clears the default 100ms floor even though the base is
     # small, so a genuinely new bottleneck is not hidden.
@@ -292,6 +314,7 @@ EOF
     assert_contains "$output" "wasfast"
 }
 
+# Covers: R-09.7.6
 @test "the regression minimum can be overridden" {
     parse 1000 <<'EOF'
 1..1
@@ -311,6 +334,7 @@ EOF
     assert_contains "$output" "none"
 }
 
+# Covers: R-09.7.6
 @test "report prints both regression thresholds in its heading" {
     parse 1000 <<'EOF'
 1..1
@@ -326,6 +350,7 @@ EOF
     assert_contains "$output" ">= 75% and >= 250ms slower"
 }
 
+# Covers: R-09.7.5
 @test "report does not flag a test that got faster" {
     parse 1000 <<'EOF'
 1..1
@@ -341,6 +366,7 @@ EOF
     assert_contains "$output" "none"
 }
 
+# Covers: R-09.7.2, R-09.7.5
 @test "report compares by name even when the test number changes" {
     parse 1000 <<'EOF'
 1..2
@@ -358,6 +384,7 @@ EOF
     assert_contains "$output" "moved"
 }
 
+# Covers: R-09.7.7
 @test "report skips comparison when the previous run covered fewer tests" {
     parse 1000 <<'EOF'
 1..1
@@ -375,6 +402,7 @@ EOF
     assert_contains "$output" "no comparison"
 }
 
+# Covers: R-09.7.7
 @test "report does not crash when there is no previous run" {
     parse 1000 <<'EOF'
 1..1
@@ -386,6 +414,7 @@ EOF
     assert_not_contains "$output" "changes vs previous run"
 }
 
+# Covers: R-09.7.8
 @test "report handles a run with no measured tests" {
     parse 1000 <<'EOF'
 1..1
@@ -397,6 +426,7 @@ EOF
     assert_contains "$output" "no measured tests"
 }
 
+# Covers: R-09.7.5
 @test "history lists recorded runs newest first" {
     parse 1000 <<'EOF'
 1..1
@@ -420,29 +450,34 @@ EOF
     [ "$newer" -lt "$older" ]
 }
 
+# Covers: R-09.7.5
 @test "history is empty-safe when nothing has been recorded" {
     run bash "$TIMING" history
     [ "$status" -eq 0 ]
     assert_contains "$output" "no run history"
 }
 
+# Covers: R-09.1
 @test "unknown subcommand fails with a usage hint" {
     run bash "$TIMING" not-a-command
     [ "$status" -ne 0 ]
     assert_contains "$output" "unknown command"
 }
 
+# Covers: R-09.1
 @test "run.sh is syntactically valid" {
     run bash -n "${BATS_TEST_DIRNAME}/../run.sh"
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-09.7.1
 @test "run.sh asks bats for timing on the suite invocation line" {
     # Match invocation lines only: the header comment also mentions the flag.
     run grep -cE '^[[:space:]]*bats -T --formatter tap' "${BATS_TEST_DIRNAME}/../run.sh"
     [ "$output" -eq 1 ]
 }
 
+# Covers: R-09.1b.5, R-09.1.3
 @test "every suite run.sh names exists on disk" {
     # Guards against run.sh referencing a .bats file that was renamed or deleted.
     # Paths in run.sh are relative to the repo root.
@@ -459,6 +494,7 @@ EOF
     }
 }
 
+# Covers: R-09.1b.1, I-09.7, A-09.15
 @test "every suite file in the repo is run by run.sh" {
     # The suite list is built by directory inspection, so this compares the
     # builder's output against the tree rather than a second maintained list
@@ -481,6 +517,7 @@ EOF
     fi
 }
 
+# Covers: R-09.1b.3, A-09.20
 @test "run.sh's suite labels are unique" {
     # Labels key the timing records: two suites sharing a basename across tiers
     # would merge their histories under one name. The builder refuses to run
@@ -494,6 +531,7 @@ EOF
     }
 }
 
+# Covers: R-09.1.10, R-09.1.11, A-09.22
 @test "run.sh reports a suite that cannot run instead of dying" {
     # Regression: a .bats file bats cannot parse produces TAP with no `in Nms`
     # on any line. The in-test pipeline's first grep then matched nothing and
@@ -525,6 +563,7 @@ BATS
     }
 }
 
+# Covers: R-09.1.10, A-09.23
 @test "a suite that exits non-zero without recording a failure is not a pass" {
     # A stub bats that fails before producing any TAP: rc is non-zero, no test
     # was recorded, so a tally that only looks at `not ok` lines reports a
@@ -564,6 +603,7 @@ STUB
     }
 }
 
+# Covers: R-09.1b.4, A-09.2, A-09.21
 @test "every static suite is reachable from --fast" {
     # --fast runs the static tier, selected by directory rather than by a
     # second maintained list. A static suite the fast path skipped would go
@@ -583,6 +623,7 @@ STUB
     }
 }
 
+# Covers: R-09.7.1
 @test "run.sh invokes bats exactly once, inside run_suite" {
     # The dependency check names bats but must not execute it; if a second
     # invocation site ever appears, those suites would bypass the timing record.
@@ -590,6 +631,7 @@ STUB
     [ "$output" -eq 1 ]
 }
 
+# Covers: R-09.1.7, A-09.7
 @test "run.sh prints a machine-readable result block" {
     # tests/run-wsl.sh reads these counts rather than re-deriving them, so a
     # rename here would silently break the wrapper's summary. tests_total is
@@ -601,6 +643,7 @@ STUB
     done
 }
 
+# Covers: R-09.1.8, A-09.17
 @test "run.sh does not report a skipped test as passed" {
     # bats prints `ok 3 # skip reason` for a skip, so grepping '^ok ' counts
     # skipped tests as passed and the tally claims a test ran that never did.
@@ -611,6 +654,7 @@ STUB
     assert_file_contains "$run_sh" "grep -c '^ok .*# skip'"
 }
 
+# Covers: R-09.7.11, A-09.19
 @test "run.sh's per-suite in-test total includes skipped tests" {
     # bats appends the skip reason after the timing:
     #   ok 3 a test in 941ms # skip no shellcheck here
@@ -657,6 +701,7 @@ BATS
     }
 }
 
+# Covers: R-09.1.8, A-09.17, A-09.18
 @test "run.sh's result block counts every test exactly once" {
     # The sum invariant: passed + failed + skipped must equal the total. bats
     # reports a skip as `ok N # skip`, so a tally built from '^ok ' claims a
@@ -695,6 +740,7 @@ BATS
     }
 }
 
+# Covers: R-09.1.9, A-09.18
 @test "run.sh reports the same test total the suite produced" {
     # Cross-check the block against the timing record, which is parsed
     # independently of the counters in run_suite. Two different derivations
@@ -720,6 +766,7 @@ BATS
     }
 }
 
+# Covers: R-09.1.6, A-09.3
 @test "run.sh accepts individual test files as arguments" {
     # The wrapper passes named suites through, so run.sh has to honour them.
     local f="${BATS_TEST_DIRNAME}/../run.sh"
@@ -729,6 +776,7 @@ BATS
     assert_file_contains "$f" 'if [ "${#FILES[@]}" -gt 0 ]; then'
 }
 
+# Covers: R-09.1
 @test "run.sh has a help path listing its usage" {
     run bash "${BATS_TEST_DIRNAME}/../run.sh" --help
     [ "$status" -eq 0 ]
@@ -736,28 +784,33 @@ BATS
     assert_contains "$output" 'tests/unit/gpu-detect.bats'
 }
 
+# Covers: R-09.1
 @test "run.sh rejects a test file that does not exist" {
     run bash "${BATS_TEST_DIRNAME}/../run.sh" "tests/unit/definitely-absent.bats"
     [ "$status" -ne 0 ]
     assert_contains "$output" "no such test file"
 }
 
+# Covers: R-09.1
 @test "run.sh rejects an unknown option" {
     run bash "${BATS_TEST_DIRNAME}/../run.sh" --not-a-real-option
     [ "$status" -ne 0 ]
     assert_contains "$output" "unknown option"
 }
 
+# Covers: R-09.1a
 @test "the WSL wrapper is syntactically valid" {
     run bash -n "${BATS_TEST_DIRNAME}/../run-wsl.sh"
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-09.1a.2, A-09.8
 @test "the WSL setup script is syntactically valid" {
     run bash -n "${BATS_TEST_DIRNAME}/../wsl-setup.sh"
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-09.1a.4, A-09.10
 @test "the WSL wrapper documents how to run the whole suite and named files" {
     local f="${BATS_TEST_DIRNAME}/../run-wsl.sh"
     assert_file_contains "$f" 'tests/run-wsl.sh                                  # whole suite'
@@ -765,6 +818,7 @@ BATS
     assert_file_contains "$f" 'bash tests/run-wsl.sh --setup'
 }
 
+# Covers: R-09.1a.5
 @test "the WSL wrapper translates paths with forward slashes" {
     # wsl.exe passes the path through the Windows command line, where
     # backslashes are eaten as escapes: `C:\Users\x` arrives as `C:Usersx`.
@@ -775,6 +829,7 @@ BATS
     [ "$output" -eq 0 ]
 }
 
+# Covers: R-09.1a.2
 @test "the WSL wrapper puts the user bin directory on PATH" {
     # A non-interactive, non-login shell does not read ~/.bashrc, so the wrapper
     # has to pass the extended PATH explicitly or bats and shellcheck vanish.
@@ -782,12 +837,14 @@ BATS
     assert_file_contains "${BATS_TEST_DIRNAME}/../run-wsl.sh" 'env PATH="$run_path"'
 }
 
+# Covers: R-09.1a.3, A-09.9
 @test "the WSL wrapper refuses Windows tools reached over the drive mount" {
     local f="${BATS_TEST_DIRNAME}/../run-wsl.sh"
     assert_file_contains "$f" 'windows-tool:'
     assert_file_contains "$f" 'run-wsl.sh --setup'
 }
 
+# Covers: R-09.1a.1
 @test "AGENTS.md tells agents to run the suite through the WSL wrapper" {
     local f="${BATS_TEST_DIRNAME}/../../AGENTS.md"
     [ -f "$f" ] || {
@@ -799,6 +856,7 @@ BATS
     assert_file_contains "$f" 'timing.sh'
 }
 
+# Covers: Spec 09 §4 (no test counts in docs)
 @test "the docs declare no test counts" {
     # A count of the existing tests is a claim that goes stale on the very next
     # commit that adds one, and a stale count in documentation reads as truth.
@@ -813,6 +871,7 @@ BATS
     done
 }
 
+# Covers: R-09.1a.1
 @test "the docs compare MSYS and WSL by ratio, not by measurement" {
     # Wall-clock figures for this repository on one workstation are not
     # transferable: they depend on the machine, the filesystem and the suite's
@@ -826,11 +885,13 @@ BATS
     assert_file_contains "$f" 'orders of magnitude'
 }
 
+# Covers: R-09.7.9, A-09.14
 @test "timing records are excluded from version control" {
     run git -C "${BATS_TEST_DIRNAME}/../.." check-ignore tests/.timing/current.tsv
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-09.1.3
 @test "the shared test helper library exists and is not ignored" {
     # Regression guard for an unanchored `lib/` rule in .gitignore, which
     # matched tests/lib/ and excluded the file every test file loads. A fresh

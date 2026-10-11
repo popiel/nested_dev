@@ -30,6 +30,7 @@ source_real_personalization() {
     source "${PROJECT_ROOT}/provision/personalization.sh"
 }
 
+# Covers: R-05.1.2, A-05.1
 @test "sourcing personalization.sh defines every required variable" {
     local var missing=()
     source_real_personalization
@@ -42,11 +43,13 @@ source_real_personalization() {
     }
 }
 
+# Covers: R-05.1.3, A-05.1
 @test "PERSONALIZATION_HOME derives from PERSONALIZATION_USERNAME" {
     source_real_personalization
     [ "$PERSONALIZATION_HOME" = "/home/${PERSONALIZATION_USERNAME}" ]
 }
 
+# Covers: R-05.8.3, I-05.5, A-05.15
 @test "resolve_ref_to_sha is defined in exactly one script" {
     # frag/30 sources personalization.sh and calls resolve_ref_to_sha. A second
     # copy is how the two drifted: frag/30's lacked the `command -v git` guard

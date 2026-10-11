@@ -134,10 +134,11 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 
 ### R-01.5 First-boot provisioning runs as a single ordered, idempotent unit
 
-* **R-01.5.1** A systemd oneshot unit runs the provisioner. It logs to
-  `/var/log/pve-firstboot.log` and **disables itself on success.**
-* **R-01.5.2** Fragments run in a fixed order, because later fragments depend
-  on state earlier ones create:
+* **R-01.5.1** First-boot provisioning runs once as an ordered, logged unit
+  and **disables itself on success.** Current mechanism: a systemd oneshot
+  logging to `/var/log/pve-firstboot.log`.
+* **R-01.5.2** Provisioning steps run in a fixed order, because later steps depend
+  on state earlier ones create. Current mechanism, in order:
 
   | Order | Fragment | Establishes |
   |---|---|---|
@@ -166,10 +167,10 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.6.3** Only devices in the passthrough set have their host driver
   withheld. A GPU the host retains must keep working; blacklisting by module
   name alone would take it out along with the passed-through one.
-* **R-01.6.4** The initramfs is regenerated so the binding survives a reboot
-  into the real root filesystem. Without this the host binds correctly on the
-  installer and reverts on first boot — the failure appears only after the
-  fleet has been created.
+* **R-01.6.4** The binding survives a reboot into the real root filesystem.
+  Without this the host binds correctly on the installer and reverts on first
+  boot — the failure appears only after the fleet has been created.
+  Current mechanism: regenerated initramfs.
 * **R-01.6.5** A GPU's companion audio function is passed through with it
   whenever the two sit in the same IOMMU group; omitting it yields a guest
   with no audio device for a display the operator expects to make sound on.
@@ -201,53 +202,56 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.7.5** A device with no IOMMU group at all is not passed through. IOMMU
   being off in the running kernel is not a passing result.
 * **R-01.7.6** The host **reboots once, after the network is up and before any
-  guest starts, and provisioning resumes after boot.** The GRUB cmdline, the
-  modprobe binding and the initramfs all take effect at boot, and nothing
-  unbinds the host driver live — a guest started first fails attaching
-  hardware the host kernel still holds. The reboot happens exactly once per
-  provisioning (a marker, not a counter in memory, since memory does not
-  survive it), and every fragment is idempotent so the post-boot pass is fast
-  no-ops up to guest creation.
+  guest starts, and provisioning resumes after boot.** The boot-time GPU
+  binding takes effect at boot, and nothing unbinds the host driver live — a
+  guest started first fails attaching hardware the host kernel still holds.
+  The reboot happens exactly once per provisioning and every step is
+  idempotent so the post-boot pass is fast no-ops up to guest creation.
+  Current mechanism: GRUB cmdline + modprobe binding + initramfs with a
+  reboot marker (not an in-memory counter).
 * **R-01.7.7** Where endpoints share a group with host bridges that can never
   be bound to `vfio-pci`, the group is not viable for assignment to anyone —
   even a guest taking the whole group, since the bridges must stay host-owned.
-  Such devices may be separated with a PCIe ACS override
-  (`pcie_acs_override=downstream,multifunction` on the kernel cmdline), and
+  Such devices may be separated with a PCIe ACS override, and
   **only** when every endpoint thus separated goes to the same guest on this
   single-tenant host: peer DMA then stays inside one trusted guest, and the
   cross-guest case R-01.7.1 guards against does not arise. The override is
   reversible (remove the flag), and attachment happens only after a reboot
   verifies the split — never on the pre-override grouping. No reinstall is
-  involved: it is a boot flag, applied by the same GRUB management as the
-  IOMMU enablement itself.
+  involved.
+  Current mechanism: `pcie_acs_override=downstream,multifunction` boot flag
+  applied by the same GRUB management as the IOMMU enablement itself.
 
 ### R-01.8 The host overcommits memory safely
 
 * **R-01.8.1** The host is hard-capped at 2 GB, so guest allocation cannot
   starve the hypervisor.
-* **R-01.8.2** Compressed RAM (ZRAM) and disk swap are configured and enabled,
-  and guests have ballooning enabled.
+* **R-01.8.2** Memory pressure is absorbed without starving the host or the
+  guests. Current mechanism: compressed RAM (ZRAM) and disk swap enabled,
+  guests with ballooning enabled.
 * **R-01.8.3** Overcommit is not applied to a host at or below the baseline
   memory profile, where the guest allocation already fits.
 
 ### R-01.9 The host provides DNS and DHCP for the private subnet
 
-* **R-01.9.1** dnsmasq serves DHCP and DNS on `vmbr0`, and DNS on localhost
-  for the host itself (whose resolver points at `127.0.0.1`), enabled at
-  boot and passing its own configuration test.
+* **R-01.9.1** The private subnet has working DHCP and DNS, and the host
+  itself resolves through the same service, enabled at boot and passing its
+  own configuration test. Current mechanism: dnsmasq on `vmbr0` and localhost,
+  host resolver at `127.0.0.1`.
 * **R-01.9.2** Every VM has a fixed lease and a DNS entry in both short and
   fully-qualified form. DHCP also advertises `wolfskeep.com` as the search
   domain (option 119): guest resolvers never send single-label names to
   unicast DNS, so without it a bare name is never even a query.
 * **R-01.9.3** Upstream DNS is taken from the host's resolver at provision
-  time, written to `/run/resolv.conf` for dnsmasq from the DHCP lease, and
-  the host then resolves through dnsmasq. Public resolvers are configured as
-  a last-resort fallback tier only — the LAN resolver may be unreachable or
-  incorrect (observed: answering TCP/53 while blackholing UDP/53, which
-  dnsmasq requires), and the lasting fix for that is the LAN equipment, not
+  time and the host then resolves through the private name service. Public
+  resolvers are a last-resort fallback tier only — the LAN resolver may be
+  unreachable or incorrect (observed: answering TCP/53 while blackholing
+  UDP/53), and the lasting fix for that is the LAN equipment, not
   this repository. An empty server list aborts instead
-  of starting dnsmasq deaf. Guests never depend on the
+  of starting the name service deaf. Guests never depend on the
   LAN's resolver being reachable or correct.
+  Current mechanism: upstreams written to `/run/resolv.conf` for dnsmasq
+  from the DHCP lease.
 * **R-01.9.4** The LAN-facing NIC is detected rather than assumed, and the
   host network configuration is written from that detection.
 * **R-01.9.5** IP forwarding is enabled and persisted.
@@ -267,16 +271,16 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   before proceeding.
 * **R-01.9.8** The build manifest records the install media's checksum and the
   resolved release reference.
-* **R-01.9.9** The host's DHCP client is left able to renew (AppArmor complain
-  where enforced). A lease lost hours post-install darkens the host
+* **R-01.9.9** The host's DHCP client is left able to renew. A lease lost hours post-install darkens the host
   identically to a failed one, with no provisioner running anymore to report
   it. This is best effort — day-one connectivity does not depend on renewals
   — so failure warns instead of aborting.
+  Current mechanism: AppArmor complain where enforced.
 * **R-01.9.10** The node's own `/etc/hosts` entry tracks its LAN address,
   never loopback (pmxcfs refuses a loopback node identity and the next
   reboot then fails). No DHCP reservations are assumed, so the entry is
-  maintained after lease changes by a lease-watcher plus a cron backstop,
-  not only written at provision time.
+  maintained after lease changes, not only written at provision time.
+  Current mechanism: a lease-watcher plus a cron backstop.
 
 ### R-01.10 The host firewall is deny-by-default and per-guest
 
@@ -286,12 +290,12 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 
   | Direction | Policy |
   |---|---|
-  | Host INPUT | loopback, established, SSH 2222 from LAN, SSH 22 from the desktop only, web UI 8006 from LAN, ICMP echo. Everything else dropped. |
-  | Host OUTPUT | loopback, established, 443, 53, 123. Everything else dropped. |
+  | Host INPUT | loopback, established, SSH 2222 from LAN, SSH 22 from the desktop only, web UI 8006 from LAN, ICMP echo rate-limited to 10/s. Everything else dropped. |
+  | Host OUTPUT | loopback, established, 80, 443, 53, 123, ICMP echo rate-limited to 10/s. Everything else dropped. |
   | FORWARD, inter-VM | the desktop may reach any `vmbr0` peer. No guest may reach the desktop, and no guest may reach another guest. |
   | FORWARD, ingress | SSH 22 and VNC 5900 from the LAN to the desktop only. DNAT rewrites the destination but the filter still has to admit the packets — without these rules the documented remote access is translated and then dropped. |
   | FORWARD, egress | per R-00.2.6. |
-  | NAT | MASQUERADE for `vmbr0` to the LAN; DNAT from the LAN for the desktop's SSH and VNC console mirror. Host SSH on 2222 is served by sshd listening on 2222, not by DNAT (DNAT-to-self cannot work: the filter sees the rewritten port, so the admitting rule could never match). |
+  | NAT | VM egress is masqueraded to the LAN; the desktop's SSH and VNC console mirror are reachable from the LAN. Host SSH on 2222 is served by the host itself, not by address translation back to itself (translation-to-self cannot work: the filter sees the rewritten port, so the admitting rule could never match). |
 
 * **R-01.10.3** Host SSH on port 22 is accepted from the desktop's address
   only. The control channel that creates and starts dev VMs is privileged;
@@ -306,10 +310,12 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 
 * **R-01.11.1** vm 100 (`desktop`) and vm 101 (`llm`) are created and started
   during provisioning, with the iGPU and dGPU(s) attached respectively, an
-  OS disk sized per Spec 00 §R-00.4, and a NoCloud seed attached (Spec 06).
-  `101`'s data volume and dGPUs attach after its OS install completes, so
+  OS disk sized per Specs 02/03/04, and a NoCloud seed attached (Spec 06).
+  Both install unattended with no interactive input. `101`'s data volume and
+  dGPUs attach after its OS install completes, so
   the installer sees one disk and no passthrough hardware; `100` keeps
-  everything at create for its interactive install.
+  everything attached at create so its unattended install already sees the
+  final hardware.
 * **R-01.11.2** vm 102 (`dev-template`) is created and started, **provisioned
   once, and then converted to a PVE template** (Spec 07 §6). It is never left
   as a running VM. Conversion sanitizes per-clone identity (machine-id, SSH
@@ -323,8 +329,8 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   mid-install reboot keeps it running and never counts). A failed install
   parks stopped exactly the same way, so stopped alone is not completion:
   the provisioner verifies a bootloader exists on the OS volume before
-  detaching the installer, and only a booted system (guest agent answering)
-  counts as installed. The provisioner
+  detaching the installer, and only a booted system counts as installed.
+  Current mechanism: guest-agent-answers gate. The provisioner
   then detaches the installer and boots the disk. Desktop included: its
   installer is the same Subiquity core behind a different UI.
 * **R-01.11.4** A template cannot be started directly. This is the mechanism
@@ -333,14 +339,16 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   are created on demand from the desktop (Spec 07).
 * **R-01.11.6** Re-running provisioning does not recreate a VM that already
   exists, and does not restart one that is already running.
-* **R-01.11.7** Before the template is converted, the guest agent answers and
-  the guest's first-boot log reports completion. Conversion proceeds only
+* **R-01.11.7** Before the template is converted, the installed system is
+  answering and the guest's first-boot log reports completion. Conversion proceeds only
   after that gate, so the template is never captured half-provisioned.
+  Current mechanism: guest-agent-answers plus completion-log-line gate.
 * **R-01.11.8** If the gate times out, the run logs a warning, leaves the VM
   running for the operator to finish by hand, and **continues** to the
   firewall step. The template is not converted from an unprovisioned disk.
-  Every server install's serial output is captured to a host log from boot,
+  Every server install's console output is captured to a host log from boot,
   so a failure carries its own record instead of needing a watched console.
+  Current mechanism: serial capture to a host log.
 * **R-01.11.9** The per-VM firewall flag is set on the guests whose egress is
   restricted.
 * **R-01.11.10** **A host that cannot create a guest says so before any download
@@ -353,23 +361,24 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
   provide, never improvised.** Automatically adopting a network interface can
   take the host's only network path down — the same reason R-01.4.1 forbids
   target-disk detection.
-* **R-01.11.12** Each guest's vCPU allocation is **capped at the node's per-VM
-  maximum.** PVE refuses a create whose vCPU count exceeds it, so a profile
-  written for a larger host would otherwise fail on a smaller one with no
-  guests created. The cap is logged when it cuts the profile down.
+* **R-01.11.12** Each guest's vCPU allocation fits what the node allows.
+  A profile written for a larger host would otherwise fail on a smaller one
+  with no guests created. The cap is logged when it cuts the profile down.
+  Current mechanism: capped at the node's per-VM maximum (PVE refuses more).
 * **R-01.11.13** Guest autoinstalls **complete without console interaction.**
-  The installer prompts when it finds autoinstall data without the
-  `autoinstall` kernel parameter, and a guest waiting on an invisible prompt
-  (no display device, silent serial) never installs. Seeding the parameter
-  is part of the boot configuration the fragment creates, not something
-  answered by hand per guest.
+  A guest waiting on an invisible prompt never installs. Seeding the
+  installer's unattended-boot flag is part of the boot configuration the
+  host creates, not something answered by hand per guest.
+  Current mechanism: `autoinstall` kernel parameter plus direct-kernel boot.
 * **R-01.11.14** Guests boot the installer **by explicit boot order, not by
-  fallthrough.** PVE passes `strict=on`, so an order naming only the empty
-  disk parks the guest at a UEFI shell instead of reaching the attached
-  installer media. The installer ISO is detached after each guest's first
-  boot completes, so a post-install reboot lands in the installed system
-  rather than looping back into the installer.
-* **R-01.11.15** The server guests keep an emulated display. Headless fleet
+  fallthrough.** An order naming only the empty disk parks the guest at a
+  firmware shell instead of reaching the attached installer media. The
+  installer ISO is detached after each guest's first boot completes, so a
+  post-install reboot lands in the installed system rather than looping back
+  into the installer. Current mechanism: explicit order (PVE passes
+  `strict=on`).
+* **R-01.11.15** The server guests keep an emulated display alongside any
+  passed-through hardware (vm 101 keeps `vga std` plus its dGPUs). Headless fleet
   VMs gain nothing from it day to day, but every blind debugging session
   costs hours for want of a console, and an emulated VGA costs essentially
   nothing to carry. The desktop keeps none: its passed-through iGPU is its
@@ -390,9 +399,9 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 * **R-01.12.4** A yescrypt hash survives rendering intact. An unescaped `$` in
   a hash is expanded away by the substitution, producing an install that
   validates, installs, and leaves nobody able to log in.
-* **R-01.12.5** The bootstrap's staging directory is explicitly writable.
-  The default staging area is the source ISO's own directory, which is mounted
-  read-only, and the build fails there.
+* **R-01.12.5** The bootstrap's staging directory is explicitly writable;
+  staging into the source ISO's own directory fails (read-only mount).
+  Current mechanism: explicit `--tmp` work dir.
 * **R-01.12.6** The build verifies the answer file before invoking the
   assistant, and tolerates the assistant's absence by reporting that the
   check was skipped — never by reporting success.
@@ -424,10 +433,10 @@ The valid top-level sections are `global`, `network`, `disk-setup`,
 | A-01.8 | Memory: ZRAM and swap are active, the host cap is 2 GB, and guests have ballooning enabled. |
 | A-01.9 | `qm list` shows 100 running, 101 running, 102 template, and no other VM. `qm start 102` is refused. |
 | A-01.10 | `vmbr0` holds `192.168.100.1/24` with no physical port. dnsmasq is active, passes its configuration test, and answers for every VM's short and FQDN. The host's resolver is the local dnsmasq. |
-| A-01.11 | All three filter chains default to DROP. INPUT accepts only the ports and sources in R-01.10.2; OUTPUT accepts only 443, 53 and 123. |
+| A-01.11 | All three filter chains default to DROP. INPUT accepts only the ports and sources in R-01.10.2; OUTPUT accepts only 80, 443, 53 and 123 plus rate-limited ICMP echo. |
 | A-01.12 | From the LAN: host SSH on 2222, host web UI on 8006, desktop SSH and desktop VNC console mirror all reachable. Host SSH on 22 is **not** reachable from the LAN. |
 | A-01.13 | Host SSH on 22 **is** reachable from the desktop's address, and refused from another guest's. |
-| A-01.14 | Per R-00.2.6: the desktop and vm 101 reach the LAN; vm 101 cannot reach a port other than 53/80/443; vm 103 reaches 53/80/443; a dev VM on 104 or above reaches nothing. |
+| A-01.14 | Per R-00.2.6: the desktop is unrestricted; vm 101 and every dev VM (102–249) reach 53/80/443 and nothing else. |
 | A-01.15 | No guest other than the desktop can reach another guest. |
 | A-01.16 | The provisioning log is clean of errors, the unit is disabled, and the manifest records the media checksum and the resolved reference. |
 | A-01.17 | Re-running the provisioner makes no destructive change. |

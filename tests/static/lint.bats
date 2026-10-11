@@ -3,6 +3,7 @@
 
 load '../lib/helpers'
 
+# Covers: R-09.2.1
 @test "shellcheck passes on all .sh scripts" {
     require_command shellcheck
     local fail=0
@@ -23,6 +24,7 @@ load '../lib/helpers'
     [ "$fail" -eq 0 ]
 }
 
+# Covers: R-09.2.1, A-09.16
 @test "shellcheck passes on the test harness scripts" {
     # The sweep above excludes tests/ wholesale, because .bats files are not
     # shell. These four are ordinary shell scripts, though, and nothing else
@@ -47,6 +49,7 @@ load '../lib/helpers'
     [ "$fail" -eq 0 ]
 }
 
+# Covers: R-09.2.1
 @test "shellcheck passes on extension-less bash scripts" {
     require_command shellcheck
     local fail=0
@@ -67,6 +70,7 @@ load '../lib/helpers'
     [ "$fail" -eq 0 ]
 }
 
+# Covers: R-09.2.2
 @test "every sourced-later script has a source-guard" {
     # A script without this guard runs main() the moment a test sources it, so
     # its functions are only unit-testable by accident and any future test that
@@ -82,6 +86,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-01.3, R-09.2.1
 @test "sh scripts parse under /bin/sh" {
     # first-boot.sh runs on a stock Debian PVE host where /bin/sh is dash, but
     # the lint tier only checked it with shellcheck -s bash. A bashism here
@@ -100,6 +105,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-09.1
 @test "the CI entry point is executable in the git index" {
     # CI invokes tests/run.sh directly; without the exec bit that is
     # permission denied on a Linux runner. Undetectable by running the
@@ -115,6 +121,7 @@ load '../lib/helpers'
     }
 }
 
+# Covers: R-09.4, I-09.5
 @test "bash entry points are invoked with bash, never sh" {
     # /bin/sh is dash on Debian/PVE and dies on pipefail: two call sites ran
     # the bash provisioner under sh, green wherever sh happens to be bash,
@@ -126,6 +133,7 @@ load '../lib/helpers'
         '/bin/bash "${PROVISION_DIR}/host/provision-host.sh"'
 }
 
+# Covers: R-09.1
 @test "CI installs the pinned test tools, not apt builds" {
     # Apt's bats/shellcheck lag and differ in behavior (TAP error shapes,
     # findings), failing version-sensitive tests that pass locally
@@ -136,4 +144,41 @@ load '../lib/helpers'
     assert_file_contains "$ci" 'GITHUB_PATH'
     assert_file_not_contains "$ci" 'install -y bats'
     assert_file_not_contains "$ci" 'install -y shellcheck'
+}
+
+# Covers: R-09.6.2
+@test "every test names the requirements it verifies" {
+    # An unstated gap reads as a covered one: each @test carries a `# Covers:`
+    # line naming the R-/A-/I- IDs it verifies, so the Spec 09 §4 coverage map
+    # is checkable per test instead of per suite. Heredoc-embedded fixture
+    # suites (timing.bats writes .bats files into $TMPDIR) are not real tests
+    # and are skipped via heredoc tracking, mirroring the annotator.
+    local file line heredoc prev fails=0
+    for file in tests/static/*.bats tests/unit/*.bats tests/e2e/*.bats; do
+        heredoc=""
+        prev="# Covers: seed"
+        while IFS= read -r line || [ -n "$line" ]; do
+            if [ -n "$heredoc" ]; then
+                [ "$line" = "$heredoc" ] && heredoc=""
+                prev="$line"
+                continue
+            fi
+            case "$line" in
+                '@test "'*)
+                    case "$prev" in
+                        '# Covers: '*) ;;
+                        *)
+                            echo "UNANNOTATED: $file: $line" >&2
+                            fails=1
+                            ;;
+                    esac
+                    ;;
+            esac
+            if printf '%s' "$line" | grep -qE "<<['\"]?[A-Za-z_][A-Za-z0-9_]*['\"]?[[:space:]]*$"; then
+                heredoc="$(printf '%s' "$line" | sed -E "s/.*<<['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?[[:space:]]*$/\1/")"
+            fi
+            prev="$line"
+        done < "${PROJECT_ROOT}/${file}"
+    done
+    [ "$fails" -eq 0 ]
 }

@@ -115,7 +115,7 @@ if [ -f "$VMCTL_HOST_SRC" ]; then
     log "vmctl-host installed"
 else
     die "vmctl-host source not found at ${VMCTL_HOST_SRC} — the desktop's
-devctl fleet verbs (list/status/start/stop/kill/add/log) would all fail
+devctl fleet verbs (list/status/start/stop/kill/create/log) would all fail
 against a forced command that does not exist"
 fi
 
@@ -126,10 +126,12 @@ chmod 600 "$STAGED_KEY"
 log "Private key staged for desktop seed injection"
 
 # --- Guest identity keypair ---
-# Generated on the host at install time. The PRIVATE half is the desktop
+# Generated on the host at install time (reused as the desktop's key per the
+# two-key trust model). The PRIVATE half is the desktop
 # guest's identity and is seeded to the desktop only; the PUBLIC half is
-# trusted by the host OS and by every guest, so the desktop can administer the
-# whole deployment. Distinct from vmctl, which is a restricted forced-command
+# trusted by the host (root + personalization account, alongside the Filbert
+# operator key) and by every guest — but non-desktop guests trust ONLY this
+# key, never Filbert directly. Distinct from vmctl, which is a restricted forced-command
 # credential with no shell access.
 GUEST_ID_KEY_DIR="${ROOT}/root/.nested-dev/guest-id"
 DESKTOP_IP="192.168.100.100"
@@ -196,6 +198,28 @@ GUEST_ID_STAGED="${ROOT}/root/.nested-dev/guest-id-priv-staged"
 cp "${GUEST_ID_KEY_DIR}/guest_id_ed25519" "$GUEST_ID_STAGED"
 chmod 600 "$GUEST_ID_STAGED"
 log "Guest identity private key staged for desktop seed injection"
+
+# Host personalization account trusts BOTH keys: the Filbert operator key
+# (installed by first-boot.sh) plus the desktop guest-identity key here. The
+# desktop account trusts both via its seed; other guests trust the desktop key
+# only and are reached via the desktop (or via `qm guest exec` from the host).
+. "${ROOT}/root/provision/personalization.sh" 2>/dev/null || true
+HOST_USER="${PERSONALIZATION_USERNAME:-}"
+HOST_HOME="${PERSONALIZATION_HOME:-}"
+if [ -n "$HOST_USER" ] && [ -n "$HOST_HOME" ]; then
+    HOST_AUTH_KEYS="${ROOT}${HOST_HOME}/.ssh/authorized_keys"
+    if [ -f "$HOST_AUTH_KEYS" ]; then
+        if grep -qF "$GUEST_ID_PUB" "$HOST_AUTH_KEYS" 2>/dev/null; then
+            log "Host account already trusts both keys"
+        else
+            printf '%s\n' "$GUEST_ID_PUB" >> "$HOST_AUTH_KEYS"
+            chmod 600 "$HOST_AUTH_KEYS"
+            log "Host account now trusts both keys (Filbert + desktop)"
+        fi
+    else
+        log "WARNING: host account authorized_keys not found at ${HOST_AUTH_KEYS} — skipping dual-trust"
+    fi
+fi
 
 # --- dnsmasq dev drop-in (empty header; vmctl-host appends entries) ---
 if [ ! -f "${ROOT}/etc/dnsmasq.d/zz-dev.conf" ]; then

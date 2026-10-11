@@ -106,8 +106,8 @@ iptables -A INPUT -p tcp --dport 22 -s 192.168.100.100 -j ACCEPT
 # PVE web UI — LAN only
 iptables -A INPUT -p tcp --dport 8006 -s 192.168.14.0/24 -j ACCEPT
 
-# ICMP
-iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+# ICMP (rate-limited: diagnostics only, not a flood path)
+iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 10/second -j ACCEPT
 
 # DHCP + DNS for guests on vmbr0 (dnsmasq serves this bridge). Without these,
 # guests get no address and no resolver: every installer stalls before writing
@@ -139,36 +139,24 @@ iptables -A FORWARD -i "$PHYS_NIC" -o vmbr0 -p tcp -d 192.168.100.100 --dport 59
 # protocol filter or the guest gets a black hole.
 #
 # Desktop (100): unrestricted by design — it is the bastion and browses.
-# LLM (101): DNS/HTTP/HTTPS. It installs the driver/CUDA/Docker stack and pulls
-#   Ollama images and models on first boot, so it cannot be air-gapped.
-# dev-nested (103): DNS/HTTP/HTTPS. This is the trusted ISO builder; it fetches
-#   from GitHub, the Ubuntu archive and the PVE ISO mirror.
-# Dev template (102): DNS/HTTP/HTTPS while it provisions, for the same fetches
-#   (its first boot pulls container images and the Ubuntu archive). It never
-#   auto-starts after conversion to template, so this allowance in practice
-#   serves the one provisioning run, not a running machine.
-# All other dev VMs (104-249): no egress. Their toolchain is baked into
-#   template 102, so a clone never needs to reach the network.
+# LLM (101) and every dev VM (102-249, template plus all clones): DNS/HTTP/HTTPS.
+# All dev VMs have equal access so any clone can fetch from GitHub, the Ubuntu
+# archive, container registries and the Proxmox ISO mirror. The template keeps
+# its allowance permanently (it never auto-starts after conversion, so in
+# practice the rule serves its provisioning run plus any diagnostic boot).
 
 # Desktop (100): unrestricted by design — it is the bastion and browses.
 # Without this rule the desktop has no route off vmbr0 at all, and the
 # "unrestricted" claim in the comment above is not backed by a rule.
 iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s 192.168.100.100 -j ACCEPT
 
-# LLM (101), dev template (102), trusted builder (103): DNS, HTTP, HTTPS only.
+# LLM (101) plus the whole dev range (102-249): DNS, HTTP, HTTPS only.
 # DNS is allowed over both UDP and TCP: a truncated or oversized answer falls
 # back to TCP, and a resolver that only speaks UDP fails exactly when the guest
 # most needs an answer. The host's own OUTPUT chain below allows both for the
 # same reason.
-#
-# The template is on this list because it builds the toolchain its clones run:
-# dev-firstboot.sh fetches from GitHub and the Ubuntu archive and pulls
-# container images, which is all HTTPS (plus DNS). A template that cannot
-# reach its sources cannot provision, and the provisioning gate waits on the
-# log line that only a provisioned template writes. The template never
-# auto-starts after conversion, so in practice these rules serve its one
-# provisioning run, not a running fleet.
-for EGRESS_IP in 192.168.100.101 192.168.100.102 192.168.100.103; do
+for OCTET in $(seq 101 249); do
+    EGRESS_IP="192.168.100.${OCTET}"
     iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
         -p udp --dport 53 -j ACCEPT
     iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
@@ -178,7 +166,7 @@ for EGRESS_IP in 192.168.100.101 192.168.100.102 192.168.100.103; do
     iptables -A FORWARD -i vmbr0 -o "$PHYS_NIC" -s "$EGRESS_IP" \
         -p tcp --dport 443 -j ACCEPT
 done
-log "FORWARD egress: 100 unrestricted; 101 + 102 + 103 allowed 53/80/443; other dev VMs denied"
+log "FORWARD egress: 100 unrestricted; 101-249 allowed 53/80/443"
 
 # Return traffic for established connections
 iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -204,11 +192,11 @@ iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 # NTP (123)
 iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
 
-# ICMP echo (ping) outbound. Replies come back through ESTABLISHED,RELATED
+# ICMP echo (ping) outbound, rate-limited. Replies come back through ESTABLISHED,RELATED
 # above (conntrack, which every reply path here already depends on). Without
 # this the host cannot ping anything it is allowed to talk to — a diagnostic
 # blackhole in a firewall the operator debugs from behind.
-iptables -A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
+iptables -A OUTPUT -p icmp --icmp-type echo-request -m limit --limit 10/second -j ACCEPT
 
 # Replies to the vmbr0 services above: dnsmasq's DHCP offers/acks and DNS
 # answers leave via the bridge. Without these the requests arrive and the
@@ -331,10 +319,20 @@ fi
 # ============================================================
 # 8. Record build info
 # ============================================================
-mkdir -p "${ROOT}/root/output"
+# The manifest records both the ref as given and the resolved SHA: a rebuild
+# defaults to the recorded SHA unless a new ref is passed to the refresh
+# scripts. Per-guest SHAs live in /etc/nested-dev/ref-sha.d/ (written by
+# frag/30); the global default lives in /etc/nested-dev/ref-sha.
+. "${ROOT}/root/provision/personalization.sh" 2>/dev/null || true
+FINALIZE_REF="${PERSONALIZATION_REF:-__GITHUB_REF__}"
+FINALIZE_SHA=""
+command -v resolve_ref_to_sha >/dev/null 2>&1 && FINALIZE_SHA=$(resolve_ref_to_sha "${PERSONALIZATION_REPO:-popiel/nested_dev}" "$FINALIZE_REF" 2>/dev/null || true)
+FINALIZE_EFFECTIVE="${FINALIZE_SHA:-$FINALIZE_REF}"
+mkdir -p "${ROOT}/root/output" "${ROOT}/etc/nested-dev"
 cat > "${ROOT}/root/output/MANIFEST" <<EOF
 # nested_dev host build manifest
-# REF: __GITHUB_REF__
+# REF: ${FINALIZE_REF}
+# REF SHA: ${FINALIZE_EFFECTIVE}
 # Built: $(date -Is)
 # PVE version: $(pveversion 2>/dev/null || echo "unknown")
 # CPU: $(lscpu | awk '/Model name/{print $0}')
@@ -345,6 +343,10 @@ cat > "${ROOT}/root/output/MANIFEST" <<EOF
 # DNS: dnsmasq on 127.0.0.1
 EOF
 log "Manifest written to ${ROOT}/root/output/MANIFEST"
+if [ ! -s "${ROOT}/etc/nested-dev/ref-sha" ]; then
+    printf '%s\n' "$FINALIZE_EFFECTIVE" > "${ROOT}/etc/nested-dev/ref-sha"
+    log "Recorded global build SHA: ${FINALIZE_EFFECTIVE}"
+fi
 
 # ============================================================
 # 9. MOTD
@@ -363,7 +365,7 @@ cat > "${ROOT}/etc/motd" <<'EOF'
   SSH to desktop: ssh root@<LAN-IP> (DNAT)
   VNC console mirror: <LAN-IP>:5900
   Logs: /var/log/pve-firstboot.log
-  Dev control: devctl list/start/stop/add
+  Dev control: devctl list/start/stop/create
 ========================================
 
 EOF

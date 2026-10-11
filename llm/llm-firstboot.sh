@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # llm-firstboot.sh — LLM VM first-boot configuration
-# Runs inside VM 101 (llm-vm / ${PERSONALIZATION_USERNAME}) on first boot.
+# Runs inside VM 101 (lychee-llm / ${PERSONALIZATION_USERNAME}) on first boot.
 # Installs NVIDIA driver, CUDA, Docker, NVIDIA Container Toolkit, Ollama.
 # Detects VRAM, prints model recommendations.
 # Fetched at REF main; logs to /var/log/llm-firstboot.log.
@@ -304,8 +304,8 @@ echo "y" | ufw enable 2>&1 | tee -a "$LOG" || true
 log "Firewall configured (deny incoming, allow outgoing, allow ssh, allow 11434 from vmbr0)"
 
 # --- 9. Hostname ---
-hostnamectl set-hostname llm-vm
-log "Hostname set to llm-vm"
+hostnamectl set-hostname lychee-llm
+log "Hostname set to lychee-llm"
 
 # --- 10. Enable qemu-guest-agent ---
 systemctl enable qemu-guest-agent 2>/dev/null || true

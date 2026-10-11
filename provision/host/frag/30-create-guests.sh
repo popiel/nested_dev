@@ -294,6 +294,18 @@ main() {
     else
         log "WARNING: Could not resolve REF '${GITHUB_REF}' — proceeding with branch name only"
     fi
+    EFFECTIVE_REF="${REF_SHA:-$GITHUB_REF}"
+
+    # Record the resolved SHA for future rebuilds: the rebuild defaults to the
+    # recorded SHA unless a new ref is given to the refresh scripts. Per-guest
+    # entries allow refreshing individual guests at different SHAs.
+    mkdir -p "${ROOT}/etc/nested-dev/ref-sha.d"
+    printf '%s\n' "$EFFECTIVE_REF" > "${ROOT}/etc/nested-dev/ref-sha"
+    for _vmid in 100 101 102; do
+        [ -s "${ROOT}/etc/nested-dev/ref-sha.d/${_vmid}" ] \
+            || printf '%s\n' "$EFFECTIVE_REF" > "${ROOT}/etc/nested-dev/ref-sha.d/${_vmid}"
+    done
+    log "Recorded guest build SHA: ${EFFECTIVE_REF} (per-guest overridable in /etc/nested-dev/ref-sha.d/)"
 
     GITHUB_BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_REF}"
 
@@ -452,7 +464,7 @@ main() {
             -e "s|__PERSONALIZATION_FULLNAME__|${PERSONALIZATION_FULLNAME}|g" \
             -e "s|__PERSONALIZATION_UID__|${PERSONALIZATION_UID}|g" \
             -e "s|__PERSONALIZATION_GID__|${PERSONALIZATION_GID}|g" \
-            -e "s|__GITHUB_REF__|${REF_SHA:-$GITHUB_REF}|g" \
+            -e "s|__GITHUB_REF__|${EFFECTIVE_REF}|g" \
             "${SEED_DIR}/${guest}-template" > "$SEED_FILE"
 
         # A surviving placeholder means a substitution silently failed and the

@@ -55,12 +55,14 @@ run_renew() {
         /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; ensure_dhcp_renewals'
 }
 
+# Covers: R-01.9.7, A-01.10
 @test "a routed host with working DNS passes immediately" {
     run run_gate 5
     [ "$status" -eq 0 ]
     [[ "$output" == *"upstream connectivity confirmed"* ]]
 }
 
+# Covers: R-01.9.7
 @test "a host with no default route waits out the timeout and dies loudly" {
     printf '#!/bin/bash\nexit 1\n' > "$MOCKBIN/ip"
     chmod +x "$MOCKBIN/ip"
@@ -69,6 +71,7 @@ run_renew() {
     [[ "$output" == *"no upstream connectivity"* ]]
 }
 
+# Covers: R-01.9.7
 @test "a host with no working resolver waits out the timeout and fails loudly" {
     printf '#!/bin/bash\nexit 2\n' > "$MOCKBIN/getent"
     chmod +x "$MOCKBIN/getent"
@@ -82,6 +85,7 @@ write_lease() {
     cat > "${WORK}/root/var/lib/dhcp/dhclient.eno1.leases"
 }
 
+# Covers: R-01.9.3
 @test "upstream resolvers are built from the DHCP lease" {
     write_lease <<'EOF'
 lease {
@@ -100,12 +104,14 @@ EOF
     [[ "$output" == *"nameserver 192.168.14.253"* ]]
 }
 
+# Covers: R-01.9.3
 @test "no lease files means no resolvers and a loud abort" {
     run populate_upstream_resolvers
     [ "$status" -ne 0 ]
     [[ "$output" == *"no upstream name servers"* ]]
 }
 
+# Covers: R-01.9.3
 @test "a lease without name servers aborts instead of starting dnsmasq deaf" {
     write_lease <<'EOF'
 lease {
@@ -120,6 +126,7 @@ EOF
     [[ "$output" == *"no upstream name servers"* ]]
 }
 
+# Covers: R-01.9.9
 @test "complain-mode is set when the tooling exists" {
     printf '#!/bin/bash\nexit 0\n' > "$MOCKBIN/aa-complain"
     chmod +x "$MOCKBIN/aa-complain"
@@ -128,12 +135,14 @@ EOF
     [[ "$output" == *"complain mode"* ]]
 }
 
+# Covers: R-01.9.9
 @test "a missing aa-complain warns instead of aborting" {
     run run_renew
     [ "$status" -eq 0 ]
     [[ "$output" == *"aa-complain not installed"* ]]
 }
 
+# Covers: R-01.9.7
 @test "soliciting uses dhclient with the LAN NIC when present" {
     cat > "$MOCKBIN/dhclient" <<'EOF'
 #!/bin/bash
@@ -149,6 +158,7 @@ EOF
     run grep -q "dhclient enp0s31f6" "$E2E_STATE/dhcp-journal"
 }
 
+# Covers: R-01.9.7
 @test "soliciting fails loudly with no DHCP client installed" {
     run env -i PATH="$MOCKBIN" FRAG28="$FRAG28" NIC="enp0s31f6" \
         /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; solicit_dhcp "$NIC"'

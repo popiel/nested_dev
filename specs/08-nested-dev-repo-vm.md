@@ -48,20 +48,20 @@ all.
 
 * **R-08.1.1** The image is based on the same Ubuntu release as the guests, so
   a build runs against the release it is building for.
-* **R-08.1.2** It contains the tools the ISO build needs: download, ISO
-  authoring, archive handling, WHOIS, version control, HTTP and GPG tooling,
-  Python, and the container runtime client the builder uses to obtain the
-  install assistant when it is not present natively.
+* **R-08.1.2** The image can build the ISO without extra fetching: download,
+  ISO authoring, archive, version-control, HTTP/GPG, Python and container-
+  runtime-client tooling are present. Current mechanism: explicit tool list in
+  `Dockerfile.nested`.
 * **R-08.1.3** It contains **no** desktop software, no GPU or CUDA stack, and no
   inference components. The build image is a build tool, and anything in it
   that is not needed to build is weight the operator pulls on every refresh.
-* **R-08.1.4** Package installation leaves no apt lists behind, so a later
-  layer does not carry a stale index.
-* **R-08.1.5** The image runs a shell as its entry point and takes the build
-  command as its argument, so the build is the only thing it does.
-* **R-08.1.6** The image carries no credential, no key and no identity value.
-  Every secret the build needs arrives through the bind-mounted checkout at
-  run time, and is therefore absent from every layer and every cache entry.
+* **R-08.1.4** Image layers never carry a stale package index. Current
+  mechanism: no apt lists left behind.
+* **R-08.1.5** The image does exactly one thing: run the given build command.
+  Current mechanism: shell entrypoint taking the build command as argument.
+* **R-08.1.6** Secrets never enter image layers or caches: everything the
+  build needs arrives at run time through the mounted checkout. Current
+  mechanism: image carries no credential/key/identity; secrets bind-mounted.
 
 ### R-08.2 The wrapper is the interface, and it is thin
 
@@ -70,9 +70,9 @@ all.
   whether the required credentials are present. Anything else is refused.
 * **R-08.2.2** Each operation is described in the wrapper's own help. The
   operator should not have to read the wrapper to find out what it does.
-* **R-08.2.3** An unrecognised operation prints the help and exits non-zero,
-  rather than doing nothing and exiting zero. A wrapper that succeeds on a
-  typo is a wrapper the operator stops trusting.
+* **R-08.2.3** A mistyped operation fails loudly instead of succeeding
+  silently. Current mechanism: unrecognised operation prints help and exits
+  non-zero.
 * **R-08.2.4** The wrapper requires a checkout at a known path inside the
   workspace, and says so — naming the command that creates it — when it is
   absent. It does not clone on the operator's behalf, because a build that
@@ -83,17 +83,15 @@ all.
 
 ### R-08.3 The build runs against the checkout, and its output returns to it
 
-* **R-08.3.1** The checkout is bind-mounted into the container at the same path
-  it has on the dev VM, and the build runs with that path as its working
-  directory. Identical paths inside and outside mean a path in a build log can
-  be opened directly on the dev VM.
-* **R-08.3.2** Output is written **into the checkout's own output directory**,
-  which is bind-mounted, not into a container-local path. An ISO produced
-  inside a container and not bind-mounted disappears when the container exits.
-* **R-08.3.3** The container runs as `root`, so files it creates are
-  root-owned on the dev VM. The wrapper hands them back to the operator's
-  account immediately after the build, and a build that fails before the
-  hand-back leaves files the operator cannot delete.
+* **R-08.3.1** Log paths from the build open directly on the dev VM.
+  Current mechanism: checkout bind-mounted at the same path inside and
+  outside, build run with that working directory.
+* **R-08.3.2** Built artifacts survive container exit on the dev VM.
+  Current mechanism: output written into the bind-mounted checkout output
+  directory, never a container-local path.
+* **R-08.3.3** Build outputs are deletable and usable by the operator even
+  when the build fails part-way. Current mechanism: root-created files
+  handed back to the operator account immediately after the build.
 * **R-08.3.4** Both the output directory and the credential directory are
   handed back, because the build writes into both.
 * **R-08.3.5** The build is non-interactive. A build that prompts produces a
@@ -132,9 +130,9 @@ all.
 
 ### R-08.6 Refreshing the builder image is deliberate
 
-* **R-08.6.1** Refreshing rebuilds the builder image from scratch with the base
-  image re-pulled and no cache, so a rebuild actually tests the current base
-  rather than reusing cached layers.
+* **R-08.6.1** A refresh genuinely re-tests the current base instead of
+  reusing cached layers. Current mechanism: rebuild from scratch with base
+  re-pulled and no cache.
 * **R-08.6.2** The refresh reports the resulting image digest afterwards, so the
   operator can record which toolchain built a given ISO.
 * **R-08.6.3** Refreshing is never automatic. A build that silently changed its
@@ -155,11 +153,9 @@ all.
   from, in a manifest written from values that were already computed and
   checked.
 * **R-08.7.5** Build output is written outside version control.
-* **R-08.7.6** The build does not care which shell invoked it, and does not
-  depend on path-rewriting behaviour that differs between a Linux shell, a
-  Windows Git Bash, and a Linux container. A build that works in one of the
-  three and silently produces a different result in another is worse than a
-  build that fails.
+* **R-08.7.6** The build behaves identically regardless of invoking shell.
+  Current mechanism: no dependence on Linux-shell vs Git-Bash vs container
+  path-rewriting differences.
 
 ## 4. Invariants
 

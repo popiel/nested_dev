@@ -3,6 +3,7 @@
 
 load '../lib/helpers'
 
+# Covers: R-05.1.1, I-05.1, R-09.2.5
 @test "no hardcoded popiel outside personalization.sh" {
     local result
     result=$(grep -r 'popiel' --include='*.sh' --include='*.toml' --include='*.conf' \
@@ -15,6 +16,7 @@ load '../lib/helpers'
     [ -z "$result" ]
 }
 
+# Covers: R-05.1.1, I-05.1, R-09.2.5
 @test "no hardcoded tapopiel@gmail.com outside personalization.sh" {
     local result
     result=$(grep -r 'tapopiel@gmail.com' --include='*.sh' --include='*.toml' \
@@ -26,6 +28,7 @@ load '../lib/helpers'
     [ -z "$result" ]
 }
 
+# Covers: R-05.1.1, I-05.1, R-01.4.1
 @test "no hardcoded target disk outside personalization.sh" {
     # The answer file is built on one machine and installed on another, so a
     # literal device name in live config means someone hardcoded a guess about
@@ -43,6 +46,7 @@ load '../lib/helpers'
     [ -z "$result" ]
 }
 
+# Covers: R-01.4.1, R-01.4.2, A-01.5
 @test "answer-host.toml carries no literal disk-list fallback" {
     # A literal here would be used verbatim by the installer and could point the
     # install at the wrong physical disk. -F and exact comparison throughout,
@@ -61,6 +65,7 @@ load '../lib/helpers'
     [ "$output" = 'disk-list = [__TARGET_DISKS__]' ]
 }
 
+# Covers: R-03.7.2, R-04.9.1, R-09.2.6
 @test "frag/30 contains OS disk sizes from decision table" {
     # The substance is the size, so assert the size against whatever storage id
     # the fragment uses. Naming the storage here would re-couple this test to
@@ -74,6 +79,7 @@ load '../lib/helpers'
         '^\s*--scsi0 \$\{GUEST_STORAGE\}:80[[:space:]]'
 }
 
+# Covers: R-00.4, R-09.2.6
 @test "frag/30 contains RAM/core sizes from decision table" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'DESKTOP_MEM=8192'
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'LLM_MEM=16384'
@@ -83,6 +89,7 @@ load '../lib/helpers'
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'DEV_CORES=4'
 }
 
+# Covers: R-02.2.7
 @test "evdev toggle propagates because only the keyboard grabs all" {
     # QEMU's group propagation skips every object carrying grab_all, so a
     # mouse object with grab_all never follows the toggle (observed live:
@@ -94,18 +101,20 @@ load '../lib/helpers'
         'id=rmouse,evdev=${RACK_MOUSE_EVIDEV},grab_all'
 }
 
+# Covers: R-05.6.1, R-06.2.1, R-09.2.7
 @test "user-data templates contain required placeholders" {
     # Every token frag/30 substitutes. A guest seed that reaches the installer
     # with a surviving token boots without its login hash, its operator key or
     # its desktop fleet-control key — frag/30 aborts on this, and so does the
     # pre-commit hook, but the templates are the contract being asserted here.
+    # All guests carry the shared identity set; only the desktop carries the
+    # Filbert operator key (two-key trust model).
     local token
     for token in \
         '__PERSONALIZATION_USERNAME__' \
         '__PERSONALIZATION_FULLNAME__' \
         '__PERSONALIZATION_UID__' \
         '__PERSONALIZATION_GID__' \
-        '__ADMIN_PUBKEY__' \
         '__GUEST_ID_PUBKEY__' \
         'CHANGE_ME_HASHED' \
     ; do
@@ -113,8 +122,10 @@ load '../lib/helpers'
             assert_file_contains "${PROJECT_ROOT}/${ud}/user-data/user-data" "$token"
         done
     done
+    assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" '__ADMIN_PUBKEY__'
 }
 
+# Covers: R-06.2.3, I-06.2
 @test "the desktop seed carries both desktop private-key placeholders" {
     # devctl is unusable on the desktop without these two: pvehost_vmctl is
     # the restricted fleet-control credential and nested-dev-id is the guest
@@ -129,6 +140,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-01.12.2, R-09.2.7
 @test "host templates carry the placeholders their renderer substitutes" {
     # Each entry is "file|placeholder". A missing placeholder does not fail the
     # build; it ships an unsubstituted token into the answer file or the host
@@ -151,6 +163,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-05.4, I-05.2
 @test "first-boot.sh carries no root password hash" {
     # The bootstrap persists its hash to disk, so root's credential must not
     # ride along in it — that is the whole point of the two-file split.
@@ -158,6 +171,7 @@ load '../lib/helpers'
         '__ROOT_PASSWORD_HASH__'
 }
 
+# Covers: R-05.6.3, I-05.3
 @test "no committed host template carries a real password hash" {
     # Both hashes are gitignored secrets read at build time. A hash in a
     # template would be published to GitHub and shipped in every built ISO.
@@ -168,6 +182,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: I-05.4, R-09.5.2
 @test "neither password hash is tracked by git" {
     for f in keys/personalization-password-hash keys/root-password-hash; do
         run git -C "$PROJECT_ROOT" ls-files --error-unmatch "$f"
@@ -175,6 +190,7 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-09.5.3
 @test "the stale password-hash names are referenced nowhere in the source tree" {
     # Both files were renamed: keys/password-hash ->
     # keys/personalization-password-hash, and /root/.password-hash ->
@@ -199,10 +215,12 @@ load '../lib/helpers'
     done
 }
 
+# Covers: R-01.5.4, R-05.1
 @test "frag/30 sources personalization.sh from correct path" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" '/root/provision/personalization.sh'
 }
 
+# Covers: R-05.1.4, A-05.4
 @test "frag/30 aborts when personalization vars are empty" {
     # The specific guard, not a bare `exit 1` somewhere in a 400-line script:
     # this is the check that stops the host boot with an operator-readable
@@ -220,6 +238,7 @@ load '../lib/helpers'
         'Personalization password hash not found: ${PERSONALIZATION_HASH_FILE}'
 }
 
+# Covers: R-03.7.2
 @test "data volume size is 500 GB" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'DATA_VOL_SIZE=500'
 }
@@ -230,6 +249,7 @@ load '../lib/helpers'
 # these guard: the desktop was documented as unrestricted with no rule at all,
 # so the bastion had no egress.
 
+# Covers: R-00.2.6, R-01.10.2, R-09.2.8
 @test "the desktop has an unrestricted egress rule toward the LAN NIC" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
         '-o "$PHYS_NIC" -s 192.168.100.100 -j ACCEPT'
@@ -237,18 +257,19 @@ load '../lib/helpers'
         '-o CHANGE_ME_DETECT_AT_PROVISION -s 192.168.100.100 -j ACCEPT'
 }
 
-@test "the LLM VM, the template and the trusted builder are granted egress" {
+# Covers: R-00.2.6, R-09.2.8
+@test "the LLM VM and the whole dev range are granted egress" {
     local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
-    # The egress loop must name exactly the three addresses the policy allows:
-    # the LLM VM, the dev template (which builds the toolchain its clones run),
-    # and the trusted ISO builder. Adding a fourth here silently gives it a
-    # route off vmbr0.
-    assert_file_contains "$frag" 'for EGRESS_IP in 192.168.100.101 192.168.100.102 192.168.100.103; do'
+    # Uniform egress for 101-249: the loop must cover the LLM VM plus every
+    # dev VM (template + all clones). A fourth exception outside the range
+    # would silently give it a route off vmbr0.
+    assert_file_contains "$frag" 'seq 101 249'
     for port in 53 80 443; do
         assert_file_contains "$frag" "--dport ${port} -j ACCEPT"
     done
 }
 
+# Covers: R-00.2.6
 @test "guest DNS egress allows TCP as well as UDP" {
     # A truncated or oversized DNS answer falls back to TCP. UDP-only DNS fails
     # exactly when the guest most needs an answer, and the host's own OUTPUT
@@ -258,6 +279,7 @@ load '../lib/helpers'
     assert_file_contains "$frag" '-p tcp --dport 53 -j ACCEPT'
 }
 
+# Covers: R-00.2.2, R-01.9.1
 @test "the host admits guest DHCP and DNS on vmbr0, both directions" {
     # dnsmasq serves DHCP and DNS to the private bridge, and a service the
     # firewall blocks does not exist: without these rules every guest installer
@@ -272,6 +294,7 @@ load '../lib/helpers'
     assert_file_contains "$frag" '-o vmbr0 -p tcp --sport 53 -j ACCEPT'
 }
 
+# Covers: R-01.10.2, R-01.10.4
 @test "DNAT'd LAN traffic to the desktop passes the filter" {
     # PREROUTING rewrites these destinations, but rewritten packets still
     # traverse FORWARD: without explicit accepts the documented SSH/VNC
@@ -281,6 +304,7 @@ load '../lib/helpers'
     assert_file_contains "$frag" '-o vmbr0 -p tcp -d 192.168.100.100 --dport 5900 -j ACCEPT'
 }
 
+# Covers: R-02.2.1
 @test "no RDP path remains anywhere in the firewall" {
     # RDP is eliminated, not merely unforwarded: a 3389 rule in either the
     # fragment or the reference would reopen a port the guest no longer
@@ -291,28 +315,57 @@ load '../lib/helpers'
         '3389'
 }
 
-@test "no dev VM at or above 104 is granted egress" {
-    # 104-249 must fall through to the DROP default. Any explicit rule for that
-    # range reverses the containment the range boundary exists to provide.
+# Covers: R-00.2.6
+@test "uniform dev egress covers the whole 101-249 range" {
+    # All dev VMs (plus the LLM VM) share one egress policy. The reference
+    # grants the subnet; the fragment expands it per-IP at provision time.
+    # Neither may single out .104 as denied: uniform access is the policy.
     assert_file_not_contains "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
-        '-s 192.168.100.104'
-    assert_file_not_contains "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf" \
-        '-s 192.168.100.104'
+        'other dev VMs denied'
+    assert_file_contains "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf" \
+        '-s 192.168.100.0/24 -p udp --dport 53 -j ACCEPT'
 }
 
+# Covers: R-01.10.1
 @test "the reference ruleset grants each allowed guest each allowed port" {
     # The reference file documents the live policy. If the two drift, a
     # reviewer reading the reference is reading a policy the host does not
-    # enforce. Compare the rules, not the comments.
+    # enforce. The reference grants the uniform subnet rule; the fragment
+    # expands the same policy per-IP. Compare the rules, not the comments.
     local conf="${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"
-    local ip port
-    for ip in 192.168.100.101 192.168.100.102 192.168.100.103; do
-        for port in "tcp --dport 53" "tcp --dport 80" "tcp --dport 443"; do
-            # shellcheck disable=SC2016
-            grep -qE -- "-s ${ip} -p ${port} -j ACCEPT" "$conf" || {
-                echo "reference ruleset is missing: ${ip} ${port}" >&2
-                return 1
-            }
-        done
+    for port in "udp --dport 53" "tcp --dport 53" "tcp --dport 80" "tcp --dport 443"; do
+        grep -qE -- "-s 192.168.100.0/24 -p ${port} -j ACCEPT" "$conf" || {
+            echo "reference ruleset is missing: subnet ${port}" >&2
+            return 1
+        }
     done
+}
+
+# Covers: R-00.2.5, R-01.10.2
+@test "host OUTPUT allows HTTP alongside HTTPS/DNS/NTP with rate-limited ICMP" {
+    local frag="${PROJECT_ROOT}/provision/host/frag/90-finalize.sh"
+    assert_file_contains "$frag" '-A OUTPUT -p tcp --dport 80 -j ACCEPT'
+    assert_file_contains "$frag" '-A OUTPUT -p tcp --dport 443 -j ACCEPT'
+    assert_file_contains "$frag" '-m limit --limit 10/second -j ACCEPT'
+    assert_file_contains "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf" \
+        '-A OUTPUT -p tcp --dport 80 -j ACCEPT'
+}
+
+# Covers: R-02.1.7, R-00.2.2
+@test "the LLM guest hostname is lychee-llm everywhere" {
+    assert_file_contains "${PROJECT_ROOT}/llm/user-data/user-data" 'hostname: lychee-llm'
+    assert_file_contains "${PROJECT_ROOT}/llm/llm-firstboot.sh" 'hostnamectl set-hostname lychee-llm'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" 'HOST=lychee-llm'
+}
+
+# Covers: R-00.8.3, R-05.8.7
+@test "frag/30 records the resolved SHA for future rebuilds" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" \
+        'etc/nested-dev/ref-sha'
+}
+
+# Covers: R-05.2.4, R-07.6
+@test "the host account trusts both the Filbert and desktop keys" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/25-desktop-control.sh" \
+        'Host account now trusts both keys'
 }

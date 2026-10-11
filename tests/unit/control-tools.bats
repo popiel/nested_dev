@@ -18,6 +18,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 
 # --- runtime verification on the desktop ---
 
+# Covers: R-01.5.3, R-04.7.1
 @test "no first-boot script stops itself on completion" {
     # disable --now on the running service SIGTERMs it after the final log
     # line, so systemd records a completed run as failed. Disable only.
@@ -31,21 +32,25 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     done
 }
 
+# Covers: R-02.6.3, R-06.3.4, A-02.13
 @test "desktop-firstboot hard-fails when a seeded private key is missing" {
     assert_file_contains "$DESKTOP_FIRSTBOOT" \
         'die "Missing or empty private key ${key} at ${KEY_PATH}'
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'for key in pvehost_vmctl nested-dev-id; do'
 }
 
+# Covers: R-02.6.3, R-06.3.4
 @test "desktop-firstboot validates that each key is a real OpenSSH private key" {
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'BEGIN OPENSSH PRIVATE KEY'
 }
 
+# Covers: R-02.6.3, R-06.3.5
 @test "desktop-firstboot hard-fails when authorized_keys is missing" {
     assert_file_contains "$DESKTOP_FIRSTBOOT" \
         'die "No authorized_keys at ${AUTHORIZED_KEYS}'
 }
 
+# Covers: R-02.6.1, R-02.6.2, A-02.12
 @test "desktop-firstboot provides both pvehost (restricted) and pveadmin (root) aliases" {
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'Host pvehost'
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'Host pveadmin'
@@ -56,6 +61,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'User root'
 }
 
+# Covers: R-02.2.2, A-02.5
 @test "desktop i3status config only uses modules i3status understands" {
     # i3bar kills a status_command that exits non-zero — on the live guest
     # that was a session with a dead bar and no obvious way to open windows,
@@ -73,6 +79,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     [ "$status" -eq 124 ] || { echo "$output" >&2; return 1; }
 }
 
+# Covers: R-02.2.1
 @test "keys/vnc-passwd.hash decodes to a valid 8-byte console secret" {
     # The hash is stored as printf-octal text so the repo never holds raw
     # bytes — and the decoded hex is itself a secret that must never appear
@@ -90,6 +97,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     [ "${#output}" -eq 16 ]
 }
 
+# Covers: R-02.2.1, A-02.5, A-02.6
 @test "desktop first-boot serves the VNC console mirror" {
     # R-02.2.1: the remote view must be the physical console session, which
     # xrdp can never provide (separate sessions by architecture). x11vnc
@@ -114,6 +122,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_contains "$DESKTOP_FIRSTBOOT" 'ufw allow from 192.168.14.0/24 to any port 5900'
 }
 
+# Covers: R-02.2.1
 @test "desktop ships no RDP stack" {
     # RDP is eliminated (R-02.2.1): no package, no unit, no firewall hole.
     # Pinned on functional strings, not the bare word — comments may still
@@ -126,6 +135,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_not_contains "$DESKTOP_FIRSTBOOT" 'enable --now xrdp'
 }
 
+# Covers: R-02.2.2
 @test "desktop i3 mod key is Alt, not Super" {
     # VNC is the only input path and no Windows VNC client forwards Super,
     # so a Mod4 config leaves every $mod binding dead (observed live:
@@ -135,36 +145,43 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 
 # --- devctl wiring ---
 
+# Covers: R-07.3.5, A-07.16
 @test "devctl uses the guest identity key for direct guest SSH" {
     # The vmctl key is ForceCommand-restricted and cannot open a guest shell.
     assert_file_contains "$DEVCTL" 'GUEST_ID_KEY="${HOME}/.ssh/nested-dev-id"'
     assert_file_contains "$DEVCTL" '-i "$GUEST_ID_KEY" -o IdentitiesOnly=yes'
 }
 
+# Covers: R-07.1.2, R-07.3.1
 @test "devctl keeps fleet control on the restricted vmctl credential" {
     assert_file_contains "$DEVCTL" 'ssh $SSH_OPTS vmctl@${PVEHOST} list'
 }
 
+# Covers: R-07.3.6, A-07.17
 @test "devctl exposes a host subcommand via the pveadmin alias" {
     assert_file_contains "$DEVCTL" 'PVEADMIN="pveadmin"'
     assert_file_contains "$DEVCTL" '"${PVEADMIN}"'
 }
 
+# Covers: R-07.3.6
 @test "devctl refuses to run without the guest identity key" {
     assert_file_contains "$DEVCTL" 'require_guest_id_key()'
     assert_file_contains "$DEVCTL" 'missing guest identity key'
 }
 
+# Covers: R-02.6.4, R-05.1.1, A-02.14
 @test "devctl does not hardcode the guest username" {
     # devctl has no file extension, so the static invariant sweep does not
     # cover it; assert the spirit of that rule explicitly.
     assert_file_not_contains "$DEVCTL" 'popiel@'
 }
 
+# Covers: R-07.3.7, R-02.6.5, A-02.14
 @test "devctl requires a shell environment for the guest username" {
     assert_file_contains "$DEVCTL" 'GUEST_USER="${USER:-}"'
 }
 
+# Covers: R-07.3.8, A-02.13
 @test "devctl's missing-key error names something that exists" {
     # It pointed at `devctl firstboot-log`, a verb that does not exist.
     assert_file_not_contains "$DEVCTL" 'firstboot-log'
@@ -173,9 +190,10 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 
 # --- vmctl-host runtime behaviour that a comment cannot guarantee ---
 
+# Covers: R-07.4.9, A-07.12
 @test "vmctl-host sets a clone's hostname once the guest agent answers" {
     # A clone inherits the template's hostname, so without this every dev VM in
-    # the fleet calls itself the same thing and the DNS name registered by `add`
+    # the fleet calls itself the same thing and the DNS name registered by `create`
     # never matches the guest's own hostname.
     assert_file_contains "$VMCTL_HOST" \
         'set_hostname_when_agent_ready'
@@ -183,6 +201,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
         'hostnamectl set-hostname'
 }
 
+# Covers: R-07.4.9, A-07.12
 @test "hostname settling does not block the start verb" {
     # The agent is not up when `start` returns, so waiting inline would make
     # every start take the full agent timeout.
@@ -190,15 +209,17 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
         '( set_hostname_when_agent_ready "$VMID" "$NAME" ) &'
 }
 
+# Covers: R-07.4.10, A-07.13
 @test "an unanswered guest agent is a warning, not a failed start" {
     assert_file_contains "$VMCTL_HOST" \
         'guest agent never answered'
 }
 
+# Covers: R-07.3.3
 @test "the list verb reads the VM inventory once instead of probing the dev range" {
     # Probing 103-249 with `qm status` costs two subprocesses per ID (~294
     # calls) on every `list`, and devctl calls list again for each name lookup.
-    # `add` still scans the range legitimately — it has to find a free ID — so
+    # `create` still scans the range legitimately — it has to find a free ID — so
     # this is asserted against the list verb alone.
     local list_block
     list_block="$(awk '/^    list\)/,/^        ;;$/' "$VMCTL_HOST")"
@@ -213,6 +234,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     fi
 }
 
+# Covers: R-07.3.3, A-07.5
 @test "vmctl list reads every status from one qm list" {
     # The static entries once hardcoded "running" (a stopped 101 reported
     # running, observed live); the first fix probed each VM, which is still
@@ -269,6 +291,7 @@ EOF
     unset QM_CALLS
 }
 
+# Covers: R-07.2.5
 @test "vmctl list degrades to unknown when qm is absent" {
     # No stub, no /usr/sbin: the ForceCommand channel. A runtime qm failure
     # must yield unknown rows and exit 0 — never the silent death of an
@@ -284,6 +307,7 @@ EOF
     [[ "$line100" == *"unknown" ]]
 }
 
+# Covers: R-07.1.4
 @test "vmctl-host refuses unprivileged execution loudly" {
     # The trap this suite was missing: without the root refusal, a privilege
     # failure degrades into empty results with a bare nonzero exit — the
@@ -299,6 +323,7 @@ EOF
     assert_file_contains "$VMCTL_HOST" 'must run as root via the vmctl sudoers entry'
 }
 
+# Covers: R-07.1.2, R-07.1.4, A-07.1
 @test "the control channel composes: sudo invocation, sudoers grant, env" {
     # The three artifacts must agree or the channel runs unprivileged and
     # every verb fails: ForceCommand invokes through sudo, sudoers grants
@@ -313,6 +338,7 @@ EOF
     assert_file_contains "$frag" 'env_keep += "SSH_ORIGINAL_COMMAND"'
 }
 
+# Covers: R-07.2.2, A-07.6
 @test "the dev range boundaries are enforced on every ID-taking verb" {
     # The range starts above the static fleet, so an out-of-range ID cannot
     # reach the desktop, the LLM VM or the template.
@@ -329,10 +355,24 @@ EOF
 
 # --- nested wrapper honesty ---
 
+# Covers: R-07.2.1, R-07.3.1, A-07.2
+@test "devctl creates with the create verb (add is a deprecated alias)" {
+    assert_file_contains "$DEVCTL" 'vmctl@${PVEHOST} create "$2"'
+    assert_file_contains "$DEVCTL" "renamed to 'devctl create'"
+}
+
+# Covers: R-07.2.1, A-07.2
+@test "vmctl-host creates with the create verb (add is a deprecated alias)" {
+    assert_file_contains "$VMCTL_HOST" 'create <project-name>'
+    assert_file_contains "$VMCTL_HOST" "renamed to 'create'"
+}
+
+# Covers: R-08.4.1, R-08.4.5
 @test "the nested build image sources the hashes from keys/ too" {
     assert_file_contains "$NESTED" 'NESTED_DEV}/keys/'
 }
 
+# Covers: R-08.5, A-08.12
 @test "the wrapper's inspect verb does not claim to have validated the answer file" {
     # It only printed a template. Naming that "verify" is how an operator stops
     # reading the output.

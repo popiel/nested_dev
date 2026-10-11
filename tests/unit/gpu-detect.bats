@@ -33,6 +33,7 @@ write_list() {
     printf '%s\n' "$@" > "$LIST"
 }
 
+# Covers: R-01.6.2, R-01.7.4
 @test "an iGPU-only set goes to the desktop, nothing to the LLM guest" {
     lspci_mock "00:02.0=8086:5912"
     write_list "0000:00:02.0"
@@ -41,6 +42,7 @@ write_list() {
     [ -z "$DGPU_IDS" ]
 }
 
+# Covers: R-01.6.2, R-01.7.4
 @test "a mixed set is partitioned by vendor" {
     # The branch the end-to-end suite cannot reach: its fixture host excludes
     # the dGPUs, so the LLM guest gets nothing there. Here an accepted dGPU
@@ -53,6 +55,7 @@ write_list() {
     [ "$DGPU_IDS" = "0000:01:00.0,0000:01:00.1" ]
 }
 
+# Covers: R-01.6.2, R-01.7.4
 @test "a device of unrecognized vendor is left to the host with a warning" {
     lspci_mock "00:02.0=8086:5912" "04:00.0=1af4:1050"
     write_list "0000:00:02.0" "0000:04:00.0"
@@ -64,6 +67,7 @@ write_list() {
     run grep -q "unrecognized vendor '1af4'" "$BATS_TMPDIR/out"
 }
 
+# Covers: R-01.7.4
 @test "a missing device list aborts instead of attaching nothing" {
     # An empty --hostpci is a silent downgrade: the guest is created, boots,
     # and has no GPU, and nothing in the log explains it.
@@ -72,6 +76,7 @@ write_list() {
     [[ "$output" == *"frag/10 did not run"* ]]
 }
 
+# Covers: R-01.7.4
 @test "an empty device list aborts instead of attaching nothing" {
     : > "$LIST"
     run partition_passthrough_devices "$LIST"

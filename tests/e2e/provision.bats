@@ -124,6 +124,17 @@ EOF
     STAGE="${WORK}/stage/nested_dev-e2eref"
     mkdir -p "$STAGE/keys"
     cp -r "${PROJECT_ROOT}/provision" "$STAGE/provision"
+    # Single identity source (production invariant): the provision tree must
+    # agree with the rendered bootstrap, so rewrite the staged
+    # personalization.sh to the e2e identity. Without this frag/25 reads
+    # popiel while first-boot created e2eop, and host-side reconciliation
+    # (dual key trust) lands on the wrong home directory.
+    sed -i -e 's/^PERSONALIZATION_USERNAME=.*/PERSONALIZATION_USERNAME="e2eop"/' \
+        -e 's/^PERSONALIZATION_FULLNAME=.*/PERSONALIZATION_FULLNAME="E2E Operator"/' \
+        -e 's/^PERSONALIZATION_EMAIL=.*/PERSONALIZATION_EMAIL="e2e@test"/' \
+        -e 's/^PERSONALIZATION_UID=.*/PERSONALIZATION_UID="1500"/' \
+        -e 's/^PERSONALIZATION_GID=.*/PERSONALIZATION_GID="1500"/' \
+        "$STAGE/provision/personalization.sh"
     printf 'ssh-ed25519 E2ETREEPUBKEY e2e-tree@test\n' \
         > "$STAGE/keys/host_os_ed25519.pub"
     tar -czhf "${WORK}/fetch.tgz" -C "${WORK}/stage" nested_dev-e2eref
@@ -233,6 +244,7 @@ require_run_ok() {
 
 # --- the operator account ---
 
+# Covers: R-01.3.1, R-05.2.1, R-05.3.2, A-01.2, A-05.5
 @test "the operator account is created with the rendered identity" {
     require_run_ok
     assert_file_contains "$E2E_STATE/account-journal" "groupadd -g 1500 e2eop"
@@ -240,6 +252,7 @@ require_run_ok() {
         "useradd -u 1500 -g 1500 -d /home/e2eop -s /bin/bash -c E2E Operator e2eop"
 }
 
+# Covers: R-05.4, R-01.3.2, A-01.2, A-05.7
 @test "the rendered password hash reaches the account and its hash file" {
     require_run_ok
     [ "$(cat "$E2E_ROOT/root/.personalization-password-hash")" = "E2EHASHSTRING" ]
@@ -247,22 +260,31 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/chpasswd-journal" "e2eop:E2EHASHSTRING"
 }
 
+# Covers: R-01.3.1a, R-05.2.2, A-01.2
 @test "the account is granted the sudo group" {
     require_run_ok
     assert_file_contains "$E2E_STATE/account-journal" "groupadd -r sudo"
     assert_file_contains "$E2E_STATE/account-journal" "usermod -aG sudo e2eop"
 }
 
+# Covers: R-05.2.4, R-05.3.4, A-05.6
 @test "the operator key is installed with restrictive modes" {
     require_run_ok
-    [ "$(cat "$E2E_ROOT/home/e2eop/.ssh/authorized_keys")" \
-        = "ssh-ed25519 E2EADMINPUBKEY e2e-build@test" ]
+    # Dual trust: the Filbert operator key (first-boot) plus the desktop
+    # guest-identity key (frag/25), one per line.
+    assert_file_contains "$E2E_ROOT/home/e2eop/.ssh/authorized_keys" \
+        "ssh-ed25519 E2EADMINPUBKEY e2e-build@test"
+    assert_file_contains "$E2E_ROOT/home/e2eop/.ssh/authorized_keys" \
+        "E2EPUB-guest_id_ed25519"
+    run wc -l < "$E2E_ROOT/home/e2eop/.ssh/authorized_keys"
+    [ "$output" = "2" ]
     [ "$(stat -c %a "$E2E_ROOT/home/e2eop/.ssh/authorized_keys")" = "600" ]
     [ "$(stat -c %a "$E2E_ROOT/home/e2eop/.ssh")" = "700" ]
 }
 
 # --- the package repositories ---
 
+# Covers: R-01.3.1b
 @test "every enterprise source is moved aside and the suite is exact" {
     require_run_ok
     local srcdir="$E2E_ROOT/etc/apt/sources.list.d"
@@ -279,6 +301,7 @@ require_run_ok() {
         "$srcdir/pve-no-subscription.list"
 }
 
+# Covers: R-01.3.1b
 @test "no package operation ran against the 401 repositories" {
     require_run_ok
     assert_file_not_contains "$E2E_STATE/apt-journal" "-> 100"
@@ -286,6 +309,7 @@ require_run_ok() {
     [ "$output" -ge 1 ]
 }
 
+# Covers: R-01.3.1a, A-01.2
 @test "sudo ends up available on the host" {
     require_run_ok
     # Either it was installed (a host without the package, like the real one)
@@ -302,11 +326,13 @@ require_run_ok() {
 
 # --- GPU passthrough ---
 
+# Covers: R-01.6.2, R-01.7.4, A-01.6
 @test "the accepted device set is the iGPU alone" {
     require_run_ok
     [ "$(cat "$E2E_ROOT/var/lib/pve-firstboot/passthrough-devices")" = "0000:00:02.0" ]
 }
 
+# Covers: R-01.6.1, A-01.6
 @test "vfio binds the iGPU and nothing else" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/etc/modprobe.d/vfio.conf" \
@@ -314,6 +340,7 @@ require_run_ok() {
     assert_file_not_contains "$E2E_ROOT/etc/modprobe.d/vfio.conf" "10de"
 }
 
+# Covers: R-01.6.1, R-01.7.6, A-01.6
 @test "GRUB carries the narrowed set, not the stale one" {
     require_run_ok
     local grub="$E2E_ROOT/etc/default/grub"
@@ -331,6 +358,7 @@ require_run_ok() {
     [ "$output" = "1" ]
 }
 
+# Covers: R-01.6.3, A-01.6
 @test "only the passed-through driver is blacklisted" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/etc/modprobe.d/blacklist-gpu.conf" "blacklist i915"
@@ -338,6 +366,7 @@ require_run_ok() {
     assert_file_not_contains "$E2E_ROOT/etc/modprobe.d/blacklist-gpu.conf" "nouveau"
 }
 
+# Covers: R-01.7.2, A-01.7
 @test "the rejected dGPUs are named in the log with their group" {
     require_run_ok
     local log="$E2E_ROOT/var/log/pve-firstboot.log"
@@ -346,6 +375,7 @@ require_run_ok() {
     assert_file_contains "$log" "00:01.0"
 }
 
+# Covers: R-01.7.7
 @test "bridge-shared groups earn the ACS override, same-run behavior kept" {
     require_run_ok
     local log="$E2E_ROOT/var/log/pve-firstboot.log"
@@ -361,6 +391,7 @@ require_run_ok() {
 
 # --- the guests ---
 
+# Covers: R-01.9.1, R-01.9.2, R-01.9.3, R-01.9.7, A-01.10, R-00.2.1
 @test "the private network is up with DHCP, DNS and egress" {
     require_run_ok
     # The bridge carries its address (verified by the fragment itself before
@@ -395,6 +426,7 @@ require_run_ok() {
     run grep -xF "nameserver 192.168.14.254" "$E2E_ROOT/run/resolv.conf"
 }
 
+# Covers: R-01.7.6
 @test "the run reboots once to activate the vfio binding, then resumes" {
     require_run_ok
     # GRUB cmdline, modprobe config and initramfs all take effect at boot, and
@@ -407,6 +439,7 @@ require_run_ok() {
         "(reboot suppressed: PVE_ROOT is set)"
 }
 
+# Covers: R-01.11.1, R-01.11.13, R-01.11.14, R-02.2.7, A-01.9
 @test "the desktop is created with the iGPU on the checked bridge and storage" {
     require_run_ok
     local line
@@ -462,6 +495,7 @@ require_run_ok() {
     [ "$output" = "1" ]
 }
 
+# Covers: R-01.11.1, A-01.9
 @test "the llm guest is created with no passthrough hardware" {
     require_run_ok
     local line
@@ -509,6 +543,7 @@ require_run_ok() {
         "serial install log for VM 101 will not be captured"
 }
 
+# Covers: R-01.11.2, R-01.11.7, A-01.9
 @test "the dev template is created, started and converted" {
     require_run_ok
     local line
@@ -541,14 +576,24 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/qm-journal" "docker/key.json"
 }
 
-@test "guest seeds carry the hash and both keys, and no placeholders survive" {
+# Covers: R-06.2, R-05.2.4, I-06.5, A-06.4
+@test "guest seeds carry the hash and their keys, and no placeholders survive" {
     require_run_ok
     local seeddir="$E2E_ROOT/var/lib/vz/template/cidata"
-    for guest in desktop llm dev; do
-        local seed="$seeddir/$guest-user-data"
+    local seed
+    # Desktop trusts both keys; other guests trust the desktop key only.
+    seed="$seeddir/desktop-user-data"
+    assert_file_contains "$seed" "E2EHASHSTRING"
+    assert_file_contains "$seed" "ssh-ed25519 E2ETREEPUBKEY e2e-tree@test"
+    assert_file_contains "$seed" "E2EPUB-guest_id_ed25519"
+    for guest in llm dev; do
+        seed="$seeddir/$guest-user-data"
         assert_file_contains "$seed" "E2EHASHSTRING"
-        assert_file_contains "$seed" "ssh-ed25519 E2ETREEPUBKEY e2e-tree@test"
+        assert_file_not_contains "$seed" "ssh-ed25519 E2ETREEPUBKEY e2e-tree@test"
         assert_file_contains "$seed" "E2EPUB-guest_id_ed25519"
+    done
+    for guest in desktop llm dev; do
+        seed="$seeddir/$guest-user-data"
         run grep -cE '__[A-Z_]+__' "$seed"
         [ "$output" = "0" ]
         run grep -c "CHANGE_ME" "$seed"
@@ -575,6 +620,7 @@ require_run_ok() {
     done
 }
 
+# Covers: R-01.5.3, R-06.5, A-01.17
 @test "re-provisioning changes nothing observable" {
     require_run_ok
     # The guest identity key must appear exactly once no matter how many times
@@ -594,6 +640,7 @@ require_run_ok() {
     [ "$output" = "0" ]
 }
 
+# Covers: R-06.6, R-07.7.2, A-06.10
 @test "staged private keys are destroyed and canonical keypairs kept" {
     require_run_ok
     [ ! -e "$E2E_ROOT/root/.nested-dev/vmctl-priv-staged" ]
@@ -604,6 +651,7 @@ require_run_ok() {
     done
 }
 
+# Covers: R-06.1.1, R-00.7.2
 @test "the installer ISOs are fetched" {
     require_run_ok
     local isodir="$E2E_ROOT/var/lib/vz/template/iso"
@@ -613,6 +661,7 @@ require_run_ok() {
 
 # --- control channel, service, host config ---
 
+# Covers: R-07.4.8, A-07.11, A-07.14
 @test "the VM inventory names the three guests" {
     require_run_ok
     local inv="$E2E_ROOT/etc/nested-dev/inventory"
@@ -621,6 +670,7 @@ require_run_ok() {
     run grep -xF "102  dev-template  lychee-dev-template  192.168.100.102  52:54:00:00:01:02  template  dev-template" "$inv"
 }
 
+# Covers: R-07.1, A-07.1, A-07.2, A-07.3
 @test "vmctl is a forced-command account carrying the repo's credentials" {
     require_run_ok
     local authkeys="$E2E_ROOT/home/vmctl/.ssh/authorized_keys"
@@ -631,6 +681,7 @@ require_run_ok() {
     run cmp "$E2E_ROOT/usr/local/sbin/vmctl-host" "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host"
 }
 
+# Covers: R-07.6, A-07.17, A-07.19
 @test "the guest identity is trusted on the host, pinned to the desktop" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/root/.ssh/authorized_keys" \
@@ -638,6 +689,7 @@ require_run_ok() {
     [ -f "$E2E_ROOT/etc/dnsmasq.d/zz-dev.conf" ]
 }
 
+# Covers: R-01.3.1c
 @test "root's authorized_keys is a real file carrying cluster and guest keys" {
     require_run_ok
     # A symlink into pmxcfs dangles whenever pve-cluster is down, costing
@@ -652,6 +704,7 @@ require_run_ok() {
     [ "$output" = "1" ]
 }
 
+# Covers: R-01.5.1, R-01.5.5, A-01.16
 @test "the first-boot unit is installed and the run is marked complete" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/etc/systemd/system/pve-firstboot.service" \
@@ -661,6 +714,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "systemctl disable --now pve-firstboot"
 }
 
+# Covers: R-01.9, R-01.10, R-00.2.5, R-00.2.6, A-01.10, A-01.11, A-01.12, A-01.13, A-01.14, A-01.15
 @test "the host network, DNS and firewall land as configured" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/etc/network/interfaces" "address 192.168.100.1/24"
@@ -722,14 +776,35 @@ require_run_ok() {
     # past lockdown — which is also what makes the plain-http mirror check
     # a valid end-to-end probe rather than a firewall artifact.
     assert_file_contains "$E2E_STATE/journal" "OUTPUT -p tcp --dport 80 -j ACCEPT"
-    # Host ICMP echo egress: without it the operator cannot ping anything the
-    # host may otherwise reach — a diagnostic blackhole in a firewall debugged
-    # from behind.
-    assert_file_contains "$E2E_STATE/journal" "OUTPUT -p icmp --icmp-type echo-request -j ACCEPT"
+    # Host ICMP echo egress is rate-limited: without it the operator cannot
+    # ping anything the host may otherwise reach — a diagnostic blackhole in
+    # a firewall debugged from behind.
+    assert_file_contains "$E2E_STATE/journal" "OUTPUT -p icmp --icmp-type echo-request -m limit --limit 10/second -j ACCEPT"
     # And the template's egress, without which its first boot cannot fetch.
+    # Uniform policy covers the whole 101-249 range, not just 101-103.
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.102 -p tcp --dport 443"
+    assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.104 -p tcp --dport 443"
 }
 
+# Covers: R-00.8.3, R-05.8.7, R-05.2.4, A-01.16
+@test "recorded SHAs and dual host trust land as configured" {
+    require_run_ok
+    # Build SHA recorded globally and per guest for default-on-rebuild.
+    [ -s "$E2E_ROOT/etc/nested-dev/ref-sha" ]
+    for vmid in 100 101 102; do
+        [ -s "$E2E_ROOT/etc/nested-dev/ref-sha.d/$vmid" ]
+    done
+    [ -f "$E2E_ROOT/root/output/MANIFEST" ]
+    assert_file_contains "$E2E_ROOT/root/output/MANIFEST" "REF SHA:"
+    # Host personalization account trusts both the Filbert key and the
+    # desktop guest-identity key.
+    assert_file_contains "$E2E_ROOT/home/e2eop/.ssh/authorized_keys" \
+        "ssh-ed25519 E2EADMINPUBKEY e2e-build@test"
+    assert_file_contains "$E2E_ROOT/home/e2eop/.ssh/authorized_keys" \
+        "E2EPUB-guest_id_ed25519"
+}
+
+# Covers: R-01.9.10
 @test "the node hosts entry is maintained after lease changes" {
     require_run_ok
     # No reservations exist, so the provision-time entry rots on the next
@@ -747,6 +822,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "enable --now nested-node-hosts.path"
 }
 
+# Covers: R-01.8, R-00.4, A-01.8
 @test "memory and swap are configured" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/etc/default/zramswap" "ALGO=zstd"
