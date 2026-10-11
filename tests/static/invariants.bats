@@ -79,7 +79,7 @@ load '../lib/helpers'
         '^\s*--scsi0 \$\{GUEST_STORAGE\}:80[[:space:]]'
 }
 
-# Covers: R-00.4, R-09.2.6
+# Covers: R-09.2.6
 @test "frag/30 contains RAM/core sizes from decision table" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'DESKTOP_MEM=8192'
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" 'LLM_MEM=16384'
@@ -163,7 +163,7 @@ load '../lib/helpers'
     done
 }
 
-# Covers: R-05.4, I-05.2
+# Covers: R-05.4.3, I-05.2
 @test "first-boot.sh carries no root password hash" {
     # The bootstrap persists its hash to disk, so root's credential must not
     # ride along in it — that is the whole point of the two-file split.
@@ -215,7 +215,7 @@ load '../lib/helpers'
     done
 }
 
-# Covers: R-01.5.4, R-05.1
+# Covers: R-06.2.1
 @test "frag/30 sources personalization.sh from correct path" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" '/root/provision/personalization.sh'
 }
@@ -315,7 +315,7 @@ load '../lib/helpers'
         '3389'
 }
 
-# Covers: R-01.10, A-01.15
+# Covers: R-01.10.2, A-01.15
 @test "only the desktop may initiate inter-VM traffic" {
     # A-01.15 binds every guest but the desktop: the single vmbr0→vmbr0
     # ACCEPT must be desktop-sourced, and no other bridge-to-bridge ACCEPT
@@ -346,7 +346,7 @@ load '../lib/helpers'
         '-s 192.168.100.0/24 -p udp --dport 53 -j ACCEPT'
 }
 
-# Covers: R-01.10.1
+# Covers: R-00.2.6, R-09.2.8
 @test "the reference ruleset grants each allowed guest each allowed port" {
     # The reference file documents the live policy. If the two drift, a
     # reviewer reading the reference is reading a policy the host does not
@@ -371,7 +371,7 @@ load '../lib/helpers'
         '-A OUTPUT -p tcp --dport 80 -j ACCEPT'
 }
 
-# Covers: R-02.1.7, R-00.2.2
+# Covers: R-02.1.7
 @test "the LLM guest hostname is lychee-llm everywhere" {
     assert_file_contains "${PROJECT_ROOT}/llm/user-data/user-data" 'hostname: lychee-llm'
     assert_file_contains "${PROJECT_ROOT}/llm/llm-firstboot.sh" 'hostnamectl set-hostname lychee-llm'
@@ -384,7 +384,7 @@ load '../lib/helpers'
         'etc/nested-dev/ref-sha'
 }
 
-# Covers: R-05.2.4, R-07.6
+# Covers: R-05.2.4
 @test "the host account trusts both the Filbert and desktop keys" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/25-desktop-control.sh" \
         'Host account now trusts both keys'
@@ -484,7 +484,10 @@ load '../lib/helpers'
 @test "the builder image is a lean same-release toolchain" {
     local df="${PROJECT_ROOT}/dev/docker/Dockerfile.nested"
     assert_file_contains "$df" 'FROM ubuntu:26.04'
-    assert_file_contains "$df" 'xorriso'
+    local tool
+    for tool in wget xorriso libarchive-tools whois git curl gnupg python3; do
+        assert_file_contains "$df" "$tool"
+    done
     assert_file_contains "$df" 'rm -rf /var/lib/apt/lists'
     assert_file_not_contains "$df" 'xrdp'
     run grep -iE 'nvidia|cuda|ollama|gnome|x11vnc|firefox' "$df"

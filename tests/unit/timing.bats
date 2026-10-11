@@ -806,7 +806,7 @@ BATS
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-09.1a.2, A-09.8
+# Covers: R-09.1a.2
 @test "the WSL setup script is syntactically valid" {
     run bash -n "${BATS_TEST_DIRNAME}/../wsl-setup.sh"
     [ "$status" -eq 0 ]
@@ -893,7 +893,7 @@ BATS
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-09.1.3
+# Covers: R-09.1
 @test "the shared test helper library exists and is not ignored" {
     # Regression guard for an unanchored `lib/` rule in .gitignore, which
     # matched tests/lib/ and excluded the file every test file loads. A fresh

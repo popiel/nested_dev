@@ -49,7 +49,7 @@ host_without_storage() {
     install_mock pvesm "mock-pvesm-storage-missing.sh"
 }
 
-# Covers: R-01.11.10, A-01.9
+# Covers: R-01.11.10
 @test "preflight passes on a host that has the bridge and storage" {
     host_with_prereqs
     run preflight_guest_prerequisites "vmbr0" "local-lvm"

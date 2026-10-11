@@ -26,31 +26,31 @@ teardown() {
     [ "$UBUNTU_BASE_URL" = "https://releases.ubuntu.com/26.04" ]
 }
 
-# Covers: R-01.12.4, R-05.6.2, R-09.3.2
+# Covers: R-01.12.4, R-09.3.2
 @test "sed_escape escapes backslash" {
     run sed_escape 'foo\bar'
     [ "$output" = 'foo\\bar' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2, R-09.3.2
+# Covers: R-01.12.4, R-09.3.2
 @test "sed_escape escapes dollar signs" {
     run sed_escape 'abc$123'
     [ "$output" = 'abc\$123' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2, R-09.3.2
+# Covers: R-01.12.4, R-09.3.2
 @test "sed_escape escapes pipe characters" {
     run sed_escape 'foo|bar'
     [ "$output" = 'foo\|bar' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2, R-09.3.2
+# Covers: R-01.12.4, R-09.3.2
 @test "sed_escape escapes ampersand" {
     run sed_escape 'foo&bar'
     [ "$output" = 'foo\&bar' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2, R-09.3.2, A-01.18
+# Covers: R-01.12.4, R-09.3.2, A-01.18
 @test "sed_escape handles yescrypt hash" {
     local hash='$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW.gJAqoB0k7emCAu.0N4o.bCemMC'
     run sed_escape "$hash"
@@ -502,7 +502,7 @@ setup_personalization() {
     assert_contains "$output" '/home/testuser'
 }
 
-# Covers: R-05.2.4, R-01.3.1c
+# Covers: R-05.2.4
 @test "render_template injects the operator key for the account's authorized_keys" {
     local boot="${BATS_TMPDIR}/pubkey.sh"
     setup_personalization
@@ -616,7 +616,7 @@ setup_personalization() {
     [ "$output" = 'disk-list = ["nvme0n1"]' ]
 }
 
-# Covers: R-01.2, A-01.4, A-01.5
+# Covers: A-01.4, A-01.5
 @test "answer-host.toml renders to valid TOML with a one-element disk-list" {
     # The template is only valid TOML once rendered, so assert the rendered form.
     local out="${BATS_TMPDIR}/disks-valid.toml"
@@ -627,7 +627,7 @@ setup_personalization() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-01.3, R-01.5.4
+# Covers: R-01.5.4
 @test "generate_first_boot_script renders the bootstrap and marks it executable" {
     local out="${BATS_TMPDIR}/first-boot.sh"
     rm -f "$out"

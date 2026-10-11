@@ -65,7 +65,7 @@ fi'
     [ -z "$output" ]
 }
 
-# Covers: R-05.8.4, R-09.3.5, A-05.15
+# Covers: R-05.8.4, A-05.15
 @test "resolve_ref_to_sha succeeds when git is not installed" {
     # The contract that frag/30's private copy violated: under `set -euo
     # pipefail` a missing git used to fail the command substitution and abort

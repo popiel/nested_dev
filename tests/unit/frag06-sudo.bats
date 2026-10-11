@@ -46,7 +46,7 @@ run_frag06() {
         /bin/bash "$FRAG06"
 }
 
-# Covers: R-01.3.1a, A-01.2
+# Covers: R-01.3.1a
 @test "the sudo package is installed when absent" {
     run run_frag06
     [ "$status" -eq 0 ]

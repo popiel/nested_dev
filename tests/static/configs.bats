@@ -3,7 +3,7 @@
 
 load '../lib/helpers'
 
-# Covers: R-09.2.3, R-06.2.1
+# Covers: R-09.2.3
 @test "all guest user-data files parse as YAML" {
     require_command python3
     local ud
@@ -17,7 +17,7 @@ load '../lib/helpers'
     done
 }
 
-# Covers: R-09.2.3, R-01.2, A-01.4
+# Covers: R-09.2.3, A-01.4
 @test "rendered answer-host.toml parses as TOML" {
     require_command python3
     # The template itself is not valid TOML: the disk-list placeholder is an
@@ -92,7 +92,7 @@ load '../lib/helpers'
     assert_contains "$heredoc" 'server=1.1.1.1'
 }
 
-# Covers: R-01.10.1, R-09.2.3
+# Covers: R-09.2.3
 @test "iptables-forwarding.conf passes iptables-restore --test" {
     require_command iptables-restore
     # Probe capability, not identity: --test may need kernel facilities this

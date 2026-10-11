@@ -86,7 +86,7 @@ load '../lib/helpers'
     done
 }
 
-# Covers: R-01.3, R-09.2.1
+# Covers: R-09.2.1
 @test "sh scripts parse under /bin/sh" {
     # first-boot.sh runs on a stock Debian PVE host where /bin/sh is dash, but
     # the lint tier only checked it with shellcheck -s bash. A bashism here

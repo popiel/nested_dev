@@ -141,7 +141,7 @@ assert_key_write_creates_ssh_dir_first() {
         'nested-dev-id 2>/dev/null'
 }
 
-# Covers: R-05.3.4, R-02.6.3
+# Covers: R-05.3.4
 @test "desktop user-data chmods the key files to 600" {
     assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
         'chmod 600 /home/__PERSONALIZATION_USERNAME__/.ssh/pvehost_vmctl'
@@ -189,7 +189,7 @@ assert_key_write_creates_ssh_dir_first() {
         'mkdir -p /opt/nested-dev/tools'
 }
 
-# Covers: R-04.6.4, R-00.8.2
+# Covers: R-04.6.4
 @test "the tools are fetched at the same reference as the first-boot script" {
     # One reference for the whole guest. Two references means the script that
     # installs the wrappers and the wrappers themselves can come from different
@@ -207,7 +207,7 @@ assert_key_write_creates_ssh_dir_first() {
     }
 }
 
-# Covers: R-04.6.4, R-00.8.2
+# Covers: R-04.6.4
 @test "the guest pins its own PERSONALIZATION_REF to the reference it was built from" {
     # personalization.sh still carries the branch name. A guest that fetched
     # its Dockerfiles and tools with ${PERSONALIZATION_REF:-main} would resolve

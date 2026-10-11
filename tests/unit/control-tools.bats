@@ -18,7 +18,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
 
 # --- runtime verification on the desktop ---
 
-# Covers: R-01.5.3, R-04.7.1
+# Covers: R-01.5.1, R-04.7.1
 @test "no first-boot script stops itself on completion" {
     # disable --now on the running service SIGTERMs it after the final log
     # line, so systemd records a completed run as failed. Disable only.
@@ -152,12 +152,12 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_contains "$DEVCTL" '-i "$GUEST_ID_KEY" -o IdentitiesOnly=yes'
 }
 
-# Covers: R-07.1.2, R-07.3.1
+# Covers: R-07.3.1
 @test "devctl keeps fleet control on the restricted vmctl credential" {
     assert_file_contains "$DEVCTL" 'ssh $SSH_OPTS vmctl@${PVEHOST} list'
 }
 
-# Covers: R-07.3.6, A-07.17
+# Covers: R-07.3.6
 @test "devctl exposes a host subcommand via the pveadmin alias" {
     assert_file_contains "$DEVCTL" 'PVEADMIN="pveadmin"'
     assert_file_contains "$DEVCTL" '"${PVEADMIN}"'
@@ -176,12 +176,12 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     assert_file_not_contains "$DEVCTL" 'popiel@'
 }
 
-# Covers: R-07.3.7, R-02.6.5, A-02.14
+# Covers: R-07.3.7, R-02.6.5, A-02.14, A-07.22
 @test "devctl requires a shell environment for the guest username" {
     assert_file_contains "$DEVCTL" 'GUEST_USER="${USER:-}"'
 }
 
-# Covers: R-07.3.8, A-02.13
+# Covers: R-07.3.8
 @test "devctl's missing-key error names something that exists" {
     # It pointed at `devctl firstboot-log`, a verb that does not exist.
     assert_file_not_contains "$DEVCTL" 'firstboot-log'
@@ -234,7 +234,7 @@ NESTED="${PROJECT_ROOT}/dev/tools/nested"
     fi
 }
 
-# Covers: R-07.3.3, A-07.5
+# Covers: R-07.3.3
 @test "vmctl list reads every status from one qm list" {
     # The static entries once hardcoded "running" (a stopped 101 reported
     # running, observed live); the first fix probed each VM, which is still
@@ -307,7 +307,7 @@ EOF
     [[ "$line100" == *"unknown" ]]
 }
 
-# Covers: R-07.1.4, I-07.2
+# Covers: R-07.1.4
 @test "vmctl-host refuses unprivileged execution loudly" {
     # The trap this suite was missing: without the root refusal, a privilege
     # failure degrades into empty results with a bare nonzero exit — the
@@ -372,7 +372,7 @@ EOF
     assert_file_contains "$NESTED" 'NESTED_DEV}/keys/'
 }
 
-# Covers: R-08.5, A-08.12
+# Covers: R-08.5.1, R-08.5.2, R-08.5.3, A-08.12
 @test "the wrapper's inspect verb does not claim to have validated the answer file" {
     # It only printed a template. Naming that "verify" is how an operator stops
     # reading the output.
@@ -403,8 +403,8 @@ EOF
     assert_file_contains "$DEVCTL" 'Unknown VM:'
 }
 
-# Covers: R-07.3.4, A-07.22
-@test "devctl start sets expectations and unknown verbs show grouped help" {
+# Covers: R-07.3.1, R-07.3.4
+@test "devctl start sets expectations with grouped help" {
     assert_file_contains "$DEVCTL" 'First boot may take several minutes'
     assert_file_contains "$DEVCTL" 'Fleet control (restricted, via vmctl):'
 }

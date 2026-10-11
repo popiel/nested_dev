@@ -244,7 +244,7 @@ require_run_ok() {
 
 # --- the operator account ---
 
-# Covers: R-01.3.1, R-05.2.1, R-05.2.3, R-05.3.2, A-01.2, A-05.5
+# Covers: R-01.3.1, R-05.2.3, A-01.2, A-05.5
 @test "the operator account is created with the rendered identity" {
     require_run_ok
     assert_file_contains "$E2E_STATE/account-journal" "groupadd -g 1500 e2eop"
@@ -252,7 +252,7 @@ require_run_ok() {
         "useradd -u 1500 -g 1500 -d /home/e2eop -s /bin/bash -c E2E Operator e2eop"
 }
 
-# Covers: R-05.4, R-01.3.2, A-01.2, A-05.7
+# Covers: A-01.2
 @test "the rendered password hash reaches the account and its hash file" {
     require_run_ok
     [ "$(cat "$E2E_ROOT/root/.personalization-password-hash")" = "E2EHASHSTRING" ]
@@ -390,7 +390,7 @@ require_run_ok() {
 
 # --- the guests ---
 
-# Covers: R-01.9.1, R-01.9.2, R-01.9.3, R-01.9.7, A-01.10, R-00.2.1
+# Covers: R-01.9.1, R-01.9.2, R-01.9.3, R-01.9.7, A-01.10
 @test "the private network is up with DHCP, DNS and egress" {
     require_run_ok
     # The bridge carries its address (verified by the fragment itself before
@@ -439,7 +439,7 @@ require_run_ok() {
         "(reboot suppressed: PVE_ROOT is set)"
 }
 
-# Covers: R-01.11.1, R-01.11.13, R-01.11.14, R-02.2.7, A-01.9
+# Covers: R-01.11.1, R-01.11.13, R-01.11.14, R-02.2.7
 @test "the desktop is created with the iGPU on the checked bridge and storage" {
     require_run_ok
     local line
@@ -495,7 +495,7 @@ require_run_ok() {
     [ "$output" = "1" ]
 }
 
-# Covers: R-01.11.1, A-01.9
+# Covers: R-01.11.1
 @test "the llm guest is created with no passthrough hardware" {
     require_run_ok
     local line
@@ -543,7 +543,7 @@ require_run_ok() {
         "serial install log for VM 101 will not be captured"
 }
 
-# Covers: R-01.11.2, R-01.11.7, A-01.9
+# Covers: R-01.11.2, R-01.11.7
 @test "the dev template is created, started and converted" {
     require_run_ok
     local line
@@ -576,7 +576,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/qm-journal" "docker/key.json"
 }
 
-# Covers: R-06.2, R-05.2.4, R-06.7.2, I-06.5, A-06.4
+# Covers: R-06.2.2, R-06.2.4, R-05.2.4, I-06.5, A-06.4
 @test "guest seeds carry the hash and their keys, and no placeholders survive" {
     require_run_ok
     local seeddir="$E2E_ROOT/var/lib/vz/template/cidata"
@@ -620,7 +620,7 @@ require_run_ok() {
     done
 }
 
-# Covers: R-01.5.3, R-00.8.4, R-06.5, R-07.7.1, A-01.17, A-06.9
+# Covers: R-01.5.3, R-06.5.1, R-06.5.3, R-07.7.1, A-01.17, A-06.9
 @test "re-provisioning changes nothing observable" {
     require_run_ok
     # The guest identity key must appear exactly once no matter how many times
@@ -640,7 +640,7 @@ require_run_ok() {
     [ "$output" = "0" ]
 }
 
-# Covers: R-06.6, R-05.9.3, R-07.7.2, A-06.10
+# Covers: R-06.6.1, R-06.6.2, R-05.9.3, R-07.7.2, A-06.10
 @test "staged private keys are destroyed and canonical keypairs kept" {
     require_run_ok
     [ ! -e "$E2E_ROOT/root/.nested-dev/vmctl-priv-staged" ]
@@ -676,7 +676,7 @@ require_run_ok() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-07.1, A-07.1, A-07.2, A-07.3
+# Covers: R-07.1.1, R-07.1.2, R-07.1.4, A-07.1
 @test "vmctl is a forced-command account carrying the repo's credentials" {
     require_run_ok
     local authkeys="$E2E_ROOT/home/vmctl/.ssh/authorized_keys"
@@ -689,7 +689,7 @@ require_run_ok() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-07.6, A-07.17, A-07.19
+# Covers: R-07.6.1, A-07.17
 @test "the guest identity is trusted on the host, pinned to the desktop" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/root/.ssh/authorized_keys" \
@@ -739,10 +739,12 @@ require_run_ok() {
     [ "$output" = "0" ]
 }
 
-# Covers: R-01.10, A-01.11, A-01.12, A-01.13, A-01.15
+# Covers: R-01.10.1, R-01.10.2, R-01.10.3, R-01.10.4, A-01.11, A-01.12, A-01.13
 @test "host firewall admits only the documented surface" {
     require_run_ok
     assert_file_contains "$E2E_STATE/journal" "iptables -P INPUT DROP"
+    assert_file_contains "$E2E_STATE/journal" "iptables -P FORWARD DROP"
+    assert_file_contains "$E2E_STATE/journal" "iptables -P OUTPUT DROP"
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.100 -j ACCEPT"
     assert_file_contains "$E2E_STATE/journal" "--dport 5900"
     # RDP is eliminated (R-02.2.1 is VNC-only by architecture): no 3389
@@ -763,6 +765,13 @@ require_run_ok() {
     # single connection in any topology.
     assert_file_contains "$E2E_STATE/journal" \
         "INPUT -p tcp --dport 2222 -s 192.168.14.0/24 -j ACCEPT"
+    # Host SSH on port 22 answers the desktop alone: the same key presented
+    # from any other guest address is refused (R-01.10.3).
+    assert_file_contains "$E2E_STATE/journal" \
+        "INPUT -p tcp --dport 22 -s 192.168.100.100 -j ACCEPT"
+    # The web UI is reachable from the LAN (R-01.10.4).
+    assert_file_contains "$E2E_STATE/journal" \
+        "INPUT -p tcp --dport 8006 -s 192.168.14.0/24 -j ACCEPT"
     assert_file_contains "$E2E_ROOT/etc/ssh/sshd_config.d/nested-dev-2222.conf" \
         "Port 2222"
     # ...and 22 alongside it: any Port line suppresses sshd's default 22, so
@@ -807,7 +816,7 @@ require_run_ok() {
     [ -f "$E2E_ROOT/etc/motd" ]
 }
 
-# Covers: R-00.8.3, R-05.8.7, R-05.8.8, R-05.2.4, A-01.16
+# Covers: R-00.8.3, R-05.8.7, R-05.2.4, A-01.16
 @test "recorded SHAs and dual host trust land as configured" {
     require_run_ok
     # Build SHA recorded globally and per guest for default-on-rebuild.
@@ -843,7 +852,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "enable --now nested-node-hosts.path"
 }
 
-# Covers: R-01.8, R-00.4, A-01.8
+# Covers: R-01.8.2, A-01.8
 @test "memory and swap are configured" {
     require_run_ok
     assert_file_contains "$E2E_ROOT/etc/default/zramswap" "ALGO=zstd"

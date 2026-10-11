@@ -55,7 +55,7 @@ run_renew() {
         /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; ensure_dhcp_renewals'
 }
 
-# Covers: R-01.9.7, A-01.10
+# Covers: R-01.9.7
 @test "a routed host with working DNS passes immediately" {
     run run_gate 5
     [ "$status" -eq 0 ]

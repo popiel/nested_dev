@@ -87,7 +87,7 @@ echo "01:00.1 Audio device: NVIDIA ..."'
     assert_not_contains "$output" "1af4:1050"
 }
 
-# Covers: R-01.6.6, R-01.7.3
+# Covers: R-01.6.6
 @test "collect_gpu_ids returns an empty set on a host with only a virtio GPU" {
     install_mock "lspci" "mock-lspci.sh"
     export LSPCI_FIXTURE_PATH="${FIXTURES_DIR}/lspci-no-gpu.txt"
