@@ -6,12 +6,32 @@
 # created, `qm status` reports stopped afterwards, `qm config` has nothing to
 # say, and guest-agent calls succeed immediately so the provisioning gate for
 # VM 102 passes on its first poll instead of burning the 600s timeout.
+#
+# Separately, `qm list` re-derives the composed lifecycle state (running vs
+# template) from a state file the mutating verbs maintain. `qm status` is
+# deliberately NOT state-aware: it always reports stopped for created VMs so
+# the install-completion waits converge instantly. PVE's own refusal of
+# template starts is not modeled.
 STATE="${E2E_STATE:?E2E_STATE not set}"
 JOURNAL="$STATE/qm-journal"
 CREATED="$STATE/qm-created"
+LIFECYCLE="$STATE/qm-lifecycle"
 mkdir -p "$STATE"
-touch "$CREATED"
+touch "$CREATED" "$LIFECYCLE"
 printf 'qm %s\n' "$*" >> "$JOURNAL"
+set_vmid_state() {
+    local vid="$1" name="$2" status="$3" tmp
+    tmp="$(mktemp "$STATE/qm-lifecycle.XXXXXX")"
+    grep -v "^${vid}|" "$LIFECYCLE" 2>/dev/null > "$tmp" || true
+    printf '%s|%s|%s\n' "$vid" "$name" "$status" >> "$tmp"
+    mv "$tmp" "$LIFECYCLE"
+}
+vmid_name() {
+    local vid="$1" rest
+    rest="$(grep "^${vid}|" "$LIFECYCLE" 2>/dev/null | tail -1 || true)"
+    rest="${rest#*|}"
+    printf '%s' "${rest%%|*}"
+}
 verb="${1:-}"
 case "$verb" in
   status)
@@ -23,6 +43,47 @@ case "$verb" in
     ;;
   create)
     printf '%s\n' "$2" >> "$CREATED"
+    name=""
+    rest="${*:3}"
+    case "$rest" in
+      *--name\ *)
+        name="${rest#*--name }"
+        name="${name%% *}"
+        ;;
+    esac
+    set_vmid_state "$2" "${name:-vm-$2}" "stopped"
+    exit 0
+    ;;
+  clone)
+    printf '%s\n' "$3" >> "$CREATED"
+    name=""
+    rest="${*:4}"
+    case "$rest" in
+      *--name\ *)
+        name="${rest#*--name }"
+        name="${name%% *}"
+        ;;
+    esac
+    set_vmid_state "$3" "${name:-vm-$3}" "stopped"
+    exit 0
+    ;;
+  start)
+    set_vmid_state "$2" "$(vmid_name "$2")" "running"
+    exit 0
+    ;;
+  stop|shutdown)
+    set_vmid_state "$2" "$(vmid_name "$2")" "stopped"
+    exit 0
+    ;;
+  template)
+    set_vmid_state "$2" "$(vmid_name "$2")" "template"
+    exit 0
+    ;;
+  list)
+    sort -t'|' -k1,1n "$LIFECYCLE" 2>/dev/null | while IFS='|' read -r vid name status; do
+      [ -n "$vid" ] || continue
+      printf '%s %s %s\n' "$vid" "$name" "$status"
+    done
     exit 0
     ;;
   config)

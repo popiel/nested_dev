@@ -474,6 +474,24 @@ load '../lib/helpers'
         'refusing to create a second identity'
 }
 
+# Covers: R-07.6.1, A-07.19
+@test "the host-root pin matches the desktop lease" {
+    # The trust entry pins the desktop key with from="<desktop-IP>"; the lease
+    # assigns that IP to the desktop. If either changes alone, access silently
+    # fails while the key is still present — so the two must agree, checked
+    # in every source that states the desktop address.
+    local pin_ip lease_ref lease_frag
+    pin_ip="$(grep -E '^DESKTOP_IP=' "${PROJECT_ROOT}/provision/host/frag/25-desktop-control.sh" | cut -d'"' -f2)"
+    [ -n "$pin_ip" ] || { echo "DESKTOP_IP not found in frag/25" >&2; return 1; }
+    lease_ref="$(grep -E '^dhcp-host=[^,]*,lychee,' "${PROJECT_ROOT}/provision/network/dnsmasq.conf" | rev | cut -d, -f1 | rev)"
+    lease_frag="$(grep -E 'dhcp-host=[^,]*,lychee,' "${PROJECT_ROOT}/provision/host/frag/28-network.sh" | head -1 | rev | cut -d, -f1 | rev)"
+    [ -n "$lease_ref" ] || { echo "desktop lease not found in dnsmasq.conf" >&2; return 1; }
+    [ -n "$lease_frag" ] || { echo "desktop lease not found in frag/28" >&2; return 1; }
+    [ "$pin_ip" = "$lease_ref" ] || { echo "pin $pin_ip != reference lease $lease_ref" >&2; return 1; }
+    [ "$pin_ip" = "$lease_frag" ] || { echo "pin $pin_ip != frag/28 lease $lease_frag" >&2; return 1; }
+    [ "$pin_ip" = "192.168.100.100" ] || { echo "desktop address moved to $pin_ip" >&2; return 1; }
+}
+
 # Covers: R-05.6.3, A-05.17
 @test "the pre-commit hook blocks real password hashes in seeds" {
     assert_file_contains "${PROJECT_ROOT}/.githooks/pre-commit" 'password: "[^C]'

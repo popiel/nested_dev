@@ -252,12 +252,18 @@ require_run_ok() {
         "useradd -u 1500 -g 1500 -d /home/e2eop -s /bin/bash -c E2E Operator e2eop"
 }
 
-# Covers: A-01.2
+# Covers: A-01.2, A-05.7
 @test "the rendered password hash reaches the account and its hash file" {
     require_run_ok
     [ "$(cat "$E2E_ROOT/root/.personalization-password-hash")" = "E2EHASHSTRING" ]
     [ "$(stat -c %a "$E2E_ROOT/root/.personalization-password-hash")" = "600" ]
     assert_file_contains "$E2E_STATE/chpasswd-journal" "e2eop:E2EHASHSTRING"
+    # Disjoint destinations: the provisioner credentials the login account
+    # and never root — a `root:` chpasswd entry would be the login hash
+    # reaching host root. (Host root's own shadow entry is installer-written
+    # from the answer file; render-time separation is covered by build-iso.)
+    run grep -c '^root:' "$E2E_STATE/chpasswd-journal"
+    [ "$output" = "0" ]
 }
 
 # Covers: R-01.3.1a, R-05.2.2, A-01.2
@@ -676,13 +682,31 @@ require_run_ok() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-07.1.1, R-07.1.2, R-07.1.4, A-07.1
+# Covers: A-01.9
+@test "qm list shows the fleet end-state" {
+    require_run_ok
+    # PVE itself is out of scope (I-09.1), so the stub re-derives lifecycle
+    # state from the same calls the fragments made: this proves the calls
+    # compose into the documented end-state — 100/101 running, 102 a
+    # template that is never started again. Template-start refusal is PVE
+    # behavior, not provisioner behavior, and is not modeled here.
+    run "${BATS_TEST_DIRNAME}/stubs/qm" list
+    [ "$status" -eq 0 ]
+    assert_contains "$output" "100 desktop running"
+    assert_contains "$output" "101 llm running"
+    assert_contains "$output" "102 dev-template template"
+}
+
+# Covers: R-07.1.1, R-07.1.2, R-07.1.4, A-07.1, A-07.3
 @test "vmctl is a forced-command account carrying the repo's credentials" {
     require_run_ok
     local authkeys="$E2E_ROOT/home/vmctl/.ssh/authorized_keys"
     run cat "$authkeys"
     [ "$output" = 'command="sudo /usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 E2EPUB-vmctl_ed25519 e2e@test' ]
     [ "$(stat -c %a "$authkeys")" = "600" ]
+    # The control program is host-owned and executable, not writable by the
+    # control account (frag/25 installs mode 755 root-owned).
+    [ "$(stat -c %a "$E2E_ROOT/usr/local/sbin/vmctl-host")" = "755" ]
     run cmp "$E2E_ROOT/etc/sudoers.d/vmctl" "${PROJECT_ROOT}/provision/host/vmctl/sudoers"
     [ "$status" -eq 0 ]
     run cmp "$E2E_ROOT/usr/local/sbin/vmctl-host" "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host"

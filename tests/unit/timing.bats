@@ -806,6 +806,16 @@ BATS
     [ "$status" -eq 0 ]
 }
 
+# Covers: R-09.1a.2, A-09.8
+@test "the WSL setup needs no sudo" {
+    # A-09.8: install into the user's home with no sudo. Any uncommented sudo
+    # invocation would prompt for a password and break the unattended setup.
+    local found
+    found="$(grep -vE '^[[:space:]]*#' "${BATS_TEST_DIRNAME}/../wsl-setup.sh" | grep -w 'sudo' || true)"
+    [ -z "$found" ] || { echo "wsl-setup.sh invokes sudo:" >&2; echo "$found" >&2; return 1; }
+    assert_file_contains "${BATS_TEST_DIRNAME}/../wsl-setup.sh" '"$HOME/bin"'
+}
+
 # Covers: R-09.1a.2
 @test "the WSL setup script is syntactically valid" {
     run bash -n "${BATS_TEST_DIRNAME}/../wsl-setup.sh"
