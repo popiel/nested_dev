@@ -307,7 +307,7 @@ EOF
     [[ "$line100" == *"unknown" ]]
 }
 
-# Covers: R-07.1.4
+# Covers: R-07.1.4, I-07.2
 @test "vmctl-host refuses unprivileged execution loudly" {
     # The trap this suite was missing: without the root refusal, a privilege
     # failure degrades into empty results with a bare nonzero exit — the
@@ -323,7 +323,7 @@ EOF
     assert_file_contains "$VMCTL_HOST" 'must run as root via the vmctl sudoers entry'
 }
 
-# Covers: R-07.1.2, R-07.1.4, A-07.1
+# Covers: R-07.1.2, R-07.1.4, I-07.2, A-07.1
 @test "the control channel composes: sudo invocation, sudoers grant, env" {
     # The three artifacts must agree or the channel runs unprivileged and
     # every verb fails: ForceCommand invokes through sudo, sudoers grants
@@ -338,7 +338,7 @@ EOF
     assert_file_contains "$frag" 'env_keep += "SSH_ORIGINAL_COMMAND"'
 }
 
-# Covers: R-07.2.2, A-07.6
+# Covers: R-07.2.2, I-07.3, A-07.6
 @test "the dev range boundaries are enforced on every ID-taking verb" {
     # The range starts above the static fleet, so an out-of-range ID cannot
     # reach the desktop, the LLM VM or the template.
@@ -379,4 +379,56 @@ EOF
     assert_file_not_contains "$NESTED" 'Answer file OK'
     assert_file_contains "$NESTED" 'not rendered'
     assert_file_contains "$NESTED" 'Validation happens during the build'
+}
+
+# Covers: R-07.2.3, A-07.7
+@test "start refuses a running VM and a non-dev name" {
+    # A name change is how a VM would cross the fleet trust boundary, and an
+    # already-running start is how an operator double-boots a guest.
+    assert_file_contains "$VMCTL_HOST" "does not match dev-* pattern"
+    assert_file_contains "$VMCTL_HOST" 'is not stopped (status:'
+}
+
+# Covers: R-07.2.4
+@test "operator-supplied project names are pattern-checked first" {
+    assert_file_contains "$VMCTL_HOST" '^[a-z0-9][a-z0-9_-]{0,30}$'
+    assert_file_contains "$VMCTL_HOST" 'Project name must be lowercase'
+}
+
+# Covers: R-07.3.2, A-07.5
+@test "devctl resolves names through the control listing" {
+    # Requiring IDs is how IDs get copied wrong; passing unknown names
+    # through is how the wrong VM gets operated.
+    assert_file_contains "$DEVCTL" 'vmctl@${PVEHOST} list'
+    assert_file_contains "$DEVCTL" 'Unknown VM:'
+}
+
+# Covers: R-07.3.4, A-07.22
+@test "devctl start sets expectations and unknown verbs show grouped help" {
+    assert_file_contains "$DEVCTL" 'First boot may take several minutes'
+    assert_file_contains "$DEVCTL" 'Fleet control (restricted, via vmctl):'
+}
+
+# Covers: R-08.2.1, R-08.2.3
+@test "the nested wrapper exposes four operations and fails unknown ones" {
+    for verb in build verify refresh keys-status; do
+        assert_file_contains "$NESTED" "    ${verb})"
+    done
+    assert_file_contains "$NESTED" 'help|*)'
+}
+
+# Covers: R-08.6.1, R-08.6.2
+@test "nested refresh re-pulls without cache and reports the digest" {
+    assert_file_contains "$NESTED" 'docker build --pull --no-cache'
+    assert_file_contains "$NESTED" 'RepoDigests'
+}
+
+# Covers: R-08.3.1, R-08.3.2, R-08.3.3
+@test "nested bind-mounts the checkout and hands output back" {
+    # A log path in build output must open directly on the dev VM; an ISO
+    # left container-local disappears with the container; root-owned output
+    # the operator cannot delete is a failed build twice over.
+    assert_file_contains "$NESTED" '-v "${NESTED_DEV}:/work/nested_dev"'
+    assert_file_contains "$NESTED" 'chown -R "${USER}:${USER}" "${NESTED_DEV}/output/"'
+    assert_file_contains "$NESTED" 'chown -R "${USER}:${USER}" "${NESTED_DEV}/keys/"'
 }

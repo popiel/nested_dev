@@ -101,7 +101,7 @@ load '../lib/helpers'
         'id=rmouse,evdev=${RACK_MOUSE_EVIDEV},grab_all'
 }
 
-# Covers: R-05.6.1, R-06.2.1, R-09.2.7
+# Covers: R-05.6.1, R-06.2.1, R-09.2.7, A-05.3
 @test "user-data templates contain required placeholders" {
     # Every token frag/30 substitutes. A guest seed that reaches the installer
     # with a surviving token boots without its login hash, its operator key or
@@ -125,7 +125,7 @@ load '../lib/helpers'
     assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" '__ADMIN_PUBKEY__'
 }
 
-# Covers: R-06.2.3, I-06.2
+# Covers: R-06.2.3, I-06.2, A-06.5
 @test "the desktop seed carries both desktop private-key placeholders" {
     # devctl is unusable on the desktop without these two: pvehost_vmctl is
     # the restricted fleet-control credential and nested-dev-id is the guest
@@ -171,7 +171,7 @@ load '../lib/helpers'
         '__ROOT_PASSWORD_HASH__'
 }
 
-# Covers: R-05.6.3, I-05.3
+# Covers: R-05.6.3, I-05.3, A-05.14
 @test "no committed host template carries a real password hash" {
     # Both hashes are gitignored secrets read at build time. A hash in a
     # template would be published to GitHub and shipped in every built ISO.
@@ -182,7 +182,7 @@ load '../lib/helpers'
     done
 }
 
-# Covers: I-05.4, R-09.5.2
+# Covers: I-05.4, R-09.5.2, A-05.14
 @test "neither password hash is tracked by git" {
     for f in keys/personalization-password-hash keys/root-password-hash; do
         run git -C "$PROJECT_ROOT" ls-files --error-unmatch "$f"
@@ -220,7 +220,7 @@ load '../lib/helpers'
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/30-create-guests.sh" '/root/provision/personalization.sh'
 }
 
-# Covers: R-05.1.4, A-05.4
+# Covers: R-05.1.4, A-05.4, A-06.3
 @test "frag/30 aborts when personalization vars are empty" {
     # The specific guard, not a bare `exit 1` somewhere in a 400-line script:
     # this is the check that stops the host boot with an operator-readable
@@ -368,4 +368,105 @@ load '../lib/helpers'
 @test "the host account trusts both the Filbert and desktop keys" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/frag/25-desktop-control.sh" \
         'Host account now trusts both keys'
+}
+
+# Covers: R-00.5.1, R-06.1.4, I-06.4
+@test "no prebuilt guest image is vendored into the repository" {
+    # Every guest installs from official media with a host-assembled seed; a
+    # tracked qcow2/img/iso, a payloads/ directory, or an image-conversion
+    # pass (virt-sysprep/zerofree) would be a second, unaudited install path.
+    local found
+    found="$(git -C "$PROJECT_ROOT" ls-files | grep -iE '\.(qcow2|img|iso)$' || true)"
+    [ -z "$found" ] || { echo "vendored image blobs tracked:" >&2; echo "$found" >&2; return 1; }
+    [ ! -d "${PROJECT_ROOT}/payloads" ] || { echo "payloads/ directory exists" >&2; return 1; }
+    found="$(grep -rliE 'virt-sysprep|zerofree' "${PROJECT_ROOT}/provision" "${PROJECT_ROOT}/desktop" "${PROJECT_ROOT}/llm" "${PROJECT_ROOT}/dev" 2>/dev/null || true)"
+    [ -z "$found" ] || { echo "image-conversion tooling referenced:" >&2; echo "$found" >&2; return 1; }
+}
+
+# Covers: R-08.7.5, A-08.18
+@test "build output lives outside version control" {
+    # Only the directory placeholder may be tracked; ISOs, manifests and work
+    # files must never be committed.
+    run git -C "$PROJECT_ROOT" check-ignore output/MANIFEST
+    [ "$status" -eq 0 ]
+    local tracked
+    tracked="$(git -C "$PROJECT_ROOT" ls-files output | grep -v -xF 'output/.gitkeep' || true)"
+    [ -z "$tracked" ] || { echo "tracked build output:" >&2; echo "$tracked" >&2; return 1; }
+}
+
+# Covers: R-05.8.1
+@test "the release reference is assigned in exactly one place" {
+    # Fallback reads (${VAR:-default}) and placeholder rewrites are not
+    # assignments; a second quoted assignment would be a second source of
+    # truth for what the fleet builds from.
+    local found
+    found="$(grep -rnE 'PERSONALIZATION_(REF|REPO)="' "${PROJECT_ROOT}/provision" "${PROJECT_ROOT}/desktop" "${PROJECT_ROOT}/llm" "${PROJECT_ROOT}/dev" 2>/dev/null | grep -v 'provision/personalization.sh' || true)"
+    [ -z "$found" ] || { echo "second ref/repo assignment:" >&2; echo "$found" >&2; return 1; }
+    assert_file_contains "${PROJECT_ROOT}/provision/personalization.sh" 'PERSONALIZATION_REF="'
+    assert_file_contains "${PROJECT_ROOT}/provision/personalization.sh" 'PERSONALIZATION_REPO="'
+}
+
+# Covers: R-05.1.1, I-05.1, A-05.2
+@test "the configured full name appears only in personalization.sh" {
+    # The username and email have sibling tests above; the full name rides in
+    # GECOS and mail headers, so a literal copy elsewhere is a second identity
+    # literal with the same blast radius.
+    local fullname found
+    fullname="$(grep -E '^PERSONALIZATION_FULLNAME=' "${PROJECT_ROOT}/provision/personalization.sh" | cut -d'"' -f2)"
+    [ -n "$fullname" ] || { echo "PERSONALIZATION_FULLNAME not found" >&2; return 1; }
+    found="$(grep -rF "$fullname" --include='*.sh' --include='*.toml' --include='*.conf' \
+        --include='user-data' "$PROJECT_ROOT" 2>/dev/null \
+        | grep -v 'provision/personalization.sh' \
+        | grep -v '/tests/' \
+        | grep -v '.git/' \
+        | grep -v '/output/' || true)"
+    [ -z "$found" ] || { echo "full-name literal outside personalization.sh:" >&2; echo "$found" >&2; return 1; }
+}
+
+# Covers: R-07.9.1
+@test "the dev range holds 147 IDs" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" 'DEV_MIN=103'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" 'DEV_MAX=249'
+    [ "$((249 - 103 + 1))" -eq 147 ]
+}
+
+# Covers: R-07.4.4, A-07.15
+@test "a clone's MAC embeds its VM ID" {
+    # Uniqueness by construction: the fixed prefix plus a suffix derived from
+    # the allocated ID, so two clones cannot share a link address.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" 'MAC="52:54:00:00:02:${MAC_SUFFIX}"'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host" 'NEXT_VID & 255'
+}
+
+# Covers: R-07.2.6, A-07.4
+@test "a missing control program fails naming the program" {
+    assert_file_contains "${PROJECT_ROOT}/provision/host/frag/25-desktop-control.sh" \
+        'vmctl-host source not found'
+}
+
+# Covers: R-05.3.2, R-05.3.3, A-05.10
+@test "host account creation reconciles and refuses a taken UID" {
+    # Re-running is a no-op reconcile, not a second account; a UID/GID held
+    # by another account aborts instead of shadowing it.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        'account exists — reconciling'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/first-boot.sh" \
+        'refusing to create a second identity'
+}
+
+# Covers: R-05.6.3, A-05.17
+@test "the pre-commit hook blocks real password hashes in seeds" {
+    assert_file_contains "${PROJECT_ROOT}/.githooks/pre-commit" 'password: "[^C]'
+    assert_file_contains "${PROJECT_ROOT}/.githooks/pre-commit" 'CHANGE_ME_HASHED'
+}
+
+# Covers: R-08.1.1, R-08.1.2, R-08.1.3, R-08.1.4
+@test "the builder image is a lean same-release toolchain" {
+    local df="${PROJECT_ROOT}/dev/docker/Dockerfile.nested"
+    assert_file_contains "$df" 'FROM ubuntu:26.04'
+    assert_file_contains "$df" 'xorriso'
+    assert_file_contains "$df" 'rm -rf /var/lib/apt/lists'
+    assert_file_not_contains "$df" 'xrdp'
+    run grep -iE 'nvidia|cuda|ollama|gnome|x11vnc|firefox' "$df"
+    [ -z "$output" ]
 }

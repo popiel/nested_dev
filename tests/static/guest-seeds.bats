@@ -51,7 +51,7 @@ __VMCTL_PRIV_B64__"
     done
 }
 
-# Covers: R-05.5.1, R-05.5.2, I-06.3, A-05.12
+# Covers: R-05.5.1, R-05.5.2, I-06.3, A-05.12, A-06.7
 @test "every guest seed locks root and does nothing else to it" {
     # subiquity already leaves root locked, but nothing said so. Relying on that
     # default means a future identity block change could add a root credential
@@ -297,4 +297,39 @@ assert_key_write_creates_ssh_dir_first() {
             return 1
         fi
     done
+}
+
+# Covers: R-05.7.1
+@test "git identity is configured only in the dev guest" {
+    # The dev guest does the committing; a global git identity in the browsing
+    # desktop or the inference host is surface for impersonation confusion.
+    assert_file_contains "${PROJECT_ROOT}/dev/dev-firstboot.sh" \
+        'git config --global user.name'
+    assert_file_contains "${PROJECT_ROOT}/dev/dev-firstboot.sh" \
+        'git config --global user.email'
+    assert_file_not_contains "${PROJECT_ROOT}/desktop/desktop-firstboot.sh" \
+        'git config --global'
+    assert_file_not_contains "${PROJECT_ROOT}/llm/llm-firstboot.sh" \
+        'git config --global'
+}
+
+# Covers: R-02.1.6
+@test "the desktop resolves fleet names through the host dnsmasq" {
+    # VM names resolve only at the host's resolver; without this the desktop
+    # cannot reach guests by name and devctl's name resolution is dead.
+    assert_file_contains "${PROJECT_ROOT}/desktop/user-data/user-data" \
+        'DNS=192.168.100.1'
+}
+
+# Covers: R-04.6.1, R-04.6.7
+@test "dev tool wrappers are installed on the account PATH" {
+    # One wrapper per tool, built on first use, invocable by name: a wrapper
+    # installed outside PATH is a wrapper the operator does not have.
+    local tool
+    for tool in java scala sbt opencode; do
+        assert_file_contains "${PROJECT_ROOT}/dev/dev-firstboot.sh" \
+            "cat > \"\${BIN_DIR}/${tool}\""
+    done
+    assert_file_contains "${PROJECT_ROOT}/dev/dev-firstboot.sh" \
+        'export PATH="${HOME}/.local/bin:${PATH}"'
 }

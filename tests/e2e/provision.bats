@@ -244,7 +244,7 @@ require_run_ok() {
 
 # --- the operator account ---
 
-# Covers: R-01.3.1, R-05.2.1, R-05.3.2, A-01.2, A-05.5
+# Covers: R-01.3.1, R-05.2.1, R-05.2.3, R-05.3.2, A-01.2, A-05.5
 @test "the operator account is created with the rendered identity" {
     require_run_ok
     assert_file_contains "$E2E_STATE/account-journal" "groupadd -g 1500 e2eop"
@@ -576,7 +576,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/qm-journal" "docker/key.json"
 }
 
-# Covers: R-06.2, R-05.2.4, I-06.5, A-06.4
+# Covers: R-06.2, R-05.2.4, R-06.7.2, I-06.5, A-06.4
 @test "guest seeds carry the hash and their keys, and no placeholders survive" {
     require_run_ok
     local seeddir="$E2E_ROOT/var/lib/vz/template/cidata"
@@ -620,7 +620,7 @@ require_run_ok() {
     done
 }
 
-# Covers: R-01.5.3, R-06.5, A-01.17
+# Covers: R-01.5.3, R-00.8.4, R-06.5, R-07.7.1, A-01.17, A-06.9
 @test "re-provisioning changes nothing observable" {
     require_run_ok
     # The guest identity key must appear exactly once no matter how many times
@@ -640,7 +640,7 @@ require_run_ok() {
     [ "$output" = "0" ]
 }
 
-# Covers: R-06.6, R-07.7.2, A-06.10
+# Covers: R-06.6, R-05.9.3, R-07.7.2, A-06.10
 @test "staged private keys are destroyed and canonical keypairs kept" {
     require_run_ok
     [ ! -e "$E2E_ROOT/root/.nested-dev/vmctl-priv-staged" ]
@@ -661,7 +661,7 @@ require_run_ok() {
 
 # --- control channel, service, host config ---
 
-# Covers: R-07.4.8, A-07.11, A-07.14
+# Covers: R-07.4.4, R-07.4.8, A-07.11, A-07.14
 @test "the VM inventory names the three guests" {
     require_run_ok
     local inv="$E2E_ROOT/etc/nested-dev/inventory"
@@ -786,7 +786,7 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.104 -p tcp --dport 443"
 }
 
-# Covers: R-00.8.3, R-05.8.7, R-05.2.4, A-01.16
+# Covers: R-00.8.3, R-05.8.7, R-05.8.8, R-05.2.4, A-01.16
 @test "recorded SHAs and dual host trust land as configured" {
     require_run_ok
     # Build SHA recorded globally and per guest for default-on-rebuild.

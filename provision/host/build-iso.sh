@@ -335,7 +335,18 @@ main() {
 
     mkdir -p "$ISO_DIR" "$WORK_DIR"
 
-    # --- 1. Download PVE ISO ---
+    # --- 1. Resolve target disk preference ---
+    # Validated before anything is downloaded: a malformed value fails in
+    # seconds here rather than after the multi-gigabyte ISO step it would
+    # have invalidated (R-08.7.1). Explicitly configured, not detected: this
+    # ISO is built on one machine and installed on another, so /dev here
+    # describes the builder, not the target.
+    DISK_LIST=$(validate_target_disks "${PERSONALIZATION_TARGET_DISKS:-}")
+    DISKS="[${DISK_LIST}]"
+    log "Target disk: ${DISKS}"
+    log "  (pinned explicitly; nothing else is listed, so no data disk can be selected)"
+
+    # --- 2. Download PVE ISO ---
     PVE_ISO_URL="https://na.cdn.proxmox.com/iso/proxmox-ve_9.2-1.iso"
     PVE_ISO_NAME="proxmox-ve_9.2-1.iso"
     PVE_ISO_PATH="${ISO_DIR}/${PVE_ISO_NAME}"
@@ -368,21 +379,13 @@ main() {
         log "PVE ISO SHA256 verified"
     fi
 
-    # --- 2. Read SSH public key ---
+    # --- 3. Read SSH public key ---
     SSH_KEY_FILE="${REPO_ROOT}/keys/host_os_ed25519.pub"
     if [ ! -f "$SSH_KEY_FILE" ]; then
         die "SSH public key not found: ${SSH_KEY_FILE}"
     fi
     SSH_KEY=$(tr -d '\n' < "$SSH_KEY_FILE")
     log "SSH key loaded from ${SSH_KEY_FILE}"
-
-    # --- 3. Resolve target disk preference ---
-    # Explicitly configured, not detected: this ISO is built on one machine and
-    # installed on another, so /dev here describes the builder, not the target.
-    DISK_LIST=$(validate_target_disks "${PERSONALIZATION_TARGET_DISKS:-}")
-    DISKS="[${DISK_LIST}]"
-    log "Target disk: ${DISKS}"
-    log "  (pinned explicitly; nothing else is listed, so no data disk can be selected)"
 
     # --- 4. Render build-time templates ---
     ANSWER_TEMPLATE="${SCRIPT_DIR}/answer-host.toml"

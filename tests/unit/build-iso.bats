@@ -26,31 +26,31 @@ teardown() {
     [ "$UBUNTU_BASE_URL" = "https://releases.ubuntu.com/26.04" ]
 }
 
-# Covers: R-01.12.4, R-05.6.2
+# Covers: R-01.12.4, R-05.6.2, R-09.3.2
 @test "sed_escape escapes backslash" {
     run sed_escape 'foo\bar'
     [ "$output" = 'foo\\bar' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2
+# Covers: R-01.12.4, R-05.6.2, R-09.3.2
 @test "sed_escape escapes dollar signs" {
     run sed_escape 'abc$123'
     [ "$output" = 'abc\$123' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2
+# Covers: R-01.12.4, R-05.6.2, R-09.3.2
 @test "sed_escape escapes pipe characters" {
     run sed_escape 'foo|bar'
     [ "$output" = 'foo\|bar' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2
+# Covers: R-01.12.4, R-05.6.2, R-09.3.2
 @test "sed_escape escapes ampersand" {
     run sed_escape 'foo&bar'
     [ "$output" = 'foo\&bar' ]
 }
 
-# Covers: R-01.12.4, R-05.6.2, A-01.18
+# Covers: R-01.12.4, R-05.6.2, R-09.3.2, A-01.18
 @test "sed_escape handles yescrypt hash" {
     local hash='$y$j9T$GSFbB5goTmV.aoKo5jISb/$6Y5zIG4SencKlWYW.gJAqoB0k7emCAu.0N4o.bCemMC'
     run sed_escape "$hash"
@@ -102,14 +102,14 @@ teardown() {
 # MSYS rewrites POSIX-looking args passed to native binaries like docker.exe,
 # which silently breaks every bind mount. These lock in the opt-out.
 
-# Covers: R-08.7.6
+# Covers: R-08.7.6, A-08.19
 @test "is_msys is false on a normal Linux shell" {
     unset MSYSTEM
     run is_msys
     [ "$status" -ne 0 ]
 }
 
-# Covers: R-08.7.6
+# Covers: R-08.7.6, A-08.19
 @test "is_msys is true when MSYSTEM is set and cygpath exists" {
     setup_mock_path
     create_mock "cygpath" 'true'
@@ -118,7 +118,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-08.7.6
+# Covers: R-08.7.6, A-08.19
 @test "is_msys is false when MSYSTEM is set but cygpath is missing" {
     # Empty PATH guarantees `command -v cygpath` fails on any platform,
     # including hosts that genuinely have cygpath (Git Bash).
@@ -130,14 +130,14 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
-# Covers: R-08.7.6
+# Covers: R-08.7.6, A-08.19
 @test "host_path passes the path through unchanged off MSYS" {
     unset MSYSTEM
     run host_path "/c/Users/someone/output/iso"
     [ "$output" = "/c/Users/someone/output/iso" ]
 }
 
-# Covers: R-08.7.6
+# Covers: R-08.7.6, A-08.19
 @test "host_path converts via cygpath -m on MSYS" {
     setup_mock_path
     cat > "${FIXTURES_DIR}/mock-bin/cygpath" <<'SCRIPT'
@@ -152,7 +152,7 @@ SCRIPT
     [ "$output" = "C:/converted/iso" ]
 }
 
-# Covers: R-08.7.6
+# Covers: R-08.7.6, A-08.19
 @test "docker bind mounts are built from host_path, not raw MSYS paths" {
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '-v "$(host_path "$ISO_DIR"):/iso:ro"'
@@ -162,7 +162,7 @@ SCRIPT
         '-v "$(host_path "$OUTPUT_DIR"):/output"'
 }
 
-# Covers: R-08.7.6
+# Covers: R-08.7.6, A-08.19
 @test "no bare 'docker run' remains — all calls go through docker_noconv" {
     run grep -nE '^[[:space:]]*docker (run|build|image)' \
         "${PROJECT_ROOT}/provision/host/build-iso.sh"
@@ -675,4 +675,31 @@ setup_personalization() {
         '--on-first-boot "$first_boot"'
     assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
         '--on-first-boot "/work/$(basename "$FIRST_BOOT_WORK")"'
+}
+
+# Covers: R-08.7.1, A-08.9
+@test "the target disk is validated before any install media is downloaded" {
+    # A malformed disk value must fail in seconds, not after the multi-gigabyte
+    # ISO step it would have invalidated. Asserted on main() line order: the
+    # validate call must precede the first media download call.
+    local src="${PROJECT_ROOT}/provision/host/build-iso.sh"
+    local validate_line download_line
+    validate_line="$(grep -n 'DISK_LIST=$(validate_target_disks' "$src" | head -1 | cut -d: -f1)"
+    download_line="$(grep -n 'download_iso "\$PVE_ISO_URL"' "$src" | head -1 | cut -d: -f1)"
+    [ -n "$validate_line" ] || { echo "no disk validation call found" >&2; return 1; }
+    [ -n "$download_line" ] || { echo "no ISO download call found" >&2; return 1; }
+    [ "$validate_line" -lt "$download_line" ] || {
+        echo "disk validation (line $validate_line) runs after the ISO download (line $download_line)" >&2
+        return 1
+    }
+}
+
+# Covers: A-05.9
+@test "a missing credential file fails naming that file" {
+    # "hash not found" alone does not tell the operator which of the two
+    # secrets to generate; each die must name its own file.
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+        'Missing: ${ROOT_PASSWORD_HASH_FILE}'
+    assert_file_contains "${PROJECT_ROOT}/provision/host/build-iso.sh" \
+        'Missing: ${PERSONALIZATION_PASSWORD_HASH_FILE}'
 }

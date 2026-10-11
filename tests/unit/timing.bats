@@ -903,3 +903,122 @@ BATS
     run git -C "${BATS_TEST_DIRNAME}/../.." check-ignore tests/lib/helpers.bash
     [ "$status" -ne 0 ]
 }
+
+# Covers: A-09.1
+@test "the default run selects every suite" {
+    # A-09.1's behavioral half is every full run; the static half pinned here
+    # is that the no-argument path falls through to the whole discovered set
+    # rather than a subset, a stale list, or the fast tier.
+    assert_file_contains "${BATS_TEST_DIRNAME}/../run.sh" 'FAST=0'
+    assert_file_contains "${BATS_TEST_DIRNAME}/../run.sh" 'SUITES=("${ALL_SUITES[@]}")'
+}
+
+# Covers: A-09.4
+@test "a failing suite prints its TAP output and exits non-zero" {
+    # A run that hides which assertion failed sends the developer hunting;
+    # the failing suite's full TAP (including the test name) must survive,
+    # followed by the result block and a non-zero exit.
+    local suite="${BATS_TEST_TMPDIR}/failing.bats"
+    cat > "$suite" <<'BATS'
+@test "deliberately failing assertion" {
+    [ "actual" = "expected" ]
+}
+BATS
+    run env TIMING_DIR="${BATS_TEST_TMPDIR}/timing-failing" \
+        bash "${BATS_TEST_DIRNAME}/../run.sh" "$suite"
+    [ "$status" -ne 0 ]
+    printf '%s\n' "$output" | grep -q 'not ok' || {
+        echo "failing TAP not shown:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+    printf '%s\n' "$output" | grep -q 'deliberately failing assertion' || {
+        echo "failing test name not shown:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+    printf '%s\n' "$output" | grep -q '^tests_failed=1$' || {
+        echo "failure not counted:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+}
+
+# Covers: A-09.5, R-09.1.3
+@test "a missing required tool names the tool and stops before any test" {
+    # A suite failing with `command not found` halfway reports a code failure
+    # for a missing dependency. PATH here has the shell plumbing run.sh needs
+    # before its dependency check, but none of the required tools themselves.
+    # bash itself is invoked by absolute path: env(1) would resolve it through
+    # the restricted PATH and fail before run.sh even starts.
+    local bin="${BATS_TEST_TMPDIR}/no-tools-bin"
+    local sysbash
+    sysbash="$(command -v bash)"
+    mkdir -p "$bin"
+    local tool
+    for tool in tr basename cut sort uniq dirname; do
+        ln -sf "$(command -v "$tool")" "$bin/$tool"
+    done
+    run env PATH="$bin" TIMING_DIR="${BATS_TEST_TMPDIR}/timing-missing" \
+        "$sysbash" "${BATS_TEST_DIRNAME}/../run.sh" tests/unit/gpu-detect.bats
+    [ "$status" -ne 0 ]
+    printf '%s\n' "$output" | grep -q 'Missing required tools' || {
+        echo "missing-tool error not shown:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+    printf '%s\n' "$output" | grep -q 'bats' || {
+        echo "missing tool not named:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+    printf '%s\n' "$output" | grep -q 'apt-get install' || {
+        echo "install hint not shown:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+}
+
+# Covers: A-09.6
+@test "a missing optional tool is a visible skip, never a failure" {
+    # PATH here carries the required tools plus shell plumbing, but none of
+    # the optional ones (dnsmasq, iptables-restore, hadolint): configs.bats
+    # must skip those checks and still pass, reporting skips as skips.
+    local bin="${BATS_TEST_TMPDIR}/no-optional-bin"
+    mkdir -p "$bin"
+    local tool
+    for tool in bash bats shellcheck python3 git basename cut sort uniq dirname grep sed awk tr head tail mktemp mkdir rm rmdir ln cp mv chmod sleep date uname wc find tee env cat readlink ps flock od nl touch tput stty seq xargs cmp diff; do
+        [ -e "$bin/$tool" ] && continue
+        command -v "$tool" >/dev/null 2>&1 || continue
+        ln -sf "$(command -v "$tool")" "$bin/$tool"
+    done
+    # bats resolves its own libexec helpers (bats-exec-suite, bats-format-cat)
+    # partly via PATH, so put the installed helper directory on PATH too.
+    # Those are runner internals, not the optional tools under test.
+    local bats_real bats_lib
+    bats_real="$(readlink -f "$(command -v bats)")"
+    for bats_lib in "$(dirname "$bats_real")/../libexec/bats-core" "$(dirname "$bats_real")"; do
+        [ -d "$bats_lib" ] || continue
+        for tool in "$bats_lib"/bats-*; do
+            [ -x "$tool" ] || continue
+            ln -sf "$tool" "$bin/$(basename "$tool")"
+        done
+    done
+    run env PATH="$bin" TIMING_DIR="${BATS_TEST_TMPDIR}/timing-optional" \
+        bash "${BATS_TEST_DIRNAME}/../run.sh" tests/static/configs.bats
+    [ "$status" -eq 0 ] || {
+        echo "optional-tool absence failed the run:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+    printf '%s\n' "$output" | grep -q '\[--\] dnsmasq not found' || {
+        echo "optional-tool skip not reported:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+    printf '%s\n' "$output" | grep -qE '^tests_skipped=[1-9]' || {
+        echo "skips not counted:" >&2
+        printf '%s\n' "$output" >&2
+        return 1
+    }
+}

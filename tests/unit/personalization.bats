@@ -49,7 +49,7 @@ source_real_personalization() {
     [ "$PERSONALIZATION_HOME" = "/home/${PERSONALIZATION_USERNAME}" ]
 }
 
-# Covers: R-05.8.3, I-05.5, A-05.15
+# Covers: R-05.8.3, R-09.3.7, I-05.5, A-05.15
 @test "resolve_ref_to_sha is defined in exactly one script" {
     # frag/30 sources personalization.sh and calls resolve_ref_to_sha. A second
     # copy is how the two drifted: frag/30's lacked the `command -v git` guard

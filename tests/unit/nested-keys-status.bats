@@ -31,7 +31,7 @@ run_keys_status() {
     env HOME="$WORK/home" PATH="$WORK/bin:$PATH" bash "$NESTED" keys-status
 }
 
-# Covers: R-08.4.1, R-08.4.5, A-08.8
+# Covers: R-08.4.1, R-08.4.5, R-09.5.4, A-08.8
 @test "missing hashes are reported as missing, in keys/" {
     run run_keys_status
     [ "$status" -eq 0 ]
@@ -40,7 +40,7 @@ run_keys_status() {
     assert_not_contains "$output" "secrets/"
 }
 
-# Covers: R-08.4.1, R-08.4.5, A-08.8
+# Covers: R-08.4.1, R-08.4.5, R-09.5.4, A-08.8
 @test "present hashes are reported as present" {
     printf 'x' > "$WORK/home/work/nested_dev/keys/personalization-password-hash"
     printf 'x' > "$WORK/home/work/nested_dev/keys/root-password-hash"

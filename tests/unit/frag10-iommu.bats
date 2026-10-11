@@ -140,7 +140,7 @@ iommu_group() {
     done
 }
 
-# Covers: R-01.7.1
+# Covers: R-01.7.1, R-09.3.4
 @test "a group built the way sysfs builds one is still counted" {
     # Pins the shape assumption directly, so a future change to the counting
     # expression cannot quietly stop matching real /sys.
@@ -171,7 +171,7 @@ iommu_group() {
     [ "$output" = "1f:00.0" ]
 }
 
-# Covers: R-01.7.1
+# Covers: R-01.7.1, R-09.3.4
 @test "a group in a non-zero PCI domain is judged by the same rule" {
     # The build host is not the deploy host, and neither is any of the fixtures
     # standing in for one. If the rule embedded a domain, it would pass every
@@ -244,7 +244,7 @@ iommu_group() {
     [ "$output" = "0" ]
 }
 
-# Covers: R-01.7.1, A-01.7
+# Covers: R-01.7.1, R-09.3.4, A-01.7
 @test "R4: a single-device group is separable" {
     local tmpdir="${BATS_TMPDIR}/iommu-single"
     rm -rf "$tmpdir"
@@ -253,7 +253,7 @@ iommu_group() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-01.7.1, R-01.7.2, A-01.7
+# Covers: R-01.7.1, R-01.7.2, R-09.3.4, A-01.7
 @test "R4: a group with a second unrelated device is not separable" {
     # A third device alongside the GPU would follow it into the guest and take a
     # piece of the host's hardware with it.
@@ -264,7 +264,7 @@ iommu_group() {
     [ "$status" -ne 0 ]
 }
 
-# Covers: R-01.6.5, R-01.7.1
+# Covers: R-01.6.5, R-01.7.1, R-09.3.4
 @test "R4: the GPU and its companion audio function are separable together" {
     # R-01.7.1 permits exactly this pairing, and R-01.6.5 requires it be passed
     # through together, so it is the one two-device group that must NOT abort.
@@ -280,7 +280,7 @@ iommu_group() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-01.7.1, R-01.7.2
+# Covers: R-01.7.1, R-01.7.2, R-09.3.4
 @test "R4: a third device alongside the audio function is not separable" {
     # Permitting the audio function must not permit anything else with it.
     local tmpdir="${BATS_TMPDIR}/iommu-triple"
@@ -290,7 +290,7 @@ iommu_group() {
     [ "$status" -ne 0 ]
 }
 
-# Covers: R-01.7.1
+# Covers: R-01.7.1, R-09.3.4
 @test "R4: the audio function alone in its own group is separable" {
     local tmpdir="${BATS_TMPDIR}/iommu-audio-alone"
     rm -rf "$tmpdir"
@@ -299,7 +299,7 @@ iommu_group() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-01.7.1, R-01.7.2
+# Covers: R-01.7.1, R-01.7.2, R-09.3.4
 @test "R4: a group with three devices is not separable either" {
     local tmpdir="${BATS_TMPDIR}/iommu-triple-plain"
     rm -rf "$tmpdir"
@@ -308,7 +308,7 @@ iommu_group() {
     [ "$status" -ne 0 ]
 }
 
-# Covers: R-01.7.1, A-01.6
+# Covers: R-01.7.1, R-09.3.4, A-01.6
 @test "R4: the measured host layout — the iGPU alone is separable" {
     # Taken from a real host rather than invented. With VT-d enabled, this
     # machine reported:
@@ -322,7 +322,7 @@ iommu_group() {
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-01.7.1, R-01.7.2
+# Covers: R-01.7.1, R-01.7.2, R-09.3.4
 @test "R4: the measured host layout — the dGPU group is not separable" {
     # The same host reported both GTX 1080s, their audio functions, and the two
     # PCH root ports they sit behind all in group 2:
