@@ -223,6 +223,7 @@ EOF
     # ...and the no-subscription repository is in place for the detected suite.
     run grep -xF 'deb http://download.proxmox.com/debian/pve trixie pve-no-subscription' \
         "$NOSUB_LIST"
+    [ "$status" -eq 0 ]
 }
 
 # Covers: R-01.3.1b

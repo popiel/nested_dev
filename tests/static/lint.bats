@@ -182,3 +182,71 @@ load '../lib/helpers'
     done
     [ "$fails" -eq 0 ]
 }
+
+# Covers: R-09.4
+@test "every run result is consumed by a status or output check" {
+    # Plain `run` always returns 0: a `run grep ...` with no following
+    # $status/$output check passes whether the command matched or not, so a
+    # missing inventory row (or mismatched file, or absent warning) ships a
+    # green suite. Each bare `run` must be consumed by a status/output/lines
+    # reference before the next `run` or the test's closing brace.
+    # (`run !`/`run -N` forms assert by themselves and are exempt; heredoc
+    # fixtures are skipped like the Covers check. Pure bash throughout: a
+    # subprocess per source line would cost minutes under WSL.)
+    local file line stripped heredoc pending in_test fails=0
+    local hd_re="<<['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?[[:space:]]*$"
+    for file in tests/static/*.bats tests/unit/*.bats tests/e2e/*.bats; do
+        heredoc=""
+        pending=""
+        in_test=0
+        while IFS= read -r line || [ -n "$line" ]; do
+            if [ -n "$heredoc" ]; then
+                [ "$line" = "$heredoc" ] && heredoc=""
+                continue
+            fi
+            case "$line" in
+                '@test "'*)
+                    if [ "$in_test" -eq 1 ] && [ -n "$pending" ]; then
+                        echo "UNCHECKED: $file: $pending" >&2
+                        fails=1
+                    fi
+                    in_test=1
+                    pending=""
+                    continue
+                    ;;
+                '}')
+                    if [ "$in_test" -eq 1 ] && [ -n "$pending" ]; then
+                        echo "UNCHECKED: $file: $pending" >&2
+                        fails=1
+                    fi
+                    in_test=0
+                    pending=""
+                    continue
+                    ;;
+            esac
+            if [ "$in_test" -eq 0 ]; then
+                continue
+            fi
+            stripped="${line#"${line%%[![:space:]]*}"}"
+            case "$stripped" in
+                'run !'*|'run -'*)
+                    pending=""
+                    ;;
+                'run '*) 
+                    if [ -n "$pending" ]; then
+                        echo "UNCHECKED: $file: $pending" >&2
+                        fails=1
+                    fi
+                    pending="$stripped"
+                    ;;
+                *'$status'*|*'$output'*|*'$lines'*|*'$stderr'*)
+                    pending=""
+                    ;;
+            esac
+            if [[ "$line" =~ $hd_re ]]; then
+                heredoc="${BASH_REMATCH[1]}"
+            fi
+        done < "${PROJECT_ROOT}/${file}"
+    done
+    [ "$fails" -eq 0 ]
+}

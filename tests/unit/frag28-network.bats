@@ -155,7 +155,11 @@ EOF
     run env -i PATH="$MOCKBIN" FRAG28="$FRAG28" NIC="enp0s31f6" E2E_STATE="$E2E_STATE" \
         /bin/bash -c 'source "$FRAG28"; log() { printf "%s\n" "$*"; }; solicit_dhcp "$NIC"'
     [ "$status" -eq 0 ]
-    run grep -q "dhclient enp0s31f6" "$E2E_STATE/dhcp-journal"
+    # The mock records the full argv (`dhclient -v enp0s31f6`), so match the
+    # NIC on a dhclient line rather than an exact argv string that omits the
+    # flags the fragment passes.
+    run grep -q "dhclient .*enp0s31f6" "$E2E_STATE/dhcp-journal"
+    [ "$status" -eq 0 ]
 }
 
 # Covers: R-01.9.7

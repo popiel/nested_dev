@@ -293,12 +293,15 @@ require_run_ok() {
     for name in pve-enterprise.sources ceph.sources; do
         [ ! -e "$srcdir/$name" ]
         run cmp "$srcdir/$name.disabled" "${E2E_DIR}/fixtures/$name"
+        [ "$status" -eq 0 ]
     done
     # The plain Debian source is untouched.
     run cmp "$srcdir/debian.sources" "${E2E_DIR}/fixtures/debian.sources"
+    [ "$status" -eq 0 ]
     # ...and the no-subscription repository is in place for the detected suite.
     run grep -xF 'deb http://download.proxmox.com/debian/pve trixie pve-no-subscription' \
         "$srcdir/pve-no-subscription.list"
+    [ "$status" -eq 0 ]
 }
 
 # Covers: R-01.3.1b
@@ -424,6 +427,7 @@ require_run_ok() {
     # Upstream resolvers come from the DHCP lease: nothing on a fresh system
     # creates /run/resolv.conf, and without it dnsmasq forwards into the void.
     run grep -xF "nameserver 192.168.14.254" "$E2E_ROOT/run/resolv.conf"
+    [ "$status" -eq 0 ]
 }
 
 # Covers: R-01.7.6
@@ -665,9 +669,15 @@ require_run_ok() {
 @test "the VM inventory names the three guests" {
     require_run_ok
     local inv="$E2E_ROOT/etc/nested-dev/inventory"
+    # Each grep is status-checked: a bare `run grep` never fails the test
+    # (plain `run` always returns 0), so an unchecked row passes silently
+    # whether the inventory holds it or not.
     run grep -xF "100  desktop  lychee  192.168.100.100  52:54:00:00:01:00  running  desktop" "$inv"
+    [ "$status" -eq 0 ]
     run grep -xF "101  llm  lychee-llm  192.168.100.101  52:54:00:00:01:01  running  llm" "$inv"
+    [ "$status" -eq 0 ]
     run grep -xF "102  dev-template  lychee-dev-template  192.168.100.102  52:54:00:00:01:02  template  dev-template" "$inv"
+    [ "$status" -eq 0 ]
 }
 
 # Covers: R-07.1, A-07.1, A-07.2, A-07.3
@@ -678,7 +688,9 @@ require_run_ok() {
     [ "$output" = 'command="sudo /usr/local/sbin/vmctl-host",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 E2EPUB-vmctl_ed25519 e2e@test' ]
     [ "$(stat -c %a "$authkeys")" = "600" ]
     run cmp "$E2E_ROOT/etc/sudoers.d/vmctl" "${PROJECT_ROOT}/provision/host/vmctl/sudoers"
+    [ "$status" -eq 0 ]
     run cmp "$E2E_ROOT/usr/local/sbin/vmctl-host" "${PROJECT_ROOT}/provision/host/vmctl/vmctl-host"
+    [ "$status" -eq 0 ]
 }
 
 # Covers: R-07.6, A-07.17, A-07.19

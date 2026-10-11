@@ -65,6 +65,7 @@ write_list() {
     [ "$IGPU_IDS" = "0000:00:02.0" ]
     [ -z "$DGPU_IDS" ]
     run grep -q "unrecognized vendor '1af4'" "$BATS_TMPDIR/out"
+    [ "$status" -eq 0 ]
 }
 
 # Covers: R-01.7.4
