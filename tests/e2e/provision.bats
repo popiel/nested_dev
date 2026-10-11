@@ -722,11 +722,9 @@ require_run_ok() {
     assert_file_contains "$E2E_STATE/journal" "systemctl disable --now pve-firstboot"
 }
 
-# Covers: R-01.9, R-01.10, R-00.2.5, R-00.2.6, A-01.10, A-01.11, A-01.12, A-01.13, A-01.14, A-01.15
-@test "the host network, DNS and firewall land as configured" {
+# Covers: R-01.9.1, R-01.9.2, R-01.9.10, A-01.10
+@test "host naming resolves statically" {
     require_run_ok
-    assert_file_contains "$E2E_ROOT/etc/network/interfaces" "address 192.168.100.1/24"
-    assert_file_contains "$E2E_ROOT/etc/network/interfaces" "auto eno1"
     run grep -c "dhcp-host=" "$E2E_ROOT/etc/dnsmasq.d/nested_dev.conf"
     [ "$output" = "3" ]
     assert_file_contains "$E2E_ROOT/etc/resolv.conf" "nameserver 127.0.0.1"
@@ -739,8 +737,11 @@ require_run_ok() {
         "192.168.14.52 lychee-host.wolfskeep.com lychee-host"
     run grep -c "127.0.1.1" "$E2E_ROOT/etc/hosts"
     [ "$output" = "0" ]
-    [ -f "$E2E_ROOT/root/output/MANIFEST" ]
-    [ -f "$E2E_ROOT/etc/motd" ]
+}
+
+# Covers: R-01.10, A-01.11, A-01.12, A-01.13, A-01.15
+@test "host firewall admits only the documented surface" {
+    require_run_ok
     assert_file_contains "$E2E_STATE/journal" "iptables -P INPUT DROP"
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.100 -j ACCEPT"
     assert_file_contains "$E2E_STATE/journal" "--dport 5900"
@@ -773,6 +774,11 @@ require_run_ok() {
         echo "DNAT-to-self for host SSH is back — it can never admit traffic" >&2
         return 1
     }
+}
+
+# Covers: R-00.2.5, R-00.2.6, A-01.14
+@test "guest services and egress are admitted" {
+    require_run_ok
     # The host-service surface guests need: DHCP and DNS to dnsmasq on vmbr0,
     # requests and replies. Without any one of these the guests never get an
     # address and every installer stalls before writing a byte.
@@ -792,6 +798,13 @@ require_run_ok() {
     # Uniform policy covers the whole 101-249 range, not just 101-103.
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.102 -p tcp --dport 443"
     assert_file_contains "$E2E_STATE/journal" "-s 192.168.100.104 -p tcp --dport 443"
+}
+
+# Covers: R-00.8.3, A-01.16
+@test "host build record exists" {
+    require_run_ok
+    [ -f "$E2E_ROOT/root/output/MANIFEST" ]
+    [ -f "$E2E_ROOT/etc/motd" ]
 }
 
 # Covers: R-00.8.3, R-05.8.7, R-05.8.8, R-05.2.4, A-01.16

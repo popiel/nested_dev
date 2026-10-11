@@ -315,6 +315,26 @@ load '../lib/helpers'
         '3389'
 }
 
+# Covers: R-01.10, A-01.15
+@test "only the desktop may initiate inter-VM traffic" {
+    # A-01.15 binds every guest but the desktop: the single vmbr0→vmbr0
+    # ACCEPT must be desktop-sourced, and no other bridge-to-bridge ACCEPT
+    # may exist — with FORWARD default DROP, anything else admitted here is
+    # a guest-to-guest path. Checked in both the fragment applying the live
+    # state and the reference the boot restore uses, so the two cannot drift.
+    local file count
+    for file in "${PROJECT_ROOT}/provision/host/frag/90-finalize.sh" \
+                "${PROJECT_ROOT}/provision/network/iptables-forwarding.conf"; do
+        assert_file_contains "$file" \
+            '-i vmbr0 -o vmbr0 -s 192.168.100.100 -j ACCEPT'
+        count="$(grep -cE -- '-i vmbr0 -o vmbr0.*-j ACCEPT' "$file")"
+        [ "$count" -eq 1 ] || {
+            echo "$file: expected exactly one vmbr0->vmbr0 ACCEPT (the desktop's), found $count" >&2
+            return 1
+        }
+    done
+}
+
 # Covers: R-00.2.6
 @test "uniform dev egress covers the whole 101-249 range" {
     # All dev VMs (plus the LLM VM) share one egress policy. The reference
