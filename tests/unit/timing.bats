@@ -470,13 +470,6 @@ EOF
     [ "$status" -eq 0 ]
 }
 
-# Covers: R-09.7.1
-@test "run.sh asks bats for timing on the suite invocation line" {
-    # Match invocation lines only: the header comment also mentions the flag.
-    run grep -cE '^[[:space:]]*bats -T --formatter tap' "${BATS_TEST_DIRNAME}/../run.sh"
-    [ "$output" -eq 1 ]
-}
-
 # Covers: R-09.1b.5, R-09.1.3
 @test "every suite run.sh names exists on disk" {
     # Guards against run.sh referencing a .bats file that was renamed or deleted.
@@ -624,11 +617,20 @@ STUB
 }
 
 # Covers: R-09.7.1
-@test "run.sh invokes bats exactly once, inside run_suite" {
-    # The dependency check names bats but must not execute it; if a second
-    # invocation site ever appears, those suites would bypass the timing record.
+@test "run.sh invokes bats exactly once, with timing, inside run_suite" {
+    # The dependency check names bats but must not execute it, and the header
+    # comment merely documents the flags: match invocation lines only. If a
+    # second invocation site ever appears — or the single site moves outside
+    # run_suite — those suites would bypass the timing record.
     run grep -cE '^[[:space:]]*bats -T --formatter tap' "${BATS_TEST_DIRNAME}/../run.sh"
     [ "$output" -eq 1 ]
+    local block
+    block="$(awk '/^run_suite\(\)/,/^\}/' "${BATS_TEST_DIRNAME}/../run.sh")"
+    [ -n "$block" ] || { echo "could not isolate run_suite" >&2; return 1; }
+    printf '%s\n' "$block" | grep -q 'bats -T --formatter tap' || {
+        echo "the single bats invocation is not inside run_suite" >&2
+        return 1
+    }
 }
 
 # Covers: R-09.1.7, A-09.7

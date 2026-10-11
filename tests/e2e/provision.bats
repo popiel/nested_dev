@@ -329,12 +329,6 @@ require_run_ok() {
 
 # --- GPU passthrough ---
 
-# Covers: R-01.6.2, R-01.7.4, A-01.6
-@test "the accepted device set is the iGPU alone" {
-    require_run_ok
-    [ "$(cat "$E2E_ROOT/var/lib/pve-firstboot/passthrough-devices")" = "0000:00:02.0" ]
-}
-
 # Covers: R-01.6.1, A-01.6
 @test "vfio binds the iGPU and nothing else" {
     require_run_ok
@@ -378,14 +372,16 @@ require_run_ok() {
     assert_file_contains "$log" "00:01.0"
 }
 
-# Covers: R-01.7.7
+# Covers: R-01.6.2, R-01.7.4, R-01.7.7, A-01.6
 @test "bridge-shared groups earn the ACS override, same-run behavior kept" {
     require_run_ok
     local log="$E2E_ROOT/var/log/pve-firstboot.log"
     local grub="$E2E_ROOT/etc/default/grub"
     # The override lands in GRUB for the next boot — and this run still
     # passes nothing but the iGPU: the token takes effect at boot, so the
-    # devices attach only on a verified split, never speculatively.
+    # devices attach only on a verified split, never speculatively. The final
+    # line pins the accepted set itself (subsumes the former standalone
+    # accepted-set test).
     assert_file_contains "$grub" "pcie_acs_override=downstream,multifunction"
     assert_file_contains "$log" "Blocked by host bridge"
     assert_file_contains "$log" "devices attach only on a verified split"
